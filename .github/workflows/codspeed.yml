@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # `workflow_dispatch` allows CodSpeed to trigger backtest
+  # performance analysis in order to generate initial data.
   workflow_dispatch:
 
 concurrency:
@@ -13,7 +15,6 @@ concurrency:
 permissions:
   contents: read
   id-token: write
-  pull-requests: write
 
 jobs:
   benchmarks:
@@ -25,11 +26,14 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: moonrepo/setup-rust@v1
-        with:
-          channel: stable
-          cache-target: release
-          bins: cargo-codspeed
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install cargo-codspeed
+        run: cargo install cargo-codspeed --locked
 
       - name: Build benchmarks
         run: cargo codspeed build -p mega-evm
@@ -37,5 +41,5 @@ jobs:
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v4
         with:
-          mode: instrumentation
+          mode: simulation
           run: cargo codspeed run
