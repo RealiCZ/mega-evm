@@ -2,13 +2,30 @@
 //!
 //! These benchmarks are adapted from revm's revme bench suite to measure equivalent
 //! workloads through mega-evm's execution pipeline, enabling performance comparison
-//! between vanilla revm and mega-evm.
+//! between vanilla revm, op-revm, and mega-evm.
 //!
-//! Ported benchmarks:
+//! Each workload runs against five layers so a single `cargo bench` produces a
+//! comparable table:
+//!
+//! 1. `revm_pinned`     — vanilla `revm::Evm` at the version mega-evm currently pins.
+//! 2. `revm_latest`     — vanilla `revm::Evm` at the latest crates.io release.
+//! 3. `op_revm_pinned`  — `op_revm::OpEvm` at the version mega-evm currently pins (operator fee =
+//!    0).
+//! 4. `op_revm_latest`  — `op_revm::OpEvm` at the latest crates.io release (operator fee = 0).
+//! 5. `mega_<spec>`     — `MegaEvm` at `EQUIVALENCE` / `MINI_REX` / `REX4`.
+//!
+//! Ported workloads:
 //! - **snailtracer**: CPU-intensive ray tracer exercising many opcodes
 //! - **analysis**: ERC20-like contract bytecode execution
 //! - **subcall**: Multi-level contract call performance (1000 iterations)
 //! - **`transfer_multi`**: Batch transaction execution (1000 transfers)
+//!
+//! New workloads must avoid touching mega-evm's per-tx resource limits
+//! (compute gas / data size / KV updates / state growth) under any spec, or the
+//! `mega_*` row will halt early and the baseline comparison will be skewed.
+//! Likewise, both revm versions must be able to execute the workload with their
+//! respective default hardforks — if the latest stack diverges (e.g. moves to
+//! Prague gas schedule), the `*_latest` rows have to pin spec explicitly.
 
 #![allow(missing_docs)]
 
@@ -16,6 +33,32 @@ use alloy_primitives::{address, bytes, Address, Bytes, U256};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use mega_evm::{test_utils::MemoryDatabase, MegaContext, MegaEvm, MegaSpecId, MegaTransaction};
 use revm::{bytecode::opcode, context::tx::TxEnvBuilder, ExecuteEvm};
+
+// `_latest` aliases come from cargo `package` rename in Cargo.toml so the latest
+// crates.io revm / op-revm versions can coexist with the pinned ones used by
+// mega-evm itself. The two stacks have disjoint trait identities — adapters
+// cannot share code. We pair `op_revm_latest` with whichever revm version it
+// pulls in transitively (its `revm` dep) so both `_latest` baselines see one
+// revm tree.
+use op_revm::{
+    DefaultOp as _, OpBuilder as _, OpContext as OpContextPinned,
+    OpTransaction as OpTransactionPinned,
+};
+use op_revm_latest::{
+    DefaultOp as _, OpBuilder as _, OpContext as OpContextLatest,
+    OpTransaction as OpTransactionLatest,
+};
+use revm::{
+    database::EmptyDB as EmptyDBPinned, Context as ContextPinned, MainBuilder as _,
+    MainContext as _,
+};
+use revm_latest::{
+    bytecode::Bytecode as BytecodeLatest,
+    context::tx::TxEnvBuilder as TxEnvBuilderLatest,
+    database::{CacheDB as CacheDBLatest, EmptyDB as EmptyDBLatest},
+    primitives::hardfork::SpecId as SpecIdLatest,
+    Context as ContextLatest, ExecuteEvm as _, MainBuilder as _, MainContext as _,
+};
 
 const CALLER: Address = address!("0000000000000000000000000000000000100000");
 const CONTRACT: Address = address!("0000000000000000000000000000000000100002");
@@ -59,6 +102,129 @@ fn transact_call(spec: MegaSpecId, db: MemoryDatabase, gas_limit: u64, data: Byt
     black_box(r);
 }
 
+/// Execute a call against vanilla `revm` at the pinned version.
+fn transact_call_revm_pinned(db: MemoryDatabase, gas_limit: u64, data: Bytes) {
+    let mut evm = ContextPinned::mainnet().with_db(db).build_mainnet();
+    let tx = TxEnvBuilder::new()
+        .caller(CALLER)
+        .call(CONTRACT)
+        .gas_limit(gas_limit)
+        .data(data)
+        .build_fill();
+    let r = evm.transact(tx).expect("revm_pinned transact");
+    assert!(r.result.is_success(), "revm_pinned should succeed: {:?}", r.result);
+    black_box(r);
+}
+
+/// Execute a call against `op-revm` at the pinned version, operator fee = 0.
+fn transact_call_op_revm_pinned(db: MemoryDatabase, gas_limit: u64, data: Bytes) {
+    let mut ctx = <OpContextPinned<EmptyDBPinned>>::op().with_db(db);
+    ctx.modify_chain(|chain| {
+        chain.operator_fee_scalar = Some(U256::ZERO);
+        chain.operator_fee_constant = Some(U256::ZERO);
+    });
+    let mut evm = ctx.build_op();
+    let tx_env = TxEnvBuilder::new()
+        .caller(CALLER)
+        .call(CONTRACT)
+        .gas_limit(gas_limit)
+        .data(data)
+        .build_fill();
+    let mut op_tx = OpTransactionPinned::new(tx_env);
+    op_tx.enveloped_tx = Some(Bytes::new());
+    let r = evm.transact(op_tx).expect("op_revm_pinned transact");
+    assert!(r.result.is_success(), "op_revm_pinned should succeed: {:?}", r.result);
+    black_box(r);
+}
+
+/// Execute a call against vanilla `revm` at the latest crates.io version.
+///
+/// Pinned to `Cancun` so the workload's 10 G gas limits don't trip the
+/// EIP-7825 `tx_gas_limit_cap` (2^24) introduced from Prague onward — the
+/// `MainContext::mainnet()` default for this revm version is `Osaka`.
+fn transact_call_revm_latest(db: CacheDBLatest<EmptyDBLatest>, gas_limit: u64, data: Bytes) {
+    let mut evm = ContextLatest::mainnet()
+        .modify_cfg_chained(|cfg| cfg.set_spec_and_mainnet_gas_params(SpecIdLatest::CANCUN))
+        .with_db(db)
+        .build_mainnet();
+    let tx = TxEnvBuilderLatest::new()
+        .caller(CALLER)
+        .call(CONTRACT)
+        .gas_limit(gas_limit)
+        .data(data)
+        .build_fill();
+    let r = evm.transact(tx).expect("revm_latest transact");
+    assert!(r.result.is_success(), "revm_latest should succeed: {:?}", r.result);
+    black_box(r);
+}
+
+/// Execute a call against `op-revm` at the latest crates.io version, operator fee = 0.
+fn transact_call_op_revm_latest(db: CacheDBLatest<EmptyDBLatest>, gas_limit: u64, data: Bytes) {
+    let mut ctx = <OpContextLatest<EmptyDBLatest>>::op().with_db(db);
+    ctx.modify_chain(|chain| {
+        chain.operator_fee_scalar = Some(U256::ZERO);
+        chain.operator_fee_constant = Some(U256::ZERO);
+    });
+    let mut evm = ctx.build_op();
+    let tx_env = TxEnvBuilderLatest::new()
+        .caller(CALLER)
+        .call(CONTRACT)
+        .gas_limit(gas_limit)
+        .data(data)
+        .build_fill();
+    let mut op_tx = OpTransactionLatest::new(tx_env);
+    op_tx.enveloped_tx = Some(Bytes::new());
+    let r = evm.transact(op_tx).expect("op_revm_latest transact");
+    assert!(r.result.is_success(), "op_revm_latest should succeed: {:?}", r.result);
+    black_box(r);
+}
+
+/// Fluent builder for a latest-revm `CacheDB` matching the shape of `MemoryDatabase`,
+/// so the same per-iteration seed code can produce parallel DBs for both stacks.
+#[derive(Default)]
+struct LatestDbBuilder {
+    db: CacheDBLatest<EmptyDBLatest>,
+}
+
+impl LatestDbBuilder {
+    fn new() -> Self {
+        Self { db: CacheDBLatest::new(EmptyDBLatest::default()) }
+    }
+
+    fn account_code(mut self, address: Address, code: Bytes) -> Self {
+        let bytecode = BytecodeLatest::new_legacy(code);
+        let code_hash = bytecode.hash_slow();
+        let entry = self.db.cache.accounts.entry(address).or_default();
+        entry.info.code = Some(bytecode);
+        entry.info.code_hash = code_hash;
+        self
+    }
+
+    fn account_balance(mut self, address: Address, balance: U256) -> Self {
+        let entry = self.db.cache.accounts.entry(address).or_default();
+        entry.info.balance = balance;
+        self
+    }
+
+    fn build(self) -> CacheDBLatest<EmptyDBLatest> {
+        self.db
+    }
+}
+
+/// Build a latest-revm `CacheDB` for the snailtracer / analysis shape:
+/// one contract account holding `code`, and one caller account holding `caller_balance`.
+fn make_latest_db_call(
+    contract: Address,
+    code: Bytes,
+    caller: Address,
+    caller_balance: U256,
+) -> CacheDBLatest<EmptyDBLatest> {
+    LatestDbBuilder::new()
+        .account_code(contract, code)
+        .account_balance(caller, caller_balance)
+        .build()
+}
+
 //
 // ============================================================================
 // Snailtracer Benchmark
@@ -73,16 +239,35 @@ const SNAILTRACER_BYTES: &str = include_str!("data/snailtracer.hex");
 fn bench_snailtracer(c: &mut Criterion) {
     let bytecode = Bytes::from(hex::decode(SNAILTRACER_BYTES).unwrap());
     let calldata = bytes!("30627b7c");
+    let caller_balance = U256::from(10).pow(U256::from(18));
 
     let mut group = c.benchmark_group("snailtracer");
     group.sample_size(10);
 
+    let make_pinned_db = || {
+        MemoryDatabase::default()
+            .account_code(CONTRACT, bytecode.clone())
+            .account_balance(CALLER, caller_balance)
+    };
+    let make_latest_db = || make_latest_db_call(CONTRACT, bytecode.clone(), CALLER, caller_balance);
+
+    group.bench_function("revm_pinned", |b| {
+        b.iter(|| transact_call_revm_pinned(make_pinned_db(), 1_000_000_000, calldata.clone()))
+    });
+    group.bench_function("revm_latest", |b| {
+        b.iter(|| transact_call_revm_latest(make_latest_db(), 1_000_000_000, calldata.clone()))
+    });
+    group.bench_function("op_revm_pinned", |b| {
+        b.iter(|| transact_call_op_revm_pinned(make_pinned_db(), 1_000_000_000, calldata.clone()))
+    });
+    group.bench_function("op_revm_latest", |b| {
+        b.iter(|| transact_call_op_revm_latest(make_latest_db(), 1_000_000_000, calldata.clone()))
+    });
+
     for &(name, spec) in SPEC_IDS {
         group.bench_function(name, |b| {
             b.iter(|| {
-                let db = MemoryDatabase::default()
-                    .account_code(CONTRACT, bytecode.clone())
-                    .account_balance(CALLER, U256::from(10).pow(U256::from(18)));
+                let db = make_pinned_db();
                 transact_call(black_box(spec), db, 1_000_000_000, calldata.clone());
             })
         });
@@ -104,15 +289,34 @@ const ANALYSIS_BYTES: &str = include_str!("data/analysis.hex");
 fn bench_analysis(c: &mut Criterion) {
     let bytecode = Bytes::from(hex::decode(ANALYSIS_BYTES).unwrap());
     let calldata = bytes!("8035F0CE");
+    let caller_balance = U256::from(10).pow(U256::from(18));
 
     let mut group = c.benchmark_group("analysis");
+
+    let make_pinned_db = || {
+        MemoryDatabase::default()
+            .account_code(CONTRACT, bytecode.clone())
+            .account_balance(CALLER, caller_balance)
+    };
+    let make_latest_db = || make_latest_db_call(CONTRACT, bytecode.clone(), CALLER, caller_balance);
+
+    group.bench_function("revm_pinned", |b| {
+        b.iter(|| transact_call_revm_pinned(make_pinned_db(), 10_000_000_000, calldata.clone()))
+    });
+    group.bench_function("revm_latest", |b| {
+        b.iter(|| transact_call_revm_latest(make_latest_db(), 10_000_000_000, calldata.clone()))
+    });
+    group.bench_function("op_revm_pinned", |b| {
+        b.iter(|| transact_call_op_revm_pinned(make_pinned_db(), 10_000_000_000, calldata.clone()))
+    });
+    group.bench_function("op_revm_latest", |b| {
+        b.iter(|| transact_call_op_revm_latest(make_latest_db(), 10_000_000_000, calldata.clone()))
+    });
 
     for &(name, spec) in SPEC_IDS {
         group.bench_function(name, |b| {
             b.iter(|| {
-                let db = MemoryDatabase::default()
-                    .account_code(CONTRACT, bytecode.clone())
-                    .account_balance(CALLER, U256::from(10).pow(U256::from(18)));
+                let db = make_pinned_db();
                 transact_call(black_box(spec), db, 10_000_000_000, calldata.clone());
             })
         });
@@ -195,15 +399,52 @@ fn make_subcall_bytecode(target: Address) -> Bytes {
     Bytes::from(code)
 }
 
-/// Helper to benchmark a subcall variant across specs.
+/// Helper to benchmark a subcall variant across the 4 baselines and mega specs.
+///
+/// `pinned_db_setup` is used by `MegaEvm` rows AND by both `*_pinned` baselines
+/// (they all share the pinned revm `Database` trait). `latest_db_setup` produces
+/// the latest-version `CacheDB` for both `*_latest` rows.
 fn bench_subcall_variant(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
-    db_setup: impl Fn() -> MemoryDatabase,
+    pinned_db_setup: impl Fn() -> MemoryDatabase,
+    latest_db_setup: impl Fn() -> CacheDBLatest<EmptyDBLatest>,
 ) {
+    const SUBCALL_GAS_LIMIT: u64 = 10_000_000_000;
+    let empty_calldata = Bytes::new();
+
+    group.bench_function("revm_pinned", |b| {
+        b.iter(|| {
+            transact_call_revm_pinned(pinned_db_setup(), SUBCALL_GAS_LIMIT, empty_calldata.clone())
+        })
+    });
+    group.bench_function("revm_latest", |b| {
+        b.iter(|| {
+            transact_call_revm_latest(latest_db_setup(), SUBCALL_GAS_LIMIT, empty_calldata.clone())
+        })
+    });
+    group.bench_function("op_revm_pinned", |b| {
+        b.iter(|| {
+            transact_call_op_revm_pinned(
+                pinned_db_setup(),
+                SUBCALL_GAS_LIMIT,
+                empty_calldata.clone(),
+            )
+        })
+    });
+    group.bench_function("op_revm_latest", |b| {
+        b.iter(|| {
+            transact_call_op_revm_latest(
+                latest_db_setup(),
+                SUBCALL_GAS_LIMIT,
+                empty_calldata.clone(),
+            )
+        })
+    });
+
     for &(name, spec) in SPEC_IDS {
         group.bench_function(name, |b| {
             b.iter(|| {
-                let db = db_setup();
+                let db = pinned_db_setup();
                 let mut context = MegaContext::new(db, spec);
                 context.modify_chain(|chain| {
                     chain.operator_fee_scalar = Some(U256::from(0));
@@ -213,7 +454,7 @@ fn bench_subcall_variant(
                 let tx = TxEnvBuilder::new()
                     .caller(CALLER)
                     .call(CONTRACT)
-                    .gas_limit(10_000_000_000)
+                    .gas_limit(SUBCALL_GAS_LIMIT)
                     .build_fill();
                 let mut mega_tx = MegaTransaction::new(tx);
                 mega_tx.enveloped_tx = Some(Bytes::new());
@@ -226,6 +467,8 @@ fn bench_subcall_variant(
 }
 
 fn bench_subcall(c: &mut Criterion) {
+    let caller_balance = U256::from(u128::MAX);
+
     // Variant 1: 1000 subcalls each transferring 1 wei
     {
         let loop_code = make_loop_call_bytecode(SUBCALL_TARGET_A, 1);
@@ -233,12 +476,22 @@ fn bench_subcall(c: &mut Criterion) {
 
         let mut group = c.benchmark_group("subcall_1000_transfer_1wei");
         group.sample_size(10);
-        bench_subcall_variant(&mut group, || {
-            MemoryDatabase::default()
-                .account_balance(CALLER, U256::from(u128::MAX))
-                .account_code(CONTRACT, loop_code.clone())
-                .account_code(SUBCALL_TARGET_A, stop_code.clone())
-        });
+        bench_subcall_variant(
+            &mut group,
+            || {
+                MemoryDatabase::default()
+                    .account_balance(CALLER, caller_balance)
+                    .account_code(CONTRACT, loop_code.clone())
+                    .account_code(SUBCALL_TARGET_A, stop_code.clone())
+            },
+            || {
+                LatestDbBuilder::new()
+                    .account_balance(CALLER, caller_balance)
+                    .account_code(CONTRACT, loop_code.clone())
+                    .account_code(SUBCALL_TARGET_A, stop_code.clone())
+                    .build()
+            },
+        );
         group.finish();
     }
 
@@ -249,12 +502,22 @@ fn bench_subcall(c: &mut Criterion) {
 
         let mut group = c.benchmark_group("subcall_1000_no_value");
         group.sample_size(10);
-        bench_subcall_variant(&mut group, || {
-            MemoryDatabase::default()
-                .account_balance(CALLER, U256::from(u128::MAX))
-                .account_code(CONTRACT, loop_code.clone())
-                .account_code(SUBCALL_TARGET_A, stop_code.clone())
-        });
+        bench_subcall_variant(
+            &mut group,
+            || {
+                MemoryDatabase::default()
+                    .account_balance(CALLER, caller_balance)
+                    .account_code(CONTRACT, loop_code.clone())
+                    .account_code(SUBCALL_TARGET_A, stop_code.clone())
+            },
+            || {
+                LatestDbBuilder::new()
+                    .account_balance(CALLER, caller_balance)
+                    .account_code(CONTRACT, loop_code.clone())
+                    .account_code(SUBCALL_TARGET_A, stop_code.clone())
+                    .build()
+            },
+        );
         group.finish();
     }
 
@@ -266,13 +529,24 @@ fn bench_subcall(c: &mut Criterion) {
 
         let mut group = c.benchmark_group("subcall_1000_nested");
         group.sample_size(10);
-        bench_subcall_variant(&mut group, || {
-            MemoryDatabase::default()
-                .account_balance(CALLER, U256::from(u128::MAX))
-                .account_code(CONTRACT, loop_code.clone())
-                .account_code(SUBCALL_TARGET_A, subcall_code.clone())
-                .account_code(SUBCALL_TARGET_B, stop_code.clone())
-        });
+        bench_subcall_variant(
+            &mut group,
+            || {
+                MemoryDatabase::default()
+                    .account_balance(CALLER, caller_balance)
+                    .account_code(CONTRACT, loop_code.clone())
+                    .account_code(SUBCALL_TARGET_A, subcall_code.clone())
+                    .account_code(SUBCALL_TARGET_B, stop_code.clone())
+            },
+            || {
+                LatestDbBuilder::new()
+                    .account_balance(CALLER, caller_balance)
+                    .account_code(CONTRACT, loop_code.clone())
+                    .account_code(SUBCALL_TARGET_A, subcall_code.clone())
+                    .account_code(SUBCALL_TARGET_B, stop_code.clone())
+                    .build()
+            },
+        );
         group.finish();
     }
 }
@@ -292,16 +566,130 @@ fn bench_transfer_multi(c: &mut Criterion) {
     let base = U256::from(10_000);
     let targets: Vec<Address> =
         (0..1000u64).map(|i| Address::from_word((base + U256::from(i)).into())).collect();
+    let caller_balance = U256::from(3_000_000_000u64);
+    let target_balance = U256::from(3_000_000_000u64);
+
+    let make_pinned_db = || {
+        let mut db = MemoryDatabase::default().account_balance(CALLER, caller_balance);
+        for target in &targets {
+            db = db.account_balance(*target, target_balance);
+        }
+        db
+    };
+    let make_latest_db = || {
+        let mut builder = LatestDbBuilder::new().account_balance(CALLER, caller_balance);
+        for target in &targets {
+            builder = builder.account_balance(*target, target_balance);
+        }
+        builder.build()
+    };
+
+    group.bench_function("revm_pinned", |b| {
+        b.iter(|| {
+            let mut evm = ContextPinned::mainnet().with_db(make_pinned_db()).build_mainnet();
+            for target in &targets {
+                let tx = TxEnvBuilder::new()
+                    .caller(CALLER)
+                    .call(*target)
+                    .value(U256::from(1))
+                    .gas_limit(100_000)
+                    .build_fill();
+                let r = evm.transact(tx).expect("revm_pinned transfer");
+                assert!(
+                    r.result.is_success(),
+                    "revm_pinned transfer should succeed: {:?}",
+                    r.result
+                );
+                black_box(&r);
+            }
+        })
+    });
+
+    group.bench_function("revm_latest", |b| {
+        b.iter(|| {
+            let mut evm = ContextLatest::mainnet()
+                .modify_cfg_chained(|cfg| cfg.set_spec_and_mainnet_gas_params(SpecIdLatest::CANCUN))
+                .with_db(make_latest_db())
+                .build_mainnet();
+            for target in &targets {
+                let tx = TxEnvBuilderLatest::new()
+                    .caller(CALLER)
+                    .call(*target)
+                    .value(U256::from(1))
+                    .gas_limit(100_000)
+                    .build_fill();
+                let r = evm.transact(tx).expect("revm_latest transfer");
+                assert!(
+                    r.result.is_success(),
+                    "revm_latest transfer should succeed: {:?}",
+                    r.result
+                );
+                black_box(&r);
+            }
+        })
+    });
+
+    group.bench_function("op_revm_pinned", |b| {
+        b.iter(|| {
+            let mut ctx = <OpContextPinned<EmptyDBPinned>>::op().with_db(make_pinned_db());
+            ctx.modify_chain(|chain| {
+                chain.operator_fee_scalar = Some(U256::ZERO);
+                chain.operator_fee_constant = Some(U256::ZERO);
+            });
+            let mut evm = ctx.build_op();
+            for target in &targets {
+                let tx_env = TxEnvBuilder::new()
+                    .caller(CALLER)
+                    .call(*target)
+                    .value(U256::from(1))
+                    .gas_limit(100_000)
+                    .build_fill();
+                let mut op_tx = OpTransactionPinned::new(tx_env);
+                op_tx.enveloped_tx = Some(Bytes::new());
+                let r = evm.transact(op_tx).expect("op_revm_pinned transfer");
+                assert!(
+                    r.result.is_success(),
+                    "op_revm_pinned transfer should succeed: {:?}",
+                    r.result
+                );
+                black_box(&r);
+            }
+        })
+    });
+
+    group.bench_function("op_revm_latest", |b| {
+        b.iter(|| {
+            let mut ctx = <OpContextLatest<EmptyDBLatest>>::op().with_db(make_latest_db());
+            ctx.modify_chain(|chain| {
+                chain.operator_fee_scalar = Some(U256::ZERO);
+                chain.operator_fee_constant = Some(U256::ZERO);
+            });
+            let mut evm = ctx.build_op();
+            for target in &targets {
+                let tx_env = TxEnvBuilderLatest::new()
+                    .caller(CALLER)
+                    .call(*target)
+                    .value(U256::from(1))
+                    .gas_limit(100_000)
+                    .build_fill();
+                let mut op_tx = OpTransactionLatest::new(tx_env);
+                op_tx.enveloped_tx = Some(Bytes::new());
+                let r = evm.transact(op_tx).expect("op_revm_latest transfer");
+                assert!(
+                    r.result.is_success(),
+                    "op_revm_latest transfer should succeed: {:?}",
+                    r.result
+                );
+                black_box(&r);
+            }
+        })
+    });
 
     for &(name, spec) in SPEC_IDS {
         let targets = targets.clone();
         group.bench_function(name, |b| {
             b.iter(|| {
-                let mut db =
-                    MemoryDatabase::default().account_balance(CALLER, U256::from(3_000_000_000u64));
-                for target in &targets {
-                    db = db.account_balance(*target, U256::from(3_000_000_000u64));
-                }
+                let db = make_pinned_db();
 
                 let mut context = MegaContext::new(db, spec);
                 context.modify_chain(|chain| {
