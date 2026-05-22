@@ -19,7 +19,11 @@ jobs:
   benchmark:
     name: Criterion performance check
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Cold compile of revm 27 + revm 38 + op-revm 8 + op-revm 20 plus running
+    # 6 bench targets twice (feature + baseline checkout) exceeded 60 min the
+    # first time. setup-rust-toolchain's cache shrinks subsequent runs, but the
+    # first run on a new branch and after dep churn still needs more room.
+    timeout-minutes: 120
     if: >-
       github.event_name != 'issue_comment' || (
         github.event.issue.pull_request &&
