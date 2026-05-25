@@ -34,12 +34,16 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use mega_evm::{test_utils::MemoryDatabase, MegaContext, MegaEvm, MegaSpecId, MegaTransaction};
 use revm::{bytecode::opcode, context::tx::TxEnvBuilder, ExecuteEvm};
 
-// `_latest` aliases come from cargo `package` rename in Cargo.toml so the latest
-// crates.io revm / op-revm versions can coexist with the pinned ones used by
-// mega-evm itself. The two stacks have disjoint trait identities — adapters
-// cannot share code. We pair `op_revm_latest` with whichever revm version it
-// pulls in transitively (its `revm` dep) so both `_latest` baselines see one
-// revm tree.
+// Shared baseline adapters (revm_pinned / revm_latest / op_revm_pinned /
+// op_revm_latest) live in benches/common/baseline_adapters.rs so other bench
+// files can pull them in via the same `#[path = ...]` declaration.
+#[path = "common/baseline_adapters.rs"]
+mod common;
+use common::{add_baseline_rows, CallParams, LatestDbBuilder};
+
+// Imports below are only needed by the inline transfer_multi loop, which holds
+// an EVM instance and runs 1000 transactions per iteration — too custom to fit
+// into the single-shot `transact_call_*` adapters.
 use op_revm::{
     DefaultOp as _, OpBuilder as _, OpContext as OpContextPinned,
     OpTransaction as OpTransactionPinned,
@@ -53,11 +57,9 @@ use revm::{
     MainContext as _,
 };
 use revm_latest::{
-    bytecode::Bytecode as BytecodeLatest,
-    context::tx::TxEnvBuilder as TxEnvBuilderLatest,
-    database::{CacheDB as CacheDBLatest, EmptyDB as EmptyDBLatest},
-    primitives::hardfork::SpecId as SpecIdLatest,
-    Context as ContextLatest, ExecuteEvm as _, MainBuilder as _, MainContext as _,
+    context::tx::TxEnvBuilder as TxEnvBuilderLatest, database::EmptyDB as EmptyDBLatest,
+    primitives::hardfork::SpecId as SpecIdLatest, Context as ContextLatest, ExecuteEvm as _,
+    MainBuilder as _, MainContext as _,
 };
 
 const CALLER: Address = address!("0000000000000000000000000000000000100000");
@@ -102,115 +104,6 @@ fn transact_call(spec: MegaSpecId, db: MemoryDatabase, gas_limit: u64, data: Byt
     black_box(r);
 }
 
-/// Execute a call against vanilla `revm` at the pinned version.
-fn transact_call_revm_pinned(db: MemoryDatabase, gas_limit: u64, data: Bytes) {
-    let mut evm = ContextPinned::mainnet().with_db(db).build_mainnet();
-    let tx = TxEnvBuilder::new()
-        .caller(CALLER)
-        .call(CONTRACT)
-        .gas_limit(gas_limit)
-        .data(data)
-        .build_fill();
-    let r = evm.transact(tx).expect("revm_pinned transact");
-    assert!(r.result.is_success(), "revm_pinned should succeed: {:?}", r.result);
-    black_box(r);
-}
-
-/// Execute a call against `op-revm` at the pinned version, operator fee = 0.
-fn transact_call_op_revm_pinned(db: MemoryDatabase, gas_limit: u64, data: Bytes) {
-    let mut ctx = <OpContextPinned<EmptyDBPinned>>::op().with_db(db);
-    ctx.modify_chain(|chain| {
-        chain.operator_fee_scalar = Some(U256::ZERO);
-        chain.operator_fee_constant = Some(U256::ZERO);
-    });
-    let mut evm = ctx.build_op();
-    let tx_env = TxEnvBuilder::new()
-        .caller(CALLER)
-        .call(CONTRACT)
-        .gas_limit(gas_limit)
-        .data(data)
-        .build_fill();
-    let mut op_tx = OpTransactionPinned::new(tx_env);
-    op_tx.enveloped_tx = Some(Bytes::new());
-    let r = evm.transact(op_tx).expect("op_revm_pinned transact");
-    assert!(r.result.is_success(), "op_revm_pinned should succeed: {:?}", r.result);
-    black_box(r);
-}
-
-/// Execute a call against vanilla `revm` at the latest crates.io version.
-///
-/// Pinned to `Cancun` so the workload's 10 G gas limits don't trip the
-/// EIP-7825 `tx_gas_limit_cap` (2^24) introduced from Prague onward — the
-/// `MainContext::mainnet()` default for this revm version is `Osaka`.
-fn transact_call_revm_latest(db: CacheDBLatest<EmptyDBLatest>, gas_limit: u64, data: Bytes) {
-    let mut evm = ContextLatest::mainnet()
-        .modify_cfg_chained(|cfg| cfg.set_spec_and_mainnet_gas_params(SpecIdLatest::CANCUN))
-        .with_db(db)
-        .build_mainnet();
-    let tx = TxEnvBuilderLatest::new()
-        .caller(CALLER)
-        .call(CONTRACT)
-        .gas_limit(gas_limit)
-        .data(data)
-        .build_fill();
-    let r = evm.transact(tx).expect("revm_latest transact");
-    assert!(r.result.is_success(), "revm_latest should succeed: {:?}", r.result);
-    black_box(r);
-}
-
-/// Execute a call against `op-revm` at the latest crates.io version, operator fee = 0.
-fn transact_call_op_revm_latest(db: CacheDBLatest<EmptyDBLatest>, gas_limit: u64, data: Bytes) {
-    let mut ctx = <OpContextLatest<EmptyDBLatest>>::op().with_db(db);
-    ctx.modify_chain(|chain| {
-        chain.operator_fee_scalar = Some(U256::ZERO);
-        chain.operator_fee_constant = Some(U256::ZERO);
-    });
-    let mut evm = ctx.build_op();
-    let tx_env = TxEnvBuilderLatest::new()
-        .caller(CALLER)
-        .call(CONTRACT)
-        .gas_limit(gas_limit)
-        .data(data)
-        .build_fill();
-    let mut op_tx = OpTransactionLatest::new(tx_env);
-    op_tx.enveloped_tx = Some(Bytes::new());
-    let r = evm.transact(op_tx).expect("op_revm_latest transact");
-    assert!(r.result.is_success(), "op_revm_latest should succeed: {:?}", r.result);
-    black_box(r);
-}
-
-/// Fluent builder for a latest-revm `CacheDB` matching the shape of `MemoryDatabase`,
-/// so the same per-iteration seed code can produce parallel DBs for both stacks.
-#[derive(Default)]
-struct LatestDbBuilder {
-    db: CacheDBLatest<EmptyDBLatest>,
-}
-
-impl LatestDbBuilder {
-    fn new() -> Self {
-        Self { db: CacheDBLatest::new(EmptyDBLatest::default()) }
-    }
-
-    fn account_code(mut self, address: Address, code: Bytes) -> Self {
-        let bytecode = BytecodeLatest::new_legacy(code);
-        let code_hash = bytecode.hash_slow();
-        let entry = self.db.cache.accounts.entry(address).or_default();
-        entry.info.code = Some(bytecode);
-        entry.info.code_hash = code_hash;
-        self
-    }
-
-    fn account_balance(mut self, address: Address, balance: U256) -> Self {
-        let entry = self.db.cache.accounts.entry(address).or_default();
-        entry.info.balance = balance;
-        self
-    }
-
-    fn build(self) -> CacheDBLatest<EmptyDBLatest> {
-        self.db
-    }
-}
-
 /// Build a latest-revm `CacheDB` for the snailtracer / analysis shape:
 /// one contract account holding `code`, and one caller account holding `caller_balance`.
 fn make_latest_db_call(
@@ -218,7 +111,7 @@ fn make_latest_db_call(
     code: Bytes,
     caller: Address,
     caller_balance: U256,
-) -> CacheDBLatest<EmptyDBLatest> {
+) -> revm_latest::database::CacheDB<EmptyDBLatest> {
     LatestDbBuilder::new()
         .account_code(contract, code)
         .account_balance(caller, caller_balance)
@@ -251,18 +144,14 @@ fn bench_snailtracer(c: &mut Criterion) {
     };
     let make_latest_db = || make_latest_db_call(CONTRACT, bytecode.clone(), CALLER, caller_balance);
 
-    group.bench_function("revm_pinned", |b| {
-        b.iter(|| transact_call_revm_pinned(make_pinned_db(), 1_000_000_000, calldata.clone()))
-    });
-    group.bench_function("revm_latest", |b| {
-        b.iter(|| transact_call_revm_latest(make_latest_db(), 1_000_000_000, calldata.clone()))
-    });
-    group.bench_function("op_revm_pinned", |b| {
-        b.iter(|| transact_call_op_revm_pinned(make_pinned_db(), 1_000_000_000, calldata.clone()))
-    });
-    group.bench_function("op_revm_latest", |b| {
-        b.iter(|| transact_call_op_revm_latest(make_latest_db(), 1_000_000_000, calldata.clone()))
-    });
+    let params = CallParams {
+        caller: CALLER,
+        target: CONTRACT,
+        gas_limit: 1_000_000_000,
+        data: calldata.clone(),
+        ..Default::default()
+    };
+    add_baseline_rows(&mut group, &params, &make_pinned_db, &make_latest_db);
 
     for &(name, spec) in SPEC_IDS {
         group.bench_function(name, |b| {
@@ -300,18 +189,14 @@ fn bench_analysis(c: &mut Criterion) {
     };
     let make_latest_db = || make_latest_db_call(CONTRACT, bytecode.clone(), CALLER, caller_balance);
 
-    group.bench_function("revm_pinned", |b| {
-        b.iter(|| transact_call_revm_pinned(make_pinned_db(), 10_000_000_000, calldata.clone()))
-    });
-    group.bench_function("revm_latest", |b| {
-        b.iter(|| transact_call_revm_latest(make_latest_db(), 10_000_000_000, calldata.clone()))
-    });
-    group.bench_function("op_revm_pinned", |b| {
-        b.iter(|| transact_call_op_revm_pinned(make_pinned_db(), 10_000_000_000, calldata.clone()))
-    });
-    group.bench_function("op_revm_latest", |b| {
-        b.iter(|| transact_call_op_revm_latest(make_latest_db(), 10_000_000_000, calldata.clone()))
-    });
+    let params = CallParams {
+        caller: CALLER,
+        target: CONTRACT,
+        gas_limit: 10_000_000_000,
+        data: calldata.clone(),
+        ..Default::default()
+    };
+    add_baseline_rows(&mut group, &params, &make_pinned_db, &make_latest_db);
 
     for &(name, spec) in SPEC_IDS {
         group.bench_function(name, |b| {
@@ -407,39 +292,17 @@ fn make_subcall_bytecode(target: Address) -> Bytes {
 fn bench_subcall_variant(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     pinned_db_setup: impl Fn() -> MemoryDatabase,
-    latest_db_setup: impl Fn() -> CacheDBLatest<EmptyDBLatest>,
+    latest_db_setup: impl Fn() -> revm_latest::database::CacheDB<EmptyDBLatest>,
 ) {
     const SUBCALL_GAS_LIMIT: u64 = 10_000_000_000;
-    let empty_calldata = Bytes::new();
 
-    group.bench_function("revm_pinned", |b| {
-        b.iter(|| {
-            transact_call_revm_pinned(pinned_db_setup(), SUBCALL_GAS_LIMIT, empty_calldata.clone())
-        })
-    });
-    group.bench_function("revm_latest", |b| {
-        b.iter(|| {
-            transact_call_revm_latest(latest_db_setup(), SUBCALL_GAS_LIMIT, empty_calldata.clone())
-        })
-    });
-    group.bench_function("op_revm_pinned", |b| {
-        b.iter(|| {
-            transact_call_op_revm_pinned(
-                pinned_db_setup(),
-                SUBCALL_GAS_LIMIT,
-                empty_calldata.clone(),
-            )
-        })
-    });
-    group.bench_function("op_revm_latest", |b| {
-        b.iter(|| {
-            transact_call_op_revm_latest(
-                latest_db_setup(),
-                SUBCALL_GAS_LIMIT,
-                empty_calldata.clone(),
-            )
-        })
-    });
+    let params = CallParams {
+        caller: CALLER,
+        target: CONTRACT,
+        gas_limit: SUBCALL_GAS_LIMIT,
+        ..Default::default()
+    };
+    add_baseline_rows(group, &params, &pinned_db_setup, &latest_db_setup);
 
     for &(name, spec) in SPEC_IDS {
         group.bench_function(name, |b| {
