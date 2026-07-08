@@ -33,7 +33,7 @@ jobs:
       - name: Install cargo-codspeed
         run: cargo install cargo-codspeed --locked --version 5.0.1
       - name: Build the sload bench under CodSpeed instrumentation
-        run: cargo codspeed build -p mega-evm mega_bench
+        run: cargo codspeed build -p mega-evm --bench mega_bench
       - name: Run the sload benches
         uses: CodSpeedHQ/action@v4
         with:
