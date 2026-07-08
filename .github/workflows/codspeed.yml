@@ -1,0 +1,43 @@
+name: CodSpeed (instruction-count)
+
+# Layout-INSENSITIVE benchmark: CodSpeed's simulation mode runs each bench once
+# under valgrind and reports retired-instruction counts, which do not depend on
+# binary layout / link order. This is the metric that can resolve a sub-relink-
+# floor change (e.g. the sload hot-path win) that the wall-clock harness buries
+# in ~8% inter-binary layout noise. Scoped to the sload benches to keep the
+# (slow) valgrind run short for this fork simulation.
+
+on:
+  push:
+    branches: ["main", "codspeed-sim"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # CodSpeed v4 authenticates via OIDC — no CODSPEED_TOKEN secret needed
+
+jobs:
+  benchmarks:
+    name: sload instruction count
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Install cargo-codspeed
+        run: cargo install cargo-codspeed --locked --version 5.0.1
+      - name: Build the sload bench under CodSpeed instrumentation
+        run: cargo codspeed build -p mega-evm mega_bench
+      - name: Run the sload benches
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          # Only the sload-touching benches; `sload` matches oracle_sload/* and
+          # sstore/sload_100/* across the spec lanes.
+          run: cargo codspeed run 'sload'
