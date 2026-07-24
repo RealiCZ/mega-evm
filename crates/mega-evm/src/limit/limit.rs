@@ -107,6 +107,19 @@ pub struct AdditionalLimit {
 
     /// A tracker for the `STORAGE_CALL_STIPEND` granted to value-transferring calls (REX4+).
     pub(crate) storage_call_stipend: storage_call_stipend::StorageCallStipendTracker,
+
+    /// REX6+ checkpoint accounting: whether compute gas settles at checkpoints instead of
+    /// per opcode. Plain opcodes run unwrapped; the interpreter's own gas counter is read
+    /// at each checkpoint and the segment delta is recorded in one shot.
+    checkpoint_accounting: bool,
+
+    /// Interpreter gas remaining at the start of the current unsettled segment (the last
+    /// checkpoint, frame entry, or frame resume). Only meaningful while a frame is running
+    /// and only when `checkpoint_accounting` is active. Re-synced at every
+    /// `before_frame_run` (which covers both frame entry and every resume after a child
+    /// frame's outcome is merged back), at every checkpoint settlement, and lowered by
+    /// storage-gas charge sites that debit interpreter gas outside a settlement window.
+    checkpoint_baseline: u64,
 }
 
 /// The usage of the additional limits.
@@ -134,6 +147,8 @@ impl AdditionalLimit {
             kv_update: kv_update::KVUpdateTracker::new(spec, limits.tx_kv_updates_limit),
             compute_gas: compute_gas::ComputeGasTracker::new(spec, limits.tx_compute_gas_limit),
             storage_call_stipend: storage_call_stipend::StorageCallStipendTracker::new(spec),
+            checkpoint_accounting: spec.is_enabled(MegaSpecId::REX6),
+            checkpoint_baseline: 0,
         }
     }
 }
@@ -175,6 +190,33 @@ impl AdditionalLimit {
         self.data_size.reset();
         self.kv_update.reset();
         self.storage_call_stipend.reset();
+        self.checkpoint_baseline = 0;
+    }
+
+    /// Interpreter gas remaining at the start of the current unsettled segment
+    /// (REX6+ checkpoint accounting). Checkpoint settlement sites use this instead of a
+    /// per-opcode `gas_before` capture, so the delta covers every unwrapped plain opcode
+    /// executed since the previous checkpoint.
+    #[inline]
+    pub(crate) fn checkpoint_baseline(&self) -> u64 {
+        self.checkpoint_baseline
+    }
+
+    /// Re-opens the settlement window at `remaining`. Called by every checkpoint after it
+    /// settles, and by `before_frame_run` at frame entry / resume.
+    #[inline]
+    pub(crate) fn sync_checkpoint_baseline(&mut self, remaining: u64) {
+        self.checkpoint_baseline = remaining;
+    }
+
+    /// Lowers the baseline by `amount` to exclude a storage-gas debit from the open
+    /// settlement window. Used by charge sites whose storage gas is not passed to the
+    /// settlement macro directly (currently the SELFDESTRUCT beneficiary-creation charge,
+    /// which is debited in `storage_gas_ext::selfdestruct` while the window is closed later
+    /// in `compute_gas_ext::selfdestruct`).
+    #[inline]
+    pub(crate) fn deduct_checkpoint_baseline(&mut self, amount: u64) {
+        self.checkpoint_baseline = self.checkpoint_baseline.saturating_sub(amount);
     }
 
     /// Test-only setter for [`has_exceeded_limit`](Self::has_exceeded_limit). Bypasses every
@@ -670,6 +712,14 @@ impl AdditionalLimit {
         &mut self,
         frame: &EthFrame<EthInterpreter>,
     ) -> Option<InterpreterResult> {
+        // Checkpoint accounting: open the settlement window at the frame's current gas.
+        // This hook runs both at frame entry and at every resume after a child frame's
+        // outcome (including its returned gas) has been merged back into this frame's
+        // interpreter, so the window start always sits at an instruction boundary.
+        if self.checkpoint_accounting {
+            self.checkpoint_baseline = frame.interpreter.gas.remaining();
+        }
+
         self.state_growth.before_frame_run(frame);
         self.data_size.before_frame_run(frame);
         self.kv_update.before_frame_run(frame);
@@ -719,6 +769,25 @@ impl AdditionalLimit {
         frame: &'a EthFrame<EthInterpreter>,
         action: &'a mut InterpreterAction,
     ) {
+        // Checkpoint accounting: the frame has produced its final action, so settle the
+        // tail segment (everything since the last checkpoint) against the interpreter's
+        // gas counter. `frame.interpreter.gas` still holds the loop-exit value here — the
+        // code-deposit storage charge in the execution-layer hook mutates only the action's
+        // gas copy — so the delta telescopes exactly over the unwrapped plain opcodes.
+        // A checkpoint that already settled and halted leaves `baseline == remaining`
+        // (delta 0), and the CALL-family abort path's forwarded-gas `erase_cost` can only
+        // raise `remaining` above the baseline, which the saturation turns into 0.
+        // Any limit exceed recorded here is latched and surfaced by the existing
+        // frame-result marking below / in `before_frame_return_result`.
+        if self.checkpoint_accounting {
+            if let InterpreterAction::Return(_) = action {
+                let remaining = frame.interpreter.gas.remaining();
+                let gas_used = self.checkpoint_baseline.saturating_sub(remaining);
+                self.checkpoint_baseline = remaining;
+                let _ = self.record_compute_gas(gas_used);
+            }
+        }
+
         self.state_growth.after_frame_run(frame, action);
         self.data_size.after_frame_run(frame, action);
         self.kv_update.after_frame_run(frame, action);
