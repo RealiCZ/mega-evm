@@ -2,7 +2,7 @@
 //!
 //! This benchmark suite measures the computational cost of various EVM operations
 //! to understand their real-world performance characteristics across different
-//! EVM specifications (`EQUIVALENCE` vs `MINI_REX`).
+//! EVM specifications (see [`SPEC_IDS`]).
 //!
 //! The benchmarks are organized into several categories:
 //! - Cryptographic hash operations (KECCAK256, SHA256, BLAKE2F)
@@ -40,11 +40,15 @@ const CONTRACT: Address = address!("0000000000000000000000000000000000100002");
 
 /// Specification IDs to benchmark against. REX5 is included so the precompile
 /// hot path (compute-gas cap + Gas normalization in `PrecompilesMap::run`) is
-/// measured against the pre-REX5 baseline.
+/// measured against the pre-REX5 baseline. REX6 is included so checkpoint
+/// compute-gas accounting (plain opcodes on raw revm instructions, `GAS` and
+/// the call family as checkpoints) is measured against the per-opcode REX5
+/// baseline on both the opcode and precompile microbenches.
 const SPEC_IDS: &[(&str, MegaSpecId)] = &[
     // ("equivalence", MegaSpecId::EQUIVALENCE),
     ("mini_rex", MegaSpecId::MINI_REX),
     ("rex5", MegaSpecId::REX5),
+    ("rex6", MegaSpecId::REX6),
 ];
 
 //
