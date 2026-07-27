@@ -53,7 +53,7 @@ jobs:
   # cannot make different jobs measure different code (or mislabel the result).
   prepare:
     name: Resolve commits
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     # Reacts to the triggering comment; does not execute PR code.
     # `issues: write` is required to react to the (issue) comment — PR
@@ -184,7 +184,7 @@ jobs:
   bench:
     name: Bench ${{ matrix.target }}
     needs: prepare
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # Paired interleaving runs each round's measurement ~1.5x the old single
     # pass, and re-pays per-bench setup once per round; give heavy-setup targets
     # (block_bench / attack_replay / comp_cost) generous headroom. Lower
@@ -317,7 +317,7 @@ jobs:
   compare:
     name: Compare and comment on PR
     needs: [prepare, bench]
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     # `!cancelled()` (NOT `always()`): a failed bench leg still updates the
     # status comment (partial rounds aggregated under a warning banner), but a
