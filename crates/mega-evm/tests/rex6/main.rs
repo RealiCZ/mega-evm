@@ -5,6 +5,7 @@
 //!   authorities (not every recoverable one).
 
 mod beneficiary_detention;
+mod checkpoint_accounting;
 mod common;
 mod create2_metering_order;
 mod create_frame_accounting;

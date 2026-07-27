@@ -1,9 +1,8 @@
 //! Benchmarks for the `ExecuteEvm::transact()` interface.
 //!
 //! Each workload runs against four vanilla baselines (`revm_pinned`,
-//! `revm_latest`, `op_revm_pinned`, `op_revm_latest`) and four mega specs
-//! (`EQUIVALENCE`, `MINI_REX`, `REX4`, `REX5`) so a single bench produces a
-//! cross-row gap table.
+//! `revm_latest`, `op_revm_pinned`, `op_revm_latest`) and the mega specs in
+//! [`common::SPEC_IDS`] so a single bench produces a cross-row gap table.
 #![allow(missing_docs)]
 
 use alloy_primitives::{address, bytes, Address, Bytes, U256};
@@ -87,10 +86,104 @@ fn bench_weth9_transfer(c: &mut Criterion) {
     group.finish();
 }
 
+/// Builds a tight countdown loop of cheap opcodes:
+///
+/// ```text
+/// PUSH3 iterations
+/// loop: JUMPDEST; PUSH1 1; SWAP1; SUB; DUP1; PUSH1 loop; JUMPI
+/// STOP
+/// ```
+///
+/// Each iteration executes 7 opcodes for 26 gas (JUMPDEST 1 + PUSH1 3 + SWAP1 3 +
+/// SUB 3 + DUP1 3 + PUSH1 3 + JUMPI 10), all from the cheap-opcode family that
+/// dominates real interpreter workloads.
+fn hotloop_code(iterations: u32) -> Bytes {
+    let mut code = Vec::with_capacity(14);
+    // PUSH3 <iterations>
+    code.push(0x62);
+    code.extend_from_slice(&iterations.to_be_bytes()[1..4]);
+    // loop target is the JUMPDEST right after the initial PUSH3 (offset 4).
+    let loop_target = code.len() as u8;
+    code.push(0x5b); // JUMPDEST
+    code.push(0x60); // PUSH1
+    code.push(0x01);
+    code.push(0x90); // SWAP1
+    code.push(0x03); // SUB
+    code.push(0x80); // DUP1
+    code.push(0x60); // PUSH1
+    code.push(loop_target);
+    code.push(0x57); // JUMPI
+    code.push(0x00); // STOP
+    Bytes::from(code)
+}
+
+/// Benchmark a cheap-opcode-dense interpreter hot loop (~700k executed opcodes,
+/// ~2.6M gas), the workload shape where per-opcode gas-accounting overhead is
+/// the dominant tax.
+fn bench_interpreter_hotloop(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interpreter_hotloop");
+    let workload = Workload::single(
+        vec![Account::new(CALLEE).code(hotloop_code(100_000))],
+        TxSpec::call(CALLER, CALLEE),
+    );
+    register_all(&mut group, &workload);
+    group.finish();
+}
+
+/// Builds the countdown loop of [`hotloop_code`] with a `GAS; POP` pair added
+/// to the body:
+///
+/// ```text
+/// PUSH3 iterations
+/// loop: JUMPDEST; GAS; POP; PUSH1 1; SWAP1; SUB; DUP1; PUSH1 loop; JUMPI
+/// STOP
+/// ```
+///
+/// Each iteration executes 9 opcodes for 30 gas.
+fn gas_hotloop_code(iterations: u32) -> Bytes {
+    let mut code = Vec::with_capacity(16);
+    // PUSH3 <iterations>
+    code.push(0x62);
+    code.extend_from_slice(&iterations.to_be_bytes()[1..4]);
+    // loop target is the JUMPDEST right after the initial PUSH3 (offset 4).
+    let loop_target = code.len() as u8;
+    code.push(0x5b); // JUMPDEST
+    code.push(0x5a); // GAS
+    code.push(0x50); // POP
+    code.push(0x60); // PUSH1
+    code.push(0x01);
+    code.push(0x90); // SWAP1
+    code.push(0x03); // SUB
+    code.push(0x80); // DUP1
+    code.push(0x60); // PUSH1
+    code.push(loop_target);
+    code.push(0x57); // JUMPI
+    code.push(0x00); // STOP
+    Bytes::from(code)
+}
+
+/// Benchmark the hot loop with a `GAS` read every iteration — the densest
+/// possible checkpoint shape for REX6 checkpoint accounting, where `GAS` is a
+/// full checkpoint (segment settle + clamp restore/re-apply around the raw
+/// read) instead of a plain recorded opcode. This row upper-bounds the
+/// per-checkpoint overhead; earlier specs treat `GAS` as an ordinary cheap
+/// opcode, so their rows double as the regression baseline.
+fn bench_interpreter_gas_hotloop(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interpreter_gas_hotloop");
+    let workload = Workload::single(
+        vec![Account::new(CALLEE).code(gas_hotloop_code(100_000))],
+        TxSpec::call(CALLER, CALLEE),
+    );
+    register_all(&mut group, &workload);
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_empty_transaction,
     bench_simple_ether_transfer,
-    bench_weth9_transfer
+    bench_weth9_transfer,
+    bench_interpreter_hotloop,
+    bench_interpreter_gas_hotloop
 );
 criterion_main!(benches);
