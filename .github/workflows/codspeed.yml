@@ -29,7 +29,7 @@ concurrency:
 jobs:
   codspeed:
     name: instruction count
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # A cold full-suite run measured ~13 min on a GitHub-hosted 4-vCPU runner
     # (simulation mode executes each bench once — no criterion sampling loop);
     # the 32vcpu runner only shortens the build — 30 min is ample headroom.
