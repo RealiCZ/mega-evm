@@ -737,7 +737,7 @@ fn reaches_target_load(
     };
     let need = a.max(b).div_ceil(32);
     let have = (state.memory().len() as u64).div_ceil(32);
-    let cost = |w: u64| 3 * w + w * w / 512;
+    let cost = |w: u64| (3 * w).saturating_add(w.saturating_mul(w) / 512);
     let memory = if need <= have { 0 } else { cost(need) - cost(have) };
     // ... then the value-transfer charge, then the skip-cold check (`call_emulation.rs`'s order):
     // a frame that cannot pay a cold access loads nothing.
@@ -747,8 +747,9 @@ fn reaches_target_load(
         0
     };
     let total = detention::available(gas.tracker(), &state.host().ext().detention);
-    memory.saturating_add(value) <= gas.remaining() &&
-        total.saturating_sub(memory + value) >= state.gas_params().cold_account_additional_cost()
+    let charge = memory.saturating_add(value);
+    charge <= gas.remaining() &&
+        total.saturating_sub(charge) >= state.gas_params().cold_account_additional_cost()
 }
 
 fn mega_call_impl(
