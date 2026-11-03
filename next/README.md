@@ -97,7 +97,7 @@ Local builds keep the path dependency above.
 It installs the toolchain from `rust-toolchain.toml`, adds the `riscv64imac-unknown-none-elf` target, and caches the build.
 It then runs `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings` for `mega-evm2` (without `--features compare`, then with it), `op-evm2`, and `mega-evm2-diff`, then `cargo test --locked -p mega-evm2 -p op-evm2`, a `no_std` check of `op-evm2` for `riscv64imac-unknown-none-elf`, `diff/scripts/check-regen-refusal.sh` (on scratch corpora, `regen-reference.sh` deletes and writes nothing in the corpus, and refuses before it builds anything every input that would make it), `diff/scripts/gate.sh sample`, `diff/scripts/controls.sh sample` and `diff/scripts/faults.sh`.
 
-**reference** runs every day, and on pull requests and pushes that touch `next/reference/**`, `next/diff/data/**`, or `next/diff/shared/**`.
+**reference** runs every day, and on pull requests and pushes that touch what it reads: `next/reference/**`, `next/diff/data/**`, `next/diff/shared/**`, `next/diff/scripts/**`, `next/rust-toolchain.toml`, or the workflow file.
 It runs `diff/scripts/check-reference.sh sample`, which rebuilds the Satin implementation under review from git and compares it with the stored sample.
 
 **full** runs every day and from `workflow_dispatch`.
