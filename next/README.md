@@ -36,9 +36,31 @@ The only accepted difference is listed in `diff/known-differences.toml`.
 ## Building
 
 The toolchain is pinned in `next/rust-toolchain.toml`.
-Until our thin evm2 fork is pushed and pinned by git revision, `evm2` is a path
-dependency on a checkout of the fork next to this repository (`../evm2`).
+Local builds use a path dependency on a checkout of our thin evm2 fork next to this repository (`../evm2` from the repository root).
 
 ```bash
 cd next && cargo check --workspace
 ```
+
+## CI
+
+`.github/workflows/next.yml` checks this workspace.
+It does not build the root workspace.
+
+`evm2-fork.env` is the only fork pin CI reads (`EVM2_FORK_REPO`, `EVM2_FORK_REV`).
+The workflow checks this repository out at `mega-evm/` and that revision out at `evm2/`, so `../../evm2` from `next/` resolves.
+Local builds keep the path dependency above.
+`diff/scripts/ci-local.sh` runs the check job's commands against that local checkout.
+
+**check** runs on every pull request and on every push that touches `next/**` or the workflow file.
+It installs the toolchain from `rust-toolchain.toml`, adds the `riscv64imac-unknown-none-elf` target, and caches the build.
+It then runs `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings` for `mega-evm2` (without `--features compare`, then with it), `op-evm2`, and `mega-evm2-diff`, then `cargo test --locked -p mega-evm2 -p op-evm2`, a `no_std` check of `op-evm2` for `riscv64imac-unknown-none-elf`, and `diff/scripts/gate.sh sample`.
+
+**reference** runs every day, and on pull requests and pushes that touch `next/reference/**`, `next/diff/data/**`, or `next/diff/shared/**`.
+It runs `diff/scripts/check-reference.sh sample`, which rebuilds the Satin implementation under review from git and compares it with the stored sample.
+
+**full** runs every day and from `workflow_dispatch`.
+It downloads the corpus archive from the repository variable `MEGA_EVM2_CORPUS_URL`, or from the secret of the same name when the variable is unset, into a temporary directory.
+The archive (tar.zst, tar.gz, tar.xz, tar.bz2, zip, or tar) must unpack to the layout in `diff/data/README.md`: a directory that contains `real-blocks/` and `reference/q11-oracles.tar.zst`.
+The job then runs `MEGA_EVM2_CORPUS_DIR=<that directory> diff/scripts/gate.sh full`.
+When neither the variable nor the secret is set, the job prints a notice and succeeds without running the gate.
