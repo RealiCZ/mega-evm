@@ -396,10 +396,12 @@ Gates, from `next/`:
 ```bash
 bash diff/scripts/ci-local.sh
 MEGA_EVM2_CORPUS_DIR=<corpus> bash diff/scripts/gate.sh full
+MEGA_EVM2_CORPUS_DIR=<corpus> bash diff/scripts/controls.sh full
 ```
 
-`ci-local.sh` is the check job: fmt, clippy, `mega-evm2` and `op-evm2` tests, the `no_std` check, and `gate.sh sample`.
-`gate.sh full` needs the corpus archive.
+`ci-local.sh` is the check job: fmt, clippy, `mega-evm2` and `op-evm2` tests, the `no_std` check, the check that `regen-reference.sh` refuses an output directory in the corpus, `gate.sh sample`, `controls.sh sample` (the negative controls: every switch, off, makes its gate fail) and `faults.sh` (the fault injection: every wrong reference value is rejected).
+After a rebase the negative controls matter most: a fix that the new upstream code no longer reaches shows up as a missed control even while the gates pass.
+`gate.sh full` and `controls.sh full` need the corpus archive.
 
 ## Upstream candidates
 

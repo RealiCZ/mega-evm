@@ -3,7 +3,8 @@
 //! `all()` is the base scenario list (group "p5"); the sibling files included below add the
 //! regression sets (`p6`, `p7`), the interaction scenarios (`q2`), the fuzz generator (`fz`) and
 //! the scenarios of the later mechanisms (`q8`: EIP-7702, keyless deployment, access control,
-//! Oracle hints, the precompile catalogue). Group names are part of the reference outputs.
+//! Oracle hints, the precompile catalogue) and the gas limits above the EIP-8037 total cap
+//! (`cap`). Group names are part of the reference outputs.
 
 #![allow(dead_code)]
 
@@ -260,7 +261,8 @@ pub struct Scenario {
     pub data: Vec<u8>,
     pub gas_limit: u64,
     pub limits: Limits,
-    /// "p5", "p6", "p7" (regression) or "q2" (interaction).
+    /// "p5", "p6", "p7" (regression), "q2" (interaction), "fz" (fuzz), "q8" (later mechanisms) or
+    /// "cap" (gas limits above the EIP-8037 total cap).
     pub group: &'static str,
     /// The transaction's sender.
     pub sender: Address,
@@ -343,7 +345,8 @@ pub fn three_writes() -> Vec<u8> {
     Asm::new().sstore(1, 1).sstore(2, 1).sstore(3, 1).stop().build()
 }
 
-/// Every scenario of the run: the base list, then the `p6`, `p7`, `q2`, `fz` and `q8` groups.
+/// Every scenario of the run: the base list, then the `p6`, `p7`, `q2`, `fz`, `q8` and `cap`
+/// groups.
 pub fn everything() -> Vec<Scenario> {
     let mut v = all();
     v.extend(p6::all());

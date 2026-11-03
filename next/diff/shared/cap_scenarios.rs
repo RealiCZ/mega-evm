@@ -1,10 +1,16 @@
 //! The EIP-8037 total transaction gas cap (`TX_MAX_TOTAL_GAS_LIMIT` = 2^32 − 1) is not applied:
-//! a transaction's gas limit is bounded by the block's gas limit alone (10,000,000,000 here).
+//! a transaction's gas limit is bounded by the block's gas limit alone (`BLOCK_GAS_LIMIT` here).
 //! Each transaction kind the shared format expresses (legacy, OP deposit, EIP-7702) runs at gas
 //! limit 2^32 − 1, 2^32 and the block's gas limit, calling a contract that stores 1 in slot 1, so
-//! an accepted transaction shows in the compared fields. A system-address transaction is promoted
-//! to a deposit by the block executor, which the synthetic format does not go through; the block
-//! gates cover it.
+//! an accepted transaction shows in the compared fields.
+//!
+//! No scenario is a system-address transaction. Its promotion to a deposit happens in the
+//! transaction handler (`prepare_legacy`, reached by plain `transact`), but only for the live
+//! system address, which needs the `SequencerRegistry`'s trusted code; the scenario fixtures give
+//! the registry a one-byte placeholder code, so no scenario has one. The recorded blocks cover the
+//! path: every transaction of the corpus with a gas limit of 2^32 or more is a system-address call
+//! to the Oracle (2,367 in the full corpus, 133 in the sample), compared by the replay and block
+//! gates.
 #![allow(dead_code)]
 use super::{Account, Asm, Auth, BLOCK_GAS_LIMIT, Limits, Scenario, acct, op, scenario};
 use alloy_primitives::Address;
