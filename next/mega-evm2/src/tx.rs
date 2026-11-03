@@ -115,7 +115,7 @@ pub(crate) fn first_frame_start(
 /// transaction's data-size limit, before any gas check (the protocol's own work is exempt).
 pub(crate) fn admits_body(host: &mut Evm<'_, MegaTypes>, entries: u64) -> HandlerResult<()> {
     let ext = host.ext();
-    if !crate::off("q8_body_records") &&
+    if !crate::off("body_records") &&
         !ext.exempt &&
         ext.tx_net[0] as u64 + WRITE_RECORD_SIZE * entries > ext.cfg.limits[0]
     {
@@ -149,7 +149,7 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         _floor_gas: &mut u64,
     ) -> HandlerResult<()> {
         *initial_state_gas += host.ext().body_history + host.ext().tx_start_charge;
-        host.ext_mut().q8.prepared = Some((*_intrinsic, *initial_state_gas, *_floor_gas));
+        host.ext_mut().mechanisms.prepared = Some((*_intrinsic, *initial_state_gas, *_floor_gas));
         Ok(())
     }
 
@@ -186,7 +186,7 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         if charge > 0 && !gas.result.stop.is_success() {
             let reservoir0 = gas.gas_limit.saturating_sub(EXECUTION_CAP);
             let body = gas.initial_state_gas - charge;
-            let from_reservoir = match host.ext().q8.start_from_reservoir {
+            let from_reservoir = match host.ext().mechanisms.start_from_reservoir {
                 // Charged after validation (EIP-7702), as recorded then.
                 Some(paid) => paid,
                 None => charge.min(reservoir0.saturating_sub(body)),
@@ -352,7 +352,7 @@ fn prepare_deposit_inner(
     host.ext_mut().deposit_created_caller = created;
     let _ = read_registry(host);
     // A deposit whose body is over the data-size limit is a failed deposit (Satin).
-    host.ext_mut().q8.body_refused = admits_body(host, 0).is_err();
+    host.ext_mut().mechanisms.body_refused = admits_body(host, 0).is_err();
     op_evm2::prepare_deposit_tx(host, tx)
 }
 
@@ -376,7 +376,7 @@ fn execute_deposit_inner(
         PreparedDeposit::Ready { intrinsic, floor_gas, nonce } => (intrinsic, floor_gas, nonce),
         PreparedDeposit::Failed(_) => return failed_deposit(host, tx, InstrStop::OutOfGas),
     };
-    if host.ext().q8.body_refused {
+    if host.ext().mechanisms.body_refused {
         return failed_deposit(host, tx, InstrStop::OutOfGas);
     }
     let created_state = if host.ext().deposit_created_caller && !crate::off("deposit_caller") {

@@ -136,7 +136,7 @@ pub fn execute(
     let envelope = req.envelope;
     let host = req.host;
     let (intrinsic, initial_state_gas, floor_gas) =
-        host.ext_mut().q8.prepared.take().expect("adjust_intrinsic_gas ran");
+        host.ext_mut().mechanisms.prepared.take().expect("adjust_intrinsic_gas ran");
     let gas_price = effective_gas_price(
         U256::from(tx.max_fee_per_gas),
         U256::from(tx.max_priority_fee_per_gas),
@@ -194,7 +194,7 @@ pub fn execute(
     };
     let mut skip = None;
     if !host.ext().exempt &&
-        !crate::off("q8_list_rule") &&
+        !crate::off("auth_list_rule") &&
         (entries > kv_room || entries > growth_room)
     {
         let (records, created) = simulate(host, chain_id, caller, tx.authorizations())?;
@@ -228,7 +228,7 @@ pub fn execute(
     // The first frame's start record, as the journal stands after the application, then the
     // history of every record made outside a frame, in one charge.
     crate::tx::first_frame_start(host, caller, to, tx.value, 0);
-    if host.ext().prices_history && !crate::off("q8_auth_history") {
+    if host.ext().prices_history && !crate::off("auth_history") {
         let first = host.ext().tx_start_charge;
         let auth = records * WRITE_RECORD_SIZE * CPHB;
         let before = tx_gas.reservoir();
@@ -236,9 +236,9 @@ pub fn execute(
             return settle_oog(host);
         }
         let paid = (first + auth).min(before);
-        host.ext_mut().q8.start_from_reservoir = Some(paid.saturating_sub(auth).min(first));
+        host.ext_mut().mechanisms.start_from_reservoir = Some(paid.saturating_sub(auth).min(first));
     } else if host.ext().prices_history {
-        host.ext_mut().q8.start_from_reservoir = Some(0);
+        host.ext_mut().mechanisms.start_from_reservoir = Some(0);
     }
     let Some(frame) =
         prepare_initial_frame(host, caller, tx.nonce, to, &tx.input, tx.value, &mut tx_gas)?
@@ -249,7 +249,7 @@ pub fn execute(
     // first frame does; the first frame's budget is what they leave.
     {
         let ext = host.ext_mut();
-        if !crate::off("q8_auth_counts") {
+        if !crate::off("auth_counts") {
             let add = [(records * WRITE_RECORD_SIZE) as i64, records as i64];
             for (i, a) in add.into_iter().enumerate() {
                 ext.tx_net[i] += a;
@@ -258,13 +258,10 @@ pub fn execute(
             ext.tx_growth += created as i64;
             ext.frames[0].budget[2] = ext.frames[0].budget[2].saturating_sub(created);
         }
-        ext.q8.pre_frame_stop = skip;
+        ext.mechanisms.pre_frame_stop = skip;
         // The authorities' history is reported only once nothing can take the list
         // back (a pre-execution out-of-gas takes the records back with it).
-        if ext.prices_history &&
-            !crate::off("q8_auth_history") &&
-            !crate::off("q8_auth_history_report")
-        {
+        if ext.prices_history && !crate::off("auth_history") && !crate::off("auth_history_report") {
             ext.body_history += records * WRITE_RECORD_SIZE * CPHB;
             ext.body_bytes += records * WRITE_RECORD_SIZE;
         }
@@ -277,7 +274,7 @@ pub fn execute(
         let ext = host.ext_mut();
         if crate::detention::detains(ext) &&
             ext.detention.cap != u64::MAX &&
-            !crate::off("q8_auth_beneficiary")
+            !crate::off("auth_beneficiary")
         {
             let cap = ext.detention.cap;
             ext.detention.limit = Some(ext.detention.limit.map_or(cap, |l| l.min(cap)));

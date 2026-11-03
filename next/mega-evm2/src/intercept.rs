@@ -5,7 +5,7 @@
 //! answer `remainingComputeGas()` = the caller's regular gas after the forward plus the forward,
 //! at most detention's allowance (Satin `system/limit_control.rs`).
 
-use crate::{MegaTypes as P5Types, detention::regular_spent};
+use crate::{MegaTypes, detention::regular_spent};
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use evm2::{
     Evm, PrecompileError,
@@ -30,7 +30,7 @@ pub fn non_zero_transfer() -> Bytes {
 
 #[derive(Debug)]
 pub struct SatinProvider {
-    pub base: Precompiles<P5Types>,
+    pub base: Precompiles<MegaTypes>,
 }
 
 impl SatinProvider {
@@ -39,7 +39,7 @@ impl SatinProvider {
     }
 }
 
-impl PrecompileProvider<P5Types> for SatinProvider {
+impl PrecompileProvider<MegaTypes> for SatinProvider {
     fn addresses(&self) -> Vec<Address> {
         // The system contract is not a precompile: its address is not pre-warmed.
         self.base.addresses()
@@ -57,8 +57,8 @@ impl PrecompileProvider<P5Types> for SatinProvider {
         *address == LIMIT_CONTROL || self.base.contains(address)
     }
 
-    fn contains_message(&self, m: &Message<P5Types>) -> bool {
-        if m.call_target == crate::satin_ext::ACCESS_CONTROL && !crate::off("q8_access_control") {
+    fn contains_message(&self, m: &Message<MegaTypes>) -> bool {
+        if m.call_target == crate::satin_ext::ACCESS_CONTROL && !crate::off("access_control") {
             // `MegaAccessControl`, scheme guard then selector.
             return matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) &&
                 crate::satin_ext::access_control_method(&m.input).is_some();
@@ -80,8 +80,8 @@ impl PrecompileProvider<P5Types> for SatinProvider {
 
     fn execute(
         &self,
-        evm: &mut Evm<'_, P5Types>,
-        m: &Message<P5Types>,
+        evm: &mut Evm<'_, MegaTypes>,
+        m: &Message<MegaTypes>,
         gas: &mut GasTracker,
     ) -> Option<Result<PrecompileOutput, PrecompileError>> {
         if m.call_target != LIMIT_CONTROL {
@@ -95,7 +95,7 @@ impl PrecompileProvider<P5Types> for SatinProvider {
 }
 
 /// The answer of `remainingComputeGas()` to the call `m`.
-pub fn remaining_compute_gas(evm: &mut Evm<'_, P5Types>, m: &Message<P5Types>) -> Bytes {
+pub fn remaining_compute_gas(evm: &mut Evm<'_, MegaTypes>, m: &Message<MegaTypes>) -> Bytes {
     {
         let ext = evm.ext();
         let own = ext.last_caller_remaining.saturating_add(m.gas_limit);
@@ -125,9 +125,9 @@ pub fn remaining_compute_gas(evm: &mut Evm<'_, P5Types>, m: &Message<P5Types>) -
 /// transfer: the
 /// value policy then answers before any value moves, as Satin's does.
 pub fn answer_before(
-    evm: &mut Evm<'_, P5Types>,
-    m: &Message<P5Types>,
-) -> Option<evm2::interpreter::MessageResult<P5Types>> {
+    evm: &mut Evm<'_, MegaTypes>,
+    m: &Message<MegaTypes>,
+) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
     if m.call_target == crate::satin_ext::ACCESS_CONTROL && evm.precompiles().contains_message(m) {
         // `MegaAccessControl` (Satin `system/control.rs`): the value policy, then the method,
         // answered on the untouched forward.
@@ -136,7 +136,7 @@ pub fn answer_before(
             (evm2::interpreter::InstrStop::Revert, non_zero_transfer())
         } else {
             let (ok, out) = crate::satin_ext::access_control_answer(
-                &mut evm.ext_mut().q8,
+                &mut evm.ext_mut().mechanisms,
                 method,
                 m.depth as usize,
             );
@@ -184,17 +184,17 @@ impl Default for SatinProvider {
 /// (data size, never history, no frame budget) and forwarded; one that would cross the
 /// transaction's data-size limit answers its call with the stop. The bytecode runs otherwise.
 pub fn hint_before(
-    evm: &mut Evm<'_, P5Types>,
-    m: &Message<P5Types>,
-) -> Option<evm2::interpreter::MessageResult<P5Types>> {
+    evm: &mut Evm<'_, MegaTypes>,
+    m: &Message<MegaTypes>,
+) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
     use crate::satin_ext::*;
-    if crate::off("q8_hints") ||
+    if crate::off("oracle_hints") ||
         m.call_target != crate::ORACLE ||
         !matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) ||
         !is_send_hint(&m.input) ||
         !m.value.is_zero() ||
         m.gas_limit == 0 ||
-        (m.depth as usize).checked_sub(1).is_some_and(|c| refuses(&evm.ext().q8, c))
+        (m.depth as usize).checked_sub(1).is_some_and(|c| refuses(&evm.ext().mechanisms, c))
     {
         return None;
     }
@@ -217,9 +217,9 @@ pub fn hint_before(
         }
     }
     ext.tx_net[0] += bytes as i64;
-    ext.q8.hint_bytes += bytes;
+    ext.mechanisms.hint_bytes += bytes;
     if let Some((topic, data)) = decode_hint(&m.input) {
-        ext.q8.hints.push((m.caller, topic, data));
+        ext.mechanisms.hints.push((m.caller, topic, data));
     }
     None
 }

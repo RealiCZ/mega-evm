@@ -16,7 +16,7 @@
 //! back to the record. Ported: block-environment reads through TIMESTAMP and NUMBER only;
 //! precompile prices, interceptor answers, the Oracle and the access switch are not.
 
-use crate::{MegaTypes as P5Types, ledger::*};
+use crate::{MegaTypes, ledger::*};
 use alloy_primitives::{Bytes, U256};
 use core::marker::PhantomData;
 use evm2::{
@@ -169,13 +169,13 @@ pub fn commit_read(ext: &mut Lite, gas: &mut GasTracker, cap: u64, forwarded: u6
 /// held. Built on evm2's `#[doc(hidden)]` `Instruction` trait.
 pub struct Volatile<I, const A: u8>(PhantomData<I>);
 
-impl<I: Instruction<P5Types>, const A: u8> Instruction<P5Types> for Volatile<I, A> {
+impl<I: Instruction<MegaTypes>, const A: u8> Instruction<MegaTypes> for Volatile<I, A> {
     const DYNAMIC_GAS: bool = true;
 
     fn execute(
         pc: &mut Pc,
         stack: StackMut<'_>,
-        state: &mut InterpreterState<'_, '_, P5Types>,
+        state: &mut InterpreterState<'_, '_, MegaTypes>,
     ) -> Result {
         // `MegaAccessControl` switched access off at or above this frame: the read is refused
         // and the frame reverts on the gas it had after the opcode's static gas.
@@ -211,22 +211,22 @@ impl<I: Instruction<P5Types>, const A: u8> Instruction<P5Types> for Volatile<I, 
     }
 }
 
-pub const fn wrap_table(mut c: OpcodeConfig<P5Types>) -> OpcodeConfig<P5Types> {
+pub const fn wrap_table(mut c: OpcodeConfig<MegaTypes>) -> OpcodeConfig<MegaTypes> {
     c.set_instruction::<total_gas>(op::GAS, c.static_gas(op::GAS));
-    c.set_instruction::<Volatile<instructions::coinbase<P5Types>, { crate::satin_ext::access::COINBASE }>>(op::COINBASE, c.static_gas(op::COINBASE));
-    c.set_instruction::<Volatile<instructions::difficulty<P5Types>, { crate::satin_ext::access::PREV_RANDAO }>>(op::DIFFICULTY, c.static_gas(op::DIFFICULTY));
-    c.set_instruction::<Volatile<instructions::gaslimit<P5Types>, { crate::satin_ext::access::GAS_LIMIT }>>(op::GASLIMIT, c.static_gas(op::GASLIMIT));
-    c.set_instruction::<Volatile<instructions::basefee<P5Types>, { crate::satin_ext::access::BASE_FEE }>>(op::BASEFEE, c.static_gas(op::BASEFEE));
-    c.set_instruction::<Volatile<instructions::blobbasefee<P5Types>, { crate::satin_ext::access::BLOB_BASE_FEE }>>(op::BLOBBASEFEE, c.static_gas(op::BLOBBASEFEE));
-    c.set_instruction::<Volatile<instructions::slotnum<P5Types>, { crate::satin_ext::access::SLOT_NUM }>>(op::SLOTNUM, c.static_gas(op::SLOTNUM));
-    c.set_instruction::<Volatile<instructions::blockhash<P5Types>, { crate::satin_ext::access::BLOCK_HASH }>>(op::BLOCKHASH, c.static_gas(op::BLOCKHASH));
-    c.set_instruction::<Volatile<instructions::timestamp<P5Types>, { crate::satin_ext::access::TIMESTAMP }>>(op::TIMESTAMP, c.static_gas(op::TIMESTAMP));
-    c.set_instruction::<Volatile<instructions::block_number<P5Types>, { crate::satin_ext::access::BLOCK_NUMBER }>>(op::NUMBER, c.static_gas(op::NUMBER));
+    c.set_instruction::<Volatile<instructions::coinbase<MegaTypes>, { crate::satin_ext::access::COINBASE }>>(op::COINBASE, c.static_gas(op::COINBASE));
+    c.set_instruction::<Volatile<instructions::difficulty<MegaTypes>, { crate::satin_ext::access::PREV_RANDAO }>>(op::DIFFICULTY, c.static_gas(op::DIFFICULTY));
+    c.set_instruction::<Volatile<instructions::gaslimit<MegaTypes>, { crate::satin_ext::access::GAS_LIMIT }>>(op::GASLIMIT, c.static_gas(op::GASLIMIT));
+    c.set_instruction::<Volatile<instructions::basefee<MegaTypes>, { crate::satin_ext::access::BASE_FEE }>>(op::BASEFEE, c.static_gas(op::BASEFEE));
+    c.set_instruction::<Volatile<instructions::blobbasefee<MegaTypes>, { crate::satin_ext::access::BLOB_BASE_FEE }>>(op::BLOBBASEFEE, c.static_gas(op::BLOBBASEFEE));
+    c.set_instruction::<Volatile<instructions::slotnum<MegaTypes>, { crate::satin_ext::access::SLOT_NUM }>>(op::SLOTNUM, c.static_gas(op::SLOTNUM));
+    c.set_instruction::<Volatile<instructions::blockhash<MegaTypes>, { crate::satin_ext::access::BLOCK_HASH }>>(op::BLOCKHASH, c.static_gas(op::BLOCKHASH));
+    c.set_instruction::<Volatile<instructions::timestamp<MegaTypes>, { crate::satin_ext::access::TIMESTAMP }>>(op::TIMESTAMP, c.static_gas(op::TIMESTAMP));
+    c.set_instruction::<Volatile<instructions::block_number<MegaTypes>, { crate::satin_ext::access::BLOCK_NUMBER }>>(op::NUMBER, c.static_gas(op::NUMBER));
     c
 }
 
 /// After SSTORE: a restore can refill regular gas, so the frame is held again.
-pub fn after_sstore(gas: &mut Gas, state: &mut InterpreterState<'_, '_, P5Types>) -> Result {
+pub fn after_sstore(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result {
     let ext = state.host().ext_mut();
     if detains(ext) {
         ext.detention.hold(gas.tracker_mut());
@@ -235,7 +235,7 @@ pub fn after_sstore(gas: &mut Gas, state: &mut InterpreterState<'_, '_, P5Types>
 }
 
 /// The caller suspends on a child (the CALL/CREATE `before` hook, after the forward is taken).
-pub fn on_suspend(gas: &Gas, state: &mut InterpreterState<'_, '_, P5Types>, stipend: u64) {
+pub fn on_suspend(gas: &Gas, state: &mut InterpreterState<'_, '_, MegaTypes>, stipend: u64) {
     let depth = state.message().depth as usize;
     let ext = state.host().ext_mut();
     if detains(ext) {
@@ -244,7 +244,7 @@ pub fn on_suspend(gas: &Gas, state: &mut InterpreterState<'_, '_, P5Types>, stip
 }
 
 /// The caller resumes on what its child handed back: held again.
-pub fn on_resume(gas: &mut Gas, state: &mut InterpreterState<'_, '_, P5Types>) -> Result {
+pub fn on_resume(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result {
     let depth = state.message().depth as usize;
     let ext = state.host().ext_mut();
     if detains(ext) {
@@ -258,7 +258,11 @@ pub fn on_resume(gas: &mut Gas, state: &mut InterpreterState<'_, '_, P5Types>) -
 // Frame side (message hooks)
 
 /// A frame was built (`frame_built` hook): its first run, held before its first instruction.
-pub fn on_frame_built(evm: &mut Evm<'_, P5Types>, msg: &Message<P5Types>, gas: &mut GasTracker) {
+pub fn on_frame_built(
+    evm: &mut Evm<'_, MegaTypes>,
+    msg: &Message<MegaTypes>,
+    gas: &mut GasTracker,
+) {
     let ext = evm.ext_mut();
     if detains(ext) {
         ext.detention.on_frame_run(msg.gas_limit, msg.depth as usize);
@@ -266,13 +270,13 @@ pub fn on_frame_built(evm: &mut Evm<'_, P5Types>, msg: &Message<P5Types>, gas: &
     }
 }
 
-pub fn on_start(_evm: &mut Evm<'_, P5Types>, _msg: &Message<P5Types>) {}
+pub fn on_start(_evm: &mut Evm<'_, MegaTypes>, _msg: &Message<MegaTypes>) {}
 
 /// A frame that ran ends (`before_commit` hook, before evm2's commit-or-rollback decision): an
 /// out-of-gas whose gas carries a crossing record is the stop; any other halt burns.
 pub fn before_commit(
-    evm: &mut Evm<'_, P5Types>,
-    msg: &Message<P5Types>,
+    evm: &mut Evm<'_, MegaTypes>,
+    msg: &Message<MegaTypes>,
     answered: bool,
     stop: &mut InstrStop,
     output: &mut Bytes,
@@ -335,7 +339,7 @@ pub fn before_commit(
     det.burned = det.burned.saturating_add(left).saturating_add(gas.state_gas_spilled());
 }
 
-#[evm2_macros::instruction(EvmTypes = P5Types, dynamic_gas)]
+#[evm2_macros::instruction(EvmTypes = MegaTypes, dynamic_gas)]
 pub fn total_gas(cx: _) -> out {
     let total = available(cx.gas.tracker(), &cx.state.host().ext().detention);
     *out = evm2::interpreter::Word::from(if crate::off("gas_total") {
@@ -348,8 +352,8 @@ pub fn total_gas(cx: _) -> out {
 /// Recomputes the forward from spendable + withheld and debits withheld first.
 pub fn repair_forward(
     gas: &mut Gas,
-    state: &mut InterpreterState<'_, '_, P5Types>,
-    msg: &mut Message<P5Types>,
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    msg: &mut Message<MegaTypes>,
     requested: u64,
 ) {
     let stipend = if !msg.value.is_zero() &&
@@ -378,7 +382,7 @@ pub fn repair_forward(
 /// SSTORE's sentry/load checks see the full budget; regular charges still draw spendable gas.
 pub fn sstore_body(
     gas: &mut Gas,
-    state: &mut InterpreterState<'_, '_, P5Types>,
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
     key: &evm2::interpreter::Word,
     value: &evm2::interpreter::Word,
 ) -> Result {
@@ -405,7 +409,7 @@ pub fn sstore_body(
         // The slot's SALT price, captured for the 0 -> x -> 0 refill too.
         let site = evm2::version::StateGasSite::Storage(dest, *key);
         if state.gas_params().sstore_state_gas(&load) != 0 {
-            let price = <P5Types as evm2::EvmTypesHost>::state_gas_price(
+            let price = <MegaTypes as evm2::EvmTypesHost>::state_gas_price(
                 state.host(),
                 GasId::SstoreSetState,
                 site,
@@ -414,7 +418,7 @@ pub fn sstore_body(
             spend_state_withheld(gas, state, price)?;
         }
         if state.gas_params().sstore_state_gas_refill(&load) != 0 {
-            let price = <P5Types as evm2::EvmTypesHost>::state_gas_price(
+            let price = <MegaTypes as evm2::EvmTypesHost>::state_gas_price(
                 state.host(),
                 GasId::SstoreSetState,
                 site,
@@ -435,8 +439,8 @@ pub fn sstore_body(
 /// charge is a regular charge on the spendable part (a crossing if S < cost <= S + W, recorded
 /// as a failed charge so `before_commit` classifies it); the deposit's state spill draws W first.
 pub fn before_code_deposit(
-    evm: &mut Evm<'_, P5Types>,
-    msg: &Message<P5Types>,
+    evm: &mut Evm<'_, MegaTypes>,
+    msg: &Message<MegaTypes>,
     code: &Bytes,
     gas: &mut Gas,
 ) -> core::result::Result<(), evm2::HostError> {
@@ -453,10 +457,10 @@ pub fn before_code_deposit(
         return Err(InstrStop::OutOfGas.into());
     }
     // Empty code prices nothing and reads no bucket (Satin prices no empty deposit).
-    let price = if code.is_empty() && !crate::off("q8_empty_deposit_price") {
+    let price = if code.is_empty() && !crate::off("empty_deposit_price") {
         0
     } else {
-        <P5Types as evm2::EvmTypesHost>::state_gas_price(
+        <MegaTypes as evm2::EvmTypesHost>::state_gas_price(
             evm,
             evm2::version::GasId::CodeDepositState,
             evm2::version::StateGasSite::Account(msg.destination),
@@ -477,7 +481,7 @@ pub fn before_code_deposit(
     Ok(())
 }
 
-fn det_built(det: &DetentionState, msg: &Message<P5Types>) -> bool {
+fn det_built(det: &DetentionState, msg: &Message<MegaTypes>) -> bool {
     det.frames.len() == msg.depth as usize + 1
 }
 
@@ -511,10 +515,10 @@ pub fn precompile_price(address: &alloy_primitives::Address, input: &[u8]) -> Op
 /// allowance and within the forward, the call is answered with the compute stop without running;
 /// the caller gets its whole forward back. A value call whose caller cannot fund it is not held.
 pub fn hold_precompile(
-    evm: &mut Evm<'_, P5Types>,
-    msg: &Message<P5Types>,
+    evm: &mut Evm<'_, MegaTypes>,
+    msg: &Message<MegaTypes>,
     is_precompile: bool,
-) -> Option<evm2::interpreter::MessageResult<P5Types>> {
+) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
     use evm2::interpreter::MessageKind;
     if !is_precompile || !detains(evm.ext()) || msg.depth == 0 {
         return None;
@@ -587,12 +591,12 @@ pub fn no_debit_halt(gas: &mut Gas) {
 /// holds the charge (`GasTracker::failed_charge`), before any of its work; an input it refuses
 /// before any gas check (over a size cap, a malformed length) is priced at nothing, as Satin's
 /// op-revm fork prices it.
-pub fn precompile_price_of(evm: &mut Evm<'_, P5Types>, msg: &Message<P5Types>) -> Option<u64> {
+pub fn precompile_price_of(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> Option<u64> {
     let p = crate::precompile_map().get(&msg.code_address)?;
     if let Some(price) = p.required_gas(&msg.input) {
         return Some(price);
     }
-    if crate::off("q8_precompile_catalog") {
+    if crate::off("precompile_catalog") {
         return None;
     }
     let mut probe = GasTracker::new_with_execution_gas_and_reservoir(0, 0);
@@ -602,7 +606,7 @@ pub fn precompile_price_of(evm: &mut Evm<'_, P5Types>, msg: &Message<P5Types>) -
     // other entry charges once. A second probe funded with the first charge reads the rest.
     if msg.code_address == alloy_primitives::Address::with_last_byte(5) &&
         first > 0 &&
-        !crate::off("q8_modexp_two_step")
+        !crate::off("modexp_two_step")
     {
         let mut probe = GasTracker::new_with_execution_gas_and_reservoir(first, 0);
         let _ = (p.run())(evm, msg, &mut probe);

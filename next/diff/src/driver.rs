@@ -160,7 +160,7 @@ pub fn db(s: &Scenario) -> InMemoryDB {
             a.code.is_empty() &&
             a.nonce == 0 &&
             a.storage.is_empty() &&
-            !mega_evm2::off("q8_empty_fixture")
+            !mega_evm2::off("empty_fixture_account")
         {
             continue;
         }
@@ -171,7 +171,7 @@ pub fn db(s: &Scenario) -> InMemoryDB {
             // `Bytecode::new_raw` (Satin's `MemoryDatabase`) reads it.
             let code = if a.code.len() == 23 &&
                 a.code[..3] == [0xef, 0x01, 0x00] &&
-                !mega_evm2::off("q8_fixture_delegation")
+                !mega_evm2::off("fixture_delegation")
             {
                 Bytecode::new_eip7702(alloy_primitives::Address::from_slice(&a.code[3..]))
             } else {
@@ -216,7 +216,7 @@ pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
         mega_evm2::intercept::SatinProvider::new(),
     );
     // Read storage of an account the database lacks, as revm does.
-    evm.state_mut().set_read_absent_storage(!mega_evm2::off("q8_absent_storage_read"));
+    evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
     let ext = evm.ext_mut();
     ext.cfg.limits = [
         s.limits.data.unwrap_or(DEFAULT_LIMITS[0]),
@@ -409,6 +409,6 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
         "ledger": ledger,
         "frames": frames,
         "priced": ext.detention.priced.iter().map(|p| json!(p)).collect::<Vec<_>>(),
-        "hints": ext.q8.hints.iter().map(|(f, t, d)| json!([format!("{f}"), format!("{t}"), hex(d)])).collect::<Vec<_>>(),
+        "hints": ext.mechanisms.hints.iter().map(|(f, t, d)| json!([format!("{f}"), format!("{t}"), hex(d)])).collect::<Vec<_>>(),
     })
 }

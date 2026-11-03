@@ -95,7 +95,7 @@ fn load_acc_and_calc_gas<T: crate::LiteTypes>(
         // Both halts below make no debit; without a failed-charge record evm2's inspected path
         // zeroes the frame's gas (as for the target's load).
         if cost > remaining_gas {
-            if !crate::off("q8_delegate_no_debit") {
+            if !crate::off("delegate_no_debit") {
                 crate::detention::no_debit_halt(gas);
             }
             return Err(InstrStop::OutOfGas);
@@ -105,7 +105,7 @@ fn load_acc_and_calc_gas<T: crate::LiteTypes>(
             match state.host().load_account(&delegated_address, true, skip_cold_load) {
                 Ok(account) => account,
                 Err(error) => {
-                    if skip_cold_load && !crate::off("q8_delegate_no_debit") {
+                    if skip_cold_load && !crate::off("delegate_no_debit") {
                         crate::detention::no_debit_halt(gas);
                     }
                     return Err(state.fail(error));

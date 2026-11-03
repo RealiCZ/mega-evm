@@ -16,6 +16,8 @@
 | `block/<set>/<n>.jsonl.zst`          | Reference output of the block executor gate: per transaction, then block counters and post-state |
 | `expected.env`                       | Summary counts `gate.sh sample` expects, counted from the reference files                        |
 
+Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q8`) and fuzz batch names (`fq`, `fqbig`, `fqh`, `fqhbig`, `big`, `harsh`) are stable data identifiers: the reference outputs and `known-differences.toml` are keyed on them, so they keep their names.
+
 Expected counts of the sample: 698 main scenarios (697 match, 1 known difference), 2,000 fuzz scenarios;
 20 blocks with 499 matching transactions, 40 pre-block calls and 52 refusals in the engine replay;
 479 included and 72 refused transactions in the block executor.

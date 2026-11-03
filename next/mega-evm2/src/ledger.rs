@@ -174,7 +174,7 @@ pub struct Lite {
     pub exempt: bool,
     /// The state of the volatile-access control, hint, authority and keyless mechanisms
     /// (`satin_ext.rs`).
-    pub q8: crate::satin_ext::Q8State,
+    pub mechanisms: crate::satin_ext::MechanismState,
 }
 
 pub fn limit_exceeded_output(kind: u8, limit: u64) -> Vec<u8> {
@@ -225,7 +225,7 @@ impl Lite {
         self.tx_start_pending = None;
         self.deposit_loan = 0;
         self.exempt = false;
-        self.q8.reset();
+        self.mechanisms.reset();
         self.body_bytes = if prices_history { body_bytes } else { 0 };
         self.body_history = self.body_bytes * CPHB;
         self.tx_net = [body_bytes as i64, 0, 0];

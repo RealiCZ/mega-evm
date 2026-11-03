@@ -81,7 +81,7 @@ pub fn before(
     evm: &mut Evm<'_, MegaTypes>,
     msg: &mut Message<MegaTypes>,
 ) -> Option<MessageResult<MegaTypes>> {
-    if crate::off("q8_keyless") || !is_dispatched(msg) {
+    if crate::off("keyless") || !is_dispatched(msg) {
         return None;
     }
     if !msg.value.is_zero() {
@@ -102,7 +102,7 @@ pub fn before(
         });
     }
     msg.code = Bytecode::new_legacy(Bytes::from_static(&[DISPATCHER]));
-    evm.ext_mut().q8.keyless_frame = true;
+    evm.ext_mut().mechanisms.keyless_frame = true;
     None
 }
 
@@ -165,11 +165,11 @@ struct Started {
 pub fn mega_keyless(cx: _) -> Result {
     let is_call = cx.state.message().depth == 0 &&
         cx.state.message().call_target == KEYLESS &&
-        cx.state.host().ext().q8.keyless_frame;
+        cx.state.host().ext().mechanisms.keyless_frame;
     if !is_call {
         return Err(InstrStop::OpcodeNotFound);
     }
-    cx.state.host().ext_mut().q8.keyless_frame = false;
+    cx.state.host().ext_mut().mechanisms.keyless_frame = false;
     run(cx.gas, cx.state)
 }
 
@@ -217,7 +217,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         Ok((acc.get().cloned().unwrap_or_default(), code))
     })();
     let (info, code) = loaded.map_err(|e| state.fail(e))?;
-    if signer == state.host().block().beneficiary && !crate::off("q8_keyless_beneficiary") {
+    if signer == state.host().block().beneficiary && !crate::off("keyless_beneficiary") {
         let cap = state.host().ext().detention.cap;
         detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
     }
@@ -303,7 +303,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         signer_account_charged,
         signer_changed_before,
     };
-    state.host().ext_mut().q8.keyless = Some(crate::satin_ext::Keyless {
+    state.host().ext_mut().mechanisms.keyless = Some(crate::satin_ext::Keyless {
         signer,
         deploy,
         signer_nonce_before: info.nonce,
@@ -341,7 +341,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     if !success && entry.start_charge > 0 {
         refill_history(gas, state, entry.start_charge / CPHB);
     }
-    let keyless = state.host().ext_mut().q8.keyless.take().unwrap_or_default();
+    let keyless = state.host().ext_mut().mechanisms.keyless.take().unwrap_or_default();
     // Satin `keyless::settle`.
     let nonce = state
         .host()
@@ -357,7 +357,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     }
     if started.signer_nonce > 0 &&
         nonce == started.signer_nonce + 1 &&
-        !crate::off("q8_keyless_takeback")
+        !crate::off("keyless_takeback")
     {
         let reset = state
             .host()
@@ -384,7 +384,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         .is_some_and(|i| !i.is_empty());
     let growth = (started.signer_account_charged &&
         now_exists &&
-        !crate::off("q8_keyless_signer_growth")) as i64;
+        !crate::off("keyless_signer_growth")) as i64;
     if let Some(stop) = host.ext_mut().draw([records * WRITE_RECORD_SIZE as i64, records, growth]) {
         return stop_frame(gas, state, stop);
     }
@@ -442,11 +442,11 @@ pub fn refuses_empty_deposit(
     code: &Bytes,
 ) -> bool {
     let destroyed = evm.ext().destroyed.contains(&msg.destination);
-    let Some(k) = evm.ext_mut().q8.keyless.as_mut() else { return false };
+    let Some(k) = evm.ext_mut().mechanisms.keyless.as_mut() else { return false };
     if code.is_empty() &&
         msg.destination == k.deploy &&
         !destroyed &&
-        !crate::off("q8_keyless_empty")
+        !crate::off("keyless_empty_deposit")
     {
         k.empty_deposit_refused = true;
         return true;

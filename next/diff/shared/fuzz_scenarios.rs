@@ -46,12 +46,12 @@ fn harsh() -> bool {
 /// `MEGA_EVM2_FUZZ_MODE=3` (default generator) and `4` (harsh) add the later mechanisms: EIP-7702
 /// lists, keyless deployments, `MegaAccessControl`, Oracle hints and reads, the precompile
 /// catalogue. Modes 1 and 2 stay byte-identical to the original generator's.
-fn q8_mode() -> bool {
+fn mechanisms_mode() -> bool {
     std::env::var("MEGA_EVM2_FUZZ_MODE").is_ok_and(|m| m == "3" || m == "4")
 }
 
 /// A later-mechanism fragment (stack-neutral).
-fn q8_fragment(r: &mut Rng) -> Asm {
+fn mechanism_fragment(r: &mut Rng) -> Asm {
     let a = Asm::new();
     match r.below(7) {
         6 => {
@@ -132,8 +132,8 @@ fn q8_fragment(r: &mut Rng) -> Asm {
 
 fn fragment(r: &mut Rng, depth: u8) -> Asm {
     let a = Asm::new();
-    if q8_mode() && r.chance(25) {
-        return q8_fragment(r);
+    if mechanisms_mode() && r.chance(25) {
+        return mechanism_fragment(r);
     }
     match r.below(if depth >= 2 { 9 } else { 13 }) {
         0 => a.op(op::TIMESTAMP).op(op::POP),
@@ -251,7 +251,7 @@ pub fn all() -> Vec<Scenario> {
             limits.data = Some(310 + r.pick(&[100u64, 400, 1000]));
         }
         let name: &'static str = Box::leak(
-            match (q8_mode(), h) {
+            match (mechanisms_mode(), h) {
                 (true, true) => format!("fqh{seed:04}"),
                 (true, false) => format!("fq{seed:04}"),
                 (false, true) => format!("fh{seed:04}"),
@@ -301,8 +301,8 @@ pub fn all() -> Vec<Scenario> {
             s.deposit = Some(r.pick(&[0u64, 1_000_000]));
             s.sender = Address::new([0x7e; 20]);
         }
-        if q8_mode() {
-            q8_transaction(&mut r, &mut s, h);
+        if mechanisms_mode() {
+            mechanism_transaction(&mut r, &mut s, h);
         }
         v.push(s);
     }
@@ -312,7 +312,7 @@ pub fn all() -> Vec<Scenario> {
 /// the transaction-level mechanisms on top of a random composition: the Oracle (code that
 /// reads slot 5 and logs, an answer or none, its own cap), an EIP-7702 list, or a keyless
 /// deployment as the transaction itself.
-fn q8_transaction(r: &mut Rng, s: &mut Scenario, h: bool) {
+fn mechanism_transaction(r: &mut Rng, s: &mut Scenario, h: bool) {
     let oracle_code =
         Asm::new().push(5).op(op::SLOAD).op(op::POP).push(0).push(0).op(op::LOG0).stop().build();
     s.accounts.push(Account {

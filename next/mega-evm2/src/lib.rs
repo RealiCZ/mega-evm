@@ -47,13 +47,13 @@ use evm2_macros::instruction;
 use op_evm2::{OpSpecId, OpTxEnvelope, OpTxResultExt, OpTypes};
 use std::sync::OnceLock;
 
-/// Negative controls: `Q2_DISABLE=a,b` switches named fixes off (tests only; `compare` feature,
-/// otherwise a constant `false` the compiler folds away).
+/// Negative controls: `MEGA_EVM2_DISABLE=a,b` switches named fixes off (tests only; `compare`
+/// feature, otherwise a constant `false` the compiler folds away).
 #[cfg(feature = "compare")]
 pub fn off(name: &str) -> bool {
     static OFF: OnceLock<Vec<String>> = OnceLock::new();
     OFF.get_or_init(|| {
-        std::env::var("Q2_DISABLE")
+        std::env::var("MEGA_EVM2_DISABLE")
             .map(|v| v.split(',').map(str::to_owned).collect())
             .unwrap_or_default()
     })
@@ -67,12 +67,12 @@ pub fn off(_name: &str) -> bool {
     false
 }
 
-/// `Q2_DEBUG` traces, read once (a per-frame `getenv` would distort measurements; `compare`
+/// `MEGA_EVM2_DEBUG` traces, read once (a per-frame `getenv` would distort measurements; `compare`
 /// feature only).
 #[cfg(feature = "compare")]
 pub fn debug() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("Q2_DEBUG").is_ok())
+    *ON.get_or_init(|| std::env::var("MEGA_EVM2_DEBUG").is_ok())
 }
 
 #[cfg(not(feature = "compare"))]
@@ -117,7 +117,9 @@ impl EvmTypesHost for MegaTypes {
             return Ok(0);
         }
         // Empty deposits must not read a SALT bucket.
-        if id == GasId::CodeDepositState && core::mem::take(&mut host.ext_mut().q8.empty_deposit) {
+        if id == GasId::CodeDepositState &&
+            core::mem::take(&mut host.ext_mut().mechanisms.empty_deposit)
+        {
             return Ok(0);
         }
         let price = reprice(host, id, site);
@@ -766,7 +768,7 @@ fn mega_call_impl(
         let beneficiary = state.host().block().beneficiary;
         // ... or of an account whose EIP-7702 delegate is the beneficiary (the delegate's load).
         let delegate = if target == beneficiary ||
-            crate::off("q8_refuse_delegate") ||
+            crate::off("refuse_delegate") ||
             !reaches_target_load(&stack, gas, state, kind)
         {
             None
@@ -1057,7 +1059,7 @@ impl MessageHooks<MegaTypes> for StartHooks {
     > {
         // A transaction whose sender or recipient is the block beneficiary, or whose
         // recipient delegates to it, reads volatile data from its start: detained at compute 0.
-        if msg.depth == 0 && !off("q8_tx_beneficiary") {
+        if msg.depth == 0 && !off("tx_beneficiary") {
             let beneficiary = evm.block().beneficiary;
             let ext = evm.ext_mut();
             if (msg.caller == beneficiary ||
@@ -1071,8 +1073,8 @@ impl MessageHooks<MegaTypes> for StartHooks {
             }
         }
         if msg.depth == 0 &&
-            !off("q8_preframe_stop") &&
-            let Some(stop) = evm.ext_mut().q8.pre_frame_stop.take()
+            !off("pre_frame_stop") &&
+            let Some(stop) = evm.ext_mut().mechanisms.pre_frame_stop.take()
         {
             // An authorization list the KV / state-growth limit skipped: the first frame's
             // stop, before it runs and before anything moves for it, on its untouched gas.
@@ -1144,8 +1146,8 @@ impl MessageHooks<MegaTypes> for StartHooks {
         let answered = is_answered(evm, msg);
         detention::before_commit(evm, msg, answered, stop, output, gas);
         // A frame's return switches back on what it (or a frame below it) switched off.
-        if evm.ext().q8.disabled_from.is_some_and(|from| from >= msg.depth as usize) {
-            evm.ext_mut().q8.disabled_from = None;
+        if evm.ext().mechanisms.disabled_from.is_some_and(|from| from >= msg.depth as usize) {
+            evm.ext_mut().mechanisms.disabled_from = None;
         }
         if msg.depth == 0 {
             // The first frame answered without running (a value transfer to an account with no
@@ -1181,7 +1183,7 @@ impl MessageHooks<MegaTypes> for StartHooks {
         code: &Bytes,
         gas: &mut Gas,
     ) -> core::result::Result<(), evm2::HostError> {
-        evm.ext_mut().q8.empty_deposit = code.is_empty() && !off("q8_empty_deposit_price");
+        evm.ext_mut().mechanisms.empty_deposit = code.is_empty() && !off("empty_deposit_price");
         if off("deposit_site") {
             return Ok(());
         }

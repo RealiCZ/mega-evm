@@ -4,7 +4,6 @@
 //!
 //! Correctness runs build a fresh `Evm` for every transaction (so the database reads of a run are
 //! that transaction's read set, as on the Satin side) and commit the state diff given to them.
-//! The measured runs (`bin/q6-perf.rs`) keep one `Evm` per block and commit their own results.
 
 #[path = "../shared/blockdb.rs"]
 pub mod blockdb;
@@ -121,7 +120,7 @@ pub fn new_evm(h: &Header, chain_id: u64, db: Evm2Db) -> Evm<'static, MegaTypes>
         mega_evm2::intercept::SatinProvider::new(),
     );
     // Read storage of an account the database lacks, as revm does.
-    evm.state_mut().set_read_absent_storage(!mega_evm2::off("q8_absent_storage_read"));
+    evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
     let ext = evm.ext_mut();
     ext.cfg.limits = DEFAULT_LIMITS;
     ext.cfg.cap = DEFAULT_DETENTION_CAP;

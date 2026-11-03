@@ -1,6 +1,6 @@
 //! Per-transaction state of EIP-7702 authorities, keyless deployment, `MegaAccessControl` and
 //! Oracle hints, kept apart from `ledger.rs` so a rewrite of the ledger's internals merges with
-//! one field (`Lite::q8`).
+//! one field (`Lite::mechanisms`).
 
 use alloy_primitives::{Address, Bytes, U256};
 
@@ -22,7 +22,7 @@ pub fn refuse(reason: &'static str) -> evm2::registry::HandlerError {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Q8State {
+pub struct MechanismState {
     /// What `adjust_intrinsic_gas` settled (intrinsic, initial state gas, floor), for handlers
     /// that execute a `PreparedTx` they cannot read.
     pub prepared: Option<(u64, u64, u64)>,
@@ -47,7 +47,7 @@ pub struct Q8State {
     pub empty_deposit: bool,
 }
 
-impl Q8State {
+impl MechanismState {
     pub fn reset(&mut self) {
         let mut hints = core::mem::take(&mut self.hints);
         hints.clear();
@@ -88,8 +88,8 @@ fn sel(sig: &str) -> [u8; 4] {
 
 /// Whether a read in a frame at `depth` is refused (`MegaAccessControl` switched access off at
 /// or above it).
-pub fn refuses(q8: &Q8State, depth: usize) -> bool {
-    !crate::off("q8_access_control") && q8.disabled_from.is_some_and(|from| depth >= from)
+pub fn refuses(mechanisms: &MechanismState, depth: usize) -> bool {
+    !crate::off("access_control") && mechanisms.disabled_from.is_some_and(|from| depth >= from)
 }
 
 /// `VolatileDataAccessDisabled(uint8 accessType)`.
@@ -120,24 +120,29 @@ pub fn access_control_method(input: &[u8]) -> Option<AcMethod> {
 }
 
 /// The `MegaAccessControl` answer to a call at `depth` (its caller is `depth − 1`).
-pub fn access_control_answer(q8: &mut Q8State, method: AcMethod, depth: usize) -> (bool, Vec<u8>) {
+pub fn access_control_answer(
+    mechanisms: &mut MechanismState,
+    method: AcMethod,
+    depth: usize,
+) -> (bool, Vec<u8>) {
     let caller = depth.checked_sub(1);
     match method {
         AcMethod::Disable => {
             if let Some(c) = caller {
-                q8.disabled_from = Some(q8.disabled_from.map_or(c, |f| f.min(c)));
+                mechanisms.disabled_from = Some(mechanisms.disabled_from.map_or(c, |f| f.min(c)));
             }
             (true, Vec::new())
         }
-        AcMethod::Enable => match (caller, q8.disabled_from) {
+        AcMethod::Enable => match (caller, mechanisms.disabled_from) {
             (Some(c), Some(from)) if c > from => (false, sel("DisabledByParent()").to_vec()),
             _ => {
-                q8.disabled_from = None;
+                mechanisms.disabled_from = None;
                 (true, Vec::new())
             }
         },
         AcMethod::IsDisabled => {
-            let disabled = caller.is_some_and(|c| q8.disabled_from.is_some_and(|from| c >= from));
+            let disabled =
+                caller.is_some_and(|c| mechanisms.disabled_from.is_some_and(|from| c >= from));
             (true, alloy_primitives::B256::from(U256::from(disabled as u8)).0.to_vec())
         }
     }
@@ -164,14 +169,14 @@ pub fn refused_here(
     state: &mut evm2::interpreter::InterpreterState<'_, '_, crate::MegaTypes>,
 ) -> bool {
     let depth = state.message().depth as usize;
-    refuses(&state.host().ext().q8, depth)
+    refuses(&state.host().ext().mechanisms, depth)
 }
 
 /// Satin `AdditionalLimit::hold_caller`: the transaction's limits (no frame budget) checked as a
 /// caller resumes from a failed child. Only an Oracle hint, which stays on the transaction when
 /// the frame that sent it fails, can leave the transaction over a limit there.
 pub fn hold_caller(ext: &crate::Lite) -> Option<(u8, u64)> {
-    if ext.exempt || ext.q8.hint_bytes == 0 || crate::off("q8_hold_caller") {
+    if ext.exempt || ext.mechanisms.hint_bytes == 0 || crate::off("hold_caller") {
         return None;
     }
     (0..3).find_map(|i| {
