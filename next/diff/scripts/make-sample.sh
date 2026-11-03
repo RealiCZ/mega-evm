@@ -10,7 +10,9 @@ set -euo pipefail
 : "${MEGA_EVM2_CORPUS_DIR:?set MEGA_EVM2_CORPUS_DIR to the full corpus}"
 here=$(cd "$(dirname "$0")/.." && pwd)
 corpus=$(cd "$MEGA_EVM2_CORPUS_DIR" && pwd)
-target=${CARGO_TARGET_DIR:-$here/../target}
+# shellcheck source=common.sh
+source "$here/scripts/common.sh"
+target=$(abs_dir "${CARGO_TARGET_DIR:-$here/../target}")
 work=$target/mega-evm2-diff/make-sample
 data=$here/data
 
@@ -24,7 +26,9 @@ FUZZ_SEEDS=2000
 
 rm -rf "$work" "$data/synthetic" "$data/real-blocks" "$data/replay" "$data/block"
 mkdir -p "$work" "$data/synthetic" "$data/real-blocks" "$data/replay" "$data/block"
-tar --zstd -xf "$corpus/reference/q11-oracles.tar.zst" -C "$work" \
+archive=$corpus/reference/reference-outputs.tar.zst
+[ -f "$archive" ] || archive=$corpus/reference/q11-oracles.tar.zst
+tar --zstd -xf "$archive" -C "$work" \
   satin-oracle.json oracles/fqh.json raw/satin raw/satin-block
 
 zst() { zstd -q -19 --long=27 -f -o "$2" "$1"; }

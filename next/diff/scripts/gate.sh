@@ -87,13 +87,12 @@ else
     rm -rf "$work/extract"
     echo "$stamp" > "$work/.stamp"
   fi
-  fuzz_batches=(
-    fq:3:1..=3000:3000 fqbig:3:3001..=13000:10000 fqh:4:1..=2000:2000
-    fqhbig:4:2001..=7000:5000 big:1:401..=3400:3000 harsh:2:1..=2000:2000
-  )
+  fuzz_batches=("${FULL_FUZZ_BATCHES[@]}")
   blocks_dir=$corpus/real-blocks
-  EXPECT_REPLAY="blocks=263 match=28000 pre=526 refused=186"
-  EXPECT_BLOCK="blocks=263 included=27879 refused=307 counters=263 post=263"
+  # shellcheck disable=SC1091
+  source "$here/data/expected.env"
+  EXPECT_REPLAY=$EXPECT_FULL_REPLAY
+  EXPECT_BLOCK=$EXPECT_FULL_BLOCK
 fi
 
 # --- runs ---------------------------------------------------------------------------------------

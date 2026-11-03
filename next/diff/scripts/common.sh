@@ -1,5 +1,13 @@
+# shellcheck shell=bash
 # Sourced by gate.sh, check-reference.sh and regen-reference.sh.
 #
+# The six fuzz batches of the full gate, as name:mode:first..=last:count. `gate.sh full` runs the
+# engine on them and `regen-reference.sh` generates their reference outputs, so both read this list.
+FULL_FUZZ_BATCHES=(
+  fq:3:1..=3000:3000 fqbig:3:3001..=13000:10000 fqh:4:1..=2000:2000
+  fqhbig:4:2001..=7000:5000 big:1:401..=3400:3000 harsh:2:1..=2000:2000
+)
+
 # abs_dir <dir>: creates <dir> when missing and prints its absolute path. Call it before any `cd`,
 # so a relative path means the same thing for the whole script and for the cargo it starts.
 abs_dir() {
