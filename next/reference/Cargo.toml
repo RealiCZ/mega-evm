@@ -15,7 +15,9 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-# The Satin implementation under review: mega-evm at PR #409 (5e3f30ad).
+# The Satin implementation under review: mega-evm at PR #409 (5e3f30ad), the head of that pull
+# request (reachable through refs/pull/409/head). Move the pin to a tag or a merged commit before
+# the PR's branch disappears, and run diff/scripts/regen-reference.sh when it changes.
 mega-evm = { git = "https://github.com/megaeth-labs/mega-evm", rev = "5e3f30ad4692f3815105dea1368f789f032ddd2b", features = ["test-utils"] }
 
 # revm: the crates.io version the megaeth fork is based on; the patch below redirects it.

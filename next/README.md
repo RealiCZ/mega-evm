@@ -32,6 +32,14 @@ full corpus from `MEGA_EVM2_CORPUS_DIR`.
 The only accepted difference is listed in `diff/known-differences.toml`.
 `diff/scripts/check-reference.sh sample` regenerates the sample's reference outputs with
 `reference/` and checks they equal the stored ones.
+`diff/scripts/regen-reference.sh [--check] <out-dir>` does it for the full corpus and, without `--check`, rewrites the sample and `diff/data/expected.env`; moving the reference pin requires running it (see `diff/data/README.md`).
+
+`gate.sh` and the other scripts refuse to run when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set:
+the official runner decides what is gated, so an inherited block selection or override cannot narrow a gate.
+Running `cargo test -p mega-evm2-diff` directly with those variables stays available for debugging; a run with `MEGA_EVM2_BLOCKS` or `MEGA_EVM2_SETS` prints `PARTIAL GATE ...` lines.
+
+The reference is pinned to mega-evm `5e3f30ad`, the head of the Satin review pull request (reachable through `refs/pull/409/head`).
+Move the pin to a tag or a merged commit before that pull request's branch disappears, or the reference can no longer be built.
 
 ## Building
 
@@ -48,6 +56,7 @@ cd next && cargo check --workspace
 It does not build the root workspace.
 
 `evm2-fork.env` is the only fork pin CI reads (`EVM2_FORK_REPO`, `EVM2_FORK_REV`).
+The commit must be pushed to that repository: a red "Check that the evm2 fork pin is pushed" step means "fork pin not pushed", so push the commit or update `evm2-fork.env`.
 The workflow checks this repository out at `mega-evm/` and that revision out at `evm2/`, so `../../evm2` from `next/` resolves.
 Local builds keep the path dependency above.
 `diff/scripts/ci-local.sh` runs the check job's commands against that local checkout.
@@ -61,6 +70,6 @@ It runs `diff/scripts/check-reference.sh sample`, which rebuilds the Satin imple
 
 **full** runs every day and from `workflow_dispatch`.
 It downloads the corpus archive from the repository variable `MEGA_EVM2_CORPUS_URL`, or from the secret of the same name when the variable is unset, into a temporary directory.
-The archive (tar.zst, tar.gz, tar.xz, tar.bz2, zip, or tar) must unpack to the layout in `diff/data/README.md`: a directory that contains `real-blocks/` and `reference/q11-oracles.tar.zst`.
+The archive (tar.zst, tar.gz, tar.xz, tar.bz2, zip, or tar) must unpack to the layout in `diff/data/README.md`: a directory that contains `real-blocks/` and `reference/reference-outputs.tar.zst` (or the original `reference/q11-oracles.tar.zst`).
 The job then runs `MEGA_EVM2_CORPUS_DIR=<that directory> diff/scripts/gate.sh full`.
 When neither the variable nor the secret is set, the job prints a notice and succeeds without running the gate.
