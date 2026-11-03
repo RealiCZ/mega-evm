@@ -1543,6 +1543,7 @@ dependencies = [
  "aurora-engine-modexp",
  "auto_impl",
  "bitflags 2.13.2",
+ "blst",
  "c-kzg",
  "derive-where",
  "evm2-macros",
@@ -2134,6 +2135,16 @@ dependencies = [
 [[package]]
 name = "mega-evm2"
 version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-rlp",
+ "evm2",
+ "evm2-macros",
+ "op-evm2",
+ "secp256k1 0.33.1",
+]
 
 [[package]]
 name = "mega-evm2-diff"

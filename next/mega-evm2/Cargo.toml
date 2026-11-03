@@ -8,3 +8,28 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# megaeth
+op-evm2 = { workspace = true, features = ["std"] }
+
+# evm2
+evm2 = { workspace = true, features = ["std", "map-foldhash", "secp256k1", "portable", "blst", "c-kzg"] }
+evm2-macros.workspace = true
+
+# alloy
+alloy-consensus = { workspace = true, features = ["std"] }
+alloy-eips = { workspace = true, features = ["std"] }
+alloy-primitives = { workspace = true, features = ["std"] }
+alloy-rlp.workspace = true
+
+# misc
+secp256k1 = { workspace = true, features = ["std", "recovery"] }
+
+[features]
+default = []
+# Everything that exists only for the differential comparison: start-ledger settlements, the
+# precompile pricing report, the `Q2_DISABLE` negative-control switches, `Q2_DEBUG` traces.
+compare = ["witness"]
+# The read-set recording a witness producer needs beyond the database reads (SALT bucket reads).
+witness = []
+# The production SALT bucket hasher (Satin's `AHashBucketHasher`).
+salt-ahash = []
