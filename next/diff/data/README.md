@@ -82,7 +82,9 @@ it runs `next/reference` over the main scenarios, the six fuzz batches of `gate.
 and packs `<out-dir>/reference-outputs.tar.zst` in the layout above, which `gate.sh full` prefers over `q11-oracles.tar.zst`.
 
 - `--check` writes nothing into the repository.
-  It compares the regenerated outputs with `reference/q11-oracles.tar.zst` of the corpus (only `micros` is ignored) and the full counts with `expected.env`, and prints `REFERENCE full identical`.
+  It compares the regenerated outputs with the corpus's expected archive and the full counts with `expected.env`, and prints `REFERENCE full identical`.
+  The expected archive is picked the way `gate.sh` picks it: `reference/reference-outputs.tar.zst` when present, else `reference/q11-oracles.tar.zst`.
+  Only `micros` is ignored.
 - Without `--check` it also re-cuts this sample with `make-sample.sh` from the new archive and rewrites `expected.env` from the regenerated files.
 
 **Bumping the reference pin** (the `mega-evm` revision in `next/reference/Cargo.toml`) requires running `regen-reference.sh <out-dir>` and reviewing the resulting `git diff` of this directory:

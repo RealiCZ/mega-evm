@@ -11,7 +11,9 @@
 #
 #   --check   Writes nothing into the repository. Compares the regenerated outputs, taken back out
 #             of the packed archive, with the same paths of
-#             `$MEGA_EVM2_CORPUS_DIR/reference/q11-oracles.tar.zst` (only `micros` is ignored), and
+#             the corpus's expected archive (`reference/reference-outputs.tar.zst` when present,
+#             else `reference/q11-oracles.tar.zst`, as `gate.sh` picks it; only `micros` is
+#             ignored), and
 #             checks the full counts against `data/expected.env`. Prints `REFERENCE full identical`.
 #   default   Also re-cuts the sample under `next/diff/data` with `make-sample.sh` from the new
 #             archive and rewrites `data/expected.env` from the regenerated files. Review the
@@ -74,7 +76,9 @@ python3 -I "$here/scripts/count_expected.py" "$stage/packed/raw/satin" "$stage/p
 
 if [ "$check" = 1 ]; then
   mkdir -p "$stage/expected"
-  tar --zstd -xf "$corpus/reference/q11-oracles.tar.zst" -C "$stage/expected" \
+  expected_archive=$corpus/reference/reference-outputs.tar.zst
+  [ -f "$expected_archive" ] || expected_archive=$corpus/reference/q11-oracles.tar.zst
+  tar --zstd -xf "$expected_archive" -C "$stage/expected" \
     satin-oracle.json oracles/fq.json oracles/fqbig.json oracles/fqh.json oracles/fqhbig.json \
     oracles/big.json oracles/harsh.json raw/satin raw/satin-block
   python3 -I "$here/scripts/compare_outputs.py" "$stage/expected" "$stage/packed"
