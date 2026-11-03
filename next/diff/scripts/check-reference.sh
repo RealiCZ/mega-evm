@@ -13,7 +13,10 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 next=$(cd "$here/.." && pwd)
-target=${CARGO_TARGET_DIR:-$next/target}
+# shellcheck source=common.sh
+source "$here/scripts/common.sh"
+refuse_overrides
+target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 work=$target/mega-evm2-diff/reference-sample
 export CARGO_TARGET_DIR=$target/mega-evm2-reference
 export RUST_MIN_STACK=8388608

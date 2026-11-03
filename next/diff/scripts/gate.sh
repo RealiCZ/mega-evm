@@ -11,8 +11,9 @@
 #   full    the full corpus under $MEGA_EVM2_CORPUS_DIR (layout in `data/README.md`)
 #
 # The run fails (exit status 1) when a gate fails or does not print its summary line, or when a
-# summary differs from the expected counts. Test output goes to logs under the cargo target
-# directory; the tail of a failing gate's log is printed.
+# summary differs from the expected counts, and it refuses to start when a `MEGA_EVM2_*` variable
+# other than `MEGA_EVM2_CORPUS_DIR` is set (see `common.sh`). Test output goes to logs under the
+# cargo target directory; the tail of a failing gate's log is printed.
 set -euo pipefail
 
 mode=${1:-}
@@ -20,7 +21,11 @@ case "$mode" in sample | full) ;; *) echo "usage: gate.sh sample|full" >&2; exit
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 next=$(cd "$here/.." && pwd)
-target=${CARGO_TARGET_DIR:-$next/target}
+# shellcheck source=common.sh
+source "$here/scripts/common.sh"
+refuse_overrides
+target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
+export CARGO_TARGET_DIR=$target
 work=$target/mega-evm2-diff/$mode
 logs=$work/logs
 mkdir -p "$work" "$logs"
@@ -67,7 +72,9 @@ if [ "$mode" = sample ]; then
 else
   : "${MEGA_EVM2_CORPUS_DIR:?set MEGA_EVM2_CORPUS_DIR to the full corpus}"
   corpus=$(cd "$MEGA_EVM2_CORPUS_DIR" && pwd)
-  archive=$corpus/reference/q11-oracles.tar.zst
+  # A regenerated archive (`regen-reference.sh`) wins over the original one.
+  archive=$corpus/reference/reference-outputs.tar.zst
+  [ -f "$archive" ] || archive=$corpus/reference/q11-oracles.tar.zst
   stamp=$(stamp_file "$archive")-$(stamp_file "$here/scripts/gate.sh")
   if [ "$(cat "$work/.stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$work/extract" "$work/replay" "$work/block" "$work/fuzz" "$work/main.json"
@@ -93,7 +100,9 @@ fi
 fail=0
 summaries=()
 
-# run_test <log name> <test target> <env assignments...>: prints the test's GATE line.
+# run_test <log name> <test target> <env assignments...>: prints the test's GATE line. It only
+# prints and returns: it runs in a command substitution, so the call sites are the single place
+# that sets `fail`.
 run_test() {
   local name=$1 test=$2
   shift 2
@@ -101,14 +110,12 @@ run_test() {
   if ! env "$@" cargo test --release --locked -p mega-evm2-diff --test "$test" -- --nocapture > "$log" 2>&1; then
     echo "gate $name failed; tail of $log:" >&2
     tail -n 25 "$log" >&2
-    fail=1
     return 1
   fi
   local line
   line=$(grep '^GATE ' "$log" || true)
   if [ "$(echo "$line" | grep -c '^GATE ')" != 1 ]; then
     echo "gate $name printed no single GATE line (see $log)" >&2
-    fail=1
     return 1
   fi
   echo "$line"
