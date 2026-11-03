@@ -6,12 +6,10 @@
 //! to a deposit by the block executor, which the synthetic format does not go through; the block
 //! gates cover it.
 #![allow(dead_code)]
-use super::{Account, Asm, Auth, Limits, Scenario, acct, op, scenario};
+use super::{Account, Asm, Auth, BLOCK_GAS_LIMIT, Limits, Scenario, acct, op, scenario};
 use alloy_primitives::Address;
 
 const AUTHORITY: Address = Address::with_last_byte(0xc0);
-/// The block gas limit of the synthetic block environment.
-const BLOCK_GAS_LIMIT: u64 = 10_000_000_000;
 
 fn cap(name: &'static str, gas: u64) -> Scenario {
     let code = Asm::new().sstore(1, 1).stop().build();

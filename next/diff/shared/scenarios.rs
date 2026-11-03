@@ -54,6 +54,9 @@ pub const LIMIT_CONTROL: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05]);
 /// 10M above Satin's 200M execution cap: 10M goes to the EIP-8037 reservoir.
 pub const ABOVE_CAP: u64 = 210_000_000;
+/// The gas limit of the block both drivers run every scenario in (the `cap_*_block` scenarios
+/// declare exactly this gas limit).
+pub const BLOCK_GAS_LIMIT: u64 = 10_000_000_000;
 
 const fn addr(b: u8) -> Address {
     let mut a = [0u8; 20];

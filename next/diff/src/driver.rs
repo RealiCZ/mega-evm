@@ -202,7 +202,7 @@ pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
-        gas_limit: U256::from(10_000_000_000u64),
+        gas_limit: U256::from(scenarios::BLOCK_GAS_LIMIT),
         slot_num: U256::from(42),
         beneficiary: s.beneficiary,
         ..BlockEnv::<MegaTypes>::default()

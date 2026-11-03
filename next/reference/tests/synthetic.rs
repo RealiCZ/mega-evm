@@ -210,7 +210,7 @@ fn context(
     .with_block(BlockEnv {
         number: U256::from(1),
         timestamp: U256::from(1_000),
-        gas_limit: 10_000_000_000,
+        gas_limit: scenarios::BLOCK_GAS_LIMIT,
         slot_num: 42,
         beneficiary: s.beneficiary,
         ..Default::default()
