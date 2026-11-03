@@ -842,7 +842,7 @@ fn mega_call_impl(
                 )?;
             }
             let r = gas.reservoir();
-            let share = r - r * 2 / 100;
+            let share = reservoir_share(r);
             msg.reservoir = share;
             gas.set_reservoir(r - share);
             let start = (start.n != 0).then_some(start);
@@ -957,7 +957,7 @@ fn mega_create_impl(
                 msg.gas_limit,
             )?;
             let r = gas.reservoir();
-            let share = r - r * 2 / 100;
+            let share = reservoir_share(r);
             msg.reservoir = share;
             gas.set_reservoir(r - share);
             state.host().ext_mut().push_child(start_charge, r - share, Some(start), 0);

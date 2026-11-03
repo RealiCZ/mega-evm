@@ -290,7 +290,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         gas.spend(forward - drawn)?;
     }
     let r = gas.reservoir();
-    let share = r - r * 2 / 100;
+    let share = reservoir_share(r);
     gas.set_reservoir(r - share);
     let start =
         StartRecords::one((deploy, deploy_changed), deploy_empty as i64, !tx.value.is_zero());

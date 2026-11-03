@@ -452,6 +452,13 @@ pub fn revert_with(
     Err(InstrStop::Revert)
 }
 
+/// The share of its caller's EIP-8037 reservoir a frame starts with: all but the caller's two per
+/// cent of it, rounded down. The kept part is taken in `u128`: a transaction's gas limit is
+/// bounded by the block's alone, so twice a reservoir need not fit in a `u64`.
+pub const fn reservoir_share(reservoir: u64) -> u64 {
+    reservoir - (reservoir as u128 * 2 / 100) as u64
+}
+
 /// Funds a state spill from the consumer's withheld pool before the base debit (W first).
 pub fn lend_state(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>, cost: u64) {
     if crate::off("lend") {
