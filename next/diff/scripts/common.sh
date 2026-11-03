@@ -8,6 +8,15 @@ FULL_FUZZ_BATCHES=(
   fqhbig:4:2001..=7000:5000 big:1:401..=3400:3000 harsh:2:1..=2000:2000
 )
 
+# The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, one
+# known difference. This is the one place that states them. Adding a scenario means changing it
+# here (and the data under `next/diff/data`, see `data/README.md`); `gate-lib.sh`,
+# `check-reference.sh` and `regen-reference.sh` read it.
+MAIN_EXPECT="total=707 match=706 known=1"
+# The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
+MAIN_TOTAL=${MAIN_EXPECT#total=}
+MAIN_TOTAL=${MAIN_TOTAL%% *}
+
 # abs_dir <dir>: creates <dir> when missing and prints its absolute path. Call it before any `cd`,
 # so a relative path means the same thing for the whole script and for the cargo it starts.
 abs_dir() {

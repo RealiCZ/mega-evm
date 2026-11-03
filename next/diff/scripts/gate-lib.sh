@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Sourced by gate.sh, controls.sh and faults.sh (after common.sh): the inputs of the gates and the
+# Sourced by gate.sh, controls.sh and faults.sh (after common.sh, which defines `MAIN_EXPECT`): the inputs of the gates and the
 # runs of the four gates, so the official run, the negative controls and the fault injection
 # accept and reject on the same code.
 #
@@ -24,9 +24,7 @@ gate_lib_next=$(cd "$gate_lib_diff/.." && pwd)
 # shellcheck source=stamp.sh
 source "$gate_lib_diff/scripts/stamp.sh"
 
-# The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, one
-# known difference.
-MAIN_EXPECT="total=707 match=706 known=1"
+# `MAIN_EXPECT`, the counts of the main summary, is defined in `common.sh`.
 
 # gate_inputs sample|full <work>: fills <work> with the inputs of the sample (`next/diff/data`)
 # or of the full corpus ($MEGA_EVM2_CORPUS_DIR) and writes <work>/expect.env. The extracted files

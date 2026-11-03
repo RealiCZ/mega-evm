@@ -18,6 +18,7 @@
 
 Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q8`, `cap`) and fuzz batch names (`fq`, `fqbig`, `fqh`, `fqhbig`, `big`, `harsh`) are stable data identifiers: the reference outputs and `known-differences.toml` are keyed on them, so they keep their names.
 
+The main count (`MAIN_EXPECT` in `scripts/common.sh`) is the one place a script states it; adding a scenario means changing it there and re-cutting this directory (`regen-reference.sh`).
 Expected counts of the sample: 707 main scenarios (706 match, 1 known difference), 2,000 fuzz scenarios;
 20 blocks with 499 matching transactions, 40 pre-block calls and 52 refusals in the engine replay;
 479 included and 72 refused transactions in the block executor.

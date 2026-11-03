@@ -6,6 +6,8 @@
 #   GATE replay blocks=<b> match=<m> pre=<p> refused=<r> differ=0 applied=0
 #   GATE block blocks=<b> included=<i> refused=<r> counters=<b> post=<b> differ=0 applied=0
 #
+# The expected main counts (`MAIN_EXPECT`) are defined once, in `common.sh`.
+#
 # Usage: gate.sh sample|full
 #   sample  the in-repo sample under `next/diff/data`
 #   full    the full corpus under $MEGA_EVM2_CORPUS_DIR (layout in `data/README.md`)
