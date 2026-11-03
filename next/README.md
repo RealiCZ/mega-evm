@@ -22,6 +22,17 @@ So `next/` is its own workspace with its own `Cargo.lock`, outside the root one.
 - `reference` — its own workspace (separate lockfile); generates reference
   outputs from the Satin implementation under review.
 
+## Differential gates
+
+`diff/scripts/gate.sh sample|full` runs the strict gates (synthetic scenarios, fuzz batches,
+engine replay and block executor on recorded blocks) against the reference outputs and prints one
+`GATE` summary line per gate.
+`sample` uses the in-repo data under `diff/data` (see `diff/data/README.md`); `full` reads the
+full corpus from `MEGA_EVM2_CORPUS_DIR`.
+The only accepted difference is listed in `diff/known-differences.toml`.
+`diff/scripts/check-reference.sh sample` regenerates the sample's reference outputs with
+`reference/` and checks they equal the stored ones.
+
 ## Building
 
 The toolchain is pinned in `next/rust-toolchain.toml`.

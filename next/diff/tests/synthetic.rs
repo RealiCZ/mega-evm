@@ -1,0 +1,93 @@
+//! Synthetic differential gate: the shared scenarios run on the Satin engine, plain and
+//! inspected, against the reference outputs. Normalization and exclusions live in
+//! `shared/gate.rs`; the accepted differences in `known-differences.toml`.
+//!
+//! Environment: `MEGA_EVM2_ORACLE` (the reference output file), `MEGA_EVM2_GATE_NAME` (the name in
+//! the summary line, default `main`), `MEGA_EVM2_EXPECT` (the expected scenario count), and the
+//! scenario selectors of `shared/scenarios.rs` (`MEGA_EVM2_FUZZ*`, `MEGA_EVM2_ONLY`).
+//! Output: the `GATE` summary line; `MEGA_EVM2_OUT` additionally writes every comparison.
+
+use mega_evm2_diff::{
+    driver::{run, scenarios},
+    gate::{self, Verdict},
+};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashMap};
+
+#[test]
+fn test_synthetic_matches_reference_plain_and_inspected() {
+    let path = std::env::var("MEGA_EVM2_ORACLE").expect("MEGA_EVM2_ORACLE");
+    let name = std::env::var("MEGA_EVM2_GATE_NAME").unwrap_or("main".into());
+    let oracle: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("oracle file required"))
+            .unwrap();
+    let oracle_count = oracle.len();
+    let by_name: HashMap<String, Value> =
+        oracle.into_iter().map(|o| (o["name"].as_str().unwrap().to_owned(), o)).collect();
+    assert_eq!(by_name.len(), oracle_count, "duplicate oracle names");
+    let known = gate::known_differences();
+    let mut report = Vec::new();
+    let (mut matched, mut accepted, mut differ, mut missing) = (0u64, 0u64, 0u64, 0u64);
+    let mut groups = BTreeMap::<&str, (u64, u64)>::new();
+    for s in scenarios::everything() {
+        let Some(o) = by_name.get(s.name) else {
+            missing += 1;
+            println!("MISSING {}", s.name);
+            continue;
+        };
+        let plain = run(&s, false);
+        let insp = run(&s, true);
+        let mut diffs = gate::differences(o, &plain);
+        if o["inspected_equal"] != true {
+            diffs.push("reference_plain_vs_inspected".into());
+        }
+        diffs.extend(
+            gate::same_engine_differences(&plain, &insp)
+                .into_iter()
+                .map(|k| format!("candidate_inspected:{k}")),
+        );
+        if o.get("error").is_none() &&
+            insp.get("error").is_none() &&
+            let Some(d) = gate::frames_diff(&o["frames"], &insp["frames"])
+        {
+            diffs.push(d);
+        }
+        let group = groups.entry(s.group).or_default();
+        let verdict = gate::classify(&known, s.name, diffs, o, &plain);
+        match &verdict {
+            Verdict::Match => {
+                matched += 1;
+                group.0 += 1;
+                println!("MATCH {}", s.name);
+            }
+            Verdict::Known => {
+                accepted += 1;
+                group.0 += 1;
+                println!("KNOWN {}", s.name);
+            }
+            Verdict::Differ(d) => {
+                differ += 1;
+                group.1 += 1;
+                println!("DIFFER {} {d:?}", s.name);
+            }
+        }
+        report.push(json!({"name": s.name, "group": s.group, "verdict": format!("{verdict:?}"), "candidate": plain, "inspected": insp}));
+    }
+    if let Ok(out) = std::env::var("MEGA_EVM2_OUT") {
+        std::fs::write(out, serde_json::to_vec(&report).unwrap()).unwrap();
+    }
+    for (g, (m, d)) in &groups {
+        println!("group {g}: {m} match, {d} differ");
+    }
+    // A listed entry whose scenario was not selected is not evaluated (a fuzz batch does not run
+    // the hand-written scenarios); one that was selected and does not differ is `Differ` above.
+    let total = report.len() as u64;
+    println!(
+        "GATE {name} total={total} match={matched} known={accepted} differ={}",
+        differ + missing
+    );
+    assert_eq!(missing, 0, "missing oracle entries");
+    assert_eq!(differ, 0, "differential mismatches");
+    assert!(!report.is_empty(), "empty selection");
+    gate::expected("MEGA_EVM2_EXPECT", total);
+}

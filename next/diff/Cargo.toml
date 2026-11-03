@@ -8,3 +8,18 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# megaeth
+mega-evm2 = { path = "../mega-evm2", features = ["compare"] }
+op-evm2 = { workspace = true, features = ["std"] }
+
+# evm2
+evm2 = { workspace = true, features = ["std"] }
+
+# alloy
+alloy-consensus = { workspace = true, features = ["std"] }
+alloy-eips = { workspace = true, features = ["std"] }
+alloy-primitives = { workspace = true, features = ["std"] }
+
+# misc
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
