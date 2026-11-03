@@ -168,7 +168,7 @@ gate = "fuzz"
 mode = 4
 seed = 515
 scope = "sample"
-why = "An empty code deposit prices nothing and reads no SALT bucket, as Satin prices it; off, it is priced and reads the bucket."
+why = "An empty code deposit reads no SALT bucket, as Satin prices it without one; off, its price is looked up, which reads the bucket. The price is paid per code byte, so with no byte it costs nothing either way and the reads are the only difference."
 
 [[control]]
 switch = "emulate_detained_calls"
@@ -324,9 +324,9 @@ why = "Every transaction reads the SequencerRegistry's account and slot 0 (the l
 [[control]]
 switch = "salt"
 gate = "main"
-scenario = "ctl_sstore"
+scenario = "p6_salt_sstore_set_m8"
 scope = "sample"
-why = "State gas prices are multiplied by the SALT bucket multiplier of the account or slot (and read its bucket); off, every multiplier is 1."
+why = "State gas prices are multiplied by the SALT bucket multiplier of the account or slot (and read its bucket); off, every multiplier is 1. The case writes a fresh slot in a bucket of multiplier 8, so its gas differs, not only its reads."
 
 [[control]]
 switch = "sd_existing_record"
@@ -366,9 +366,9 @@ why = "A system-address transaction's nonce and EIP-3607 are checked (the deposi
 [[control]]
 switch = "system_tx"
 gate = "replay"
-block = "d4:3224158"
+block = "p9:26400004"
 scope = "sample"
-why = "A legacy transaction from the live system address to the Oracle runs as a system transaction (exempt, fee-free, through the deposit path); off, it is an ordinary transaction."
+why = "A legacy transaction from the live system address to the Oracle runs as a system transaction (exempt, fee-free, through the deposit path); off, it is an ordinary transaction. The block's ten system transactions have gas price 0 and gas limits near the block's 10,000,000,000, so off they are refused (fee cap below the base fee) where the reference runs them."
 
 [[control]]
 switch = "tx_beneficiary"
