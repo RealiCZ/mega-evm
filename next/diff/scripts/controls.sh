@@ -1,16 +1,19 @@
 #!/bin/bash
-# Negative controls: shows that the differential gates catch each engine fix being switched off.
+# Negative controls: shows that the differential gates catch each engine fix, and each fixture
+# choice of the gate harness, being switched off.
 #
 # Every fix the engine makes over stock evm2 can be switched off with `MEGA_EVM2_DISABLE=<name>`
-# (the `off("<name>")` calls in `next/mega-evm2/src`, feature `compare` only). For every control
-# of `next/diff/negative-controls.toml` in scope, the control's gate runs on the control's one case
-# twice:
+# (the `off("<name>")` calls in `next/mega-evm2/src`, feature `compare` only), and so can the
+# harness's fixture choices (the `off("<name>")` calls in `next/diff`). For every control of
+# `next/diff/negative-controls.toml` in scope (`[[control]]` and `[[harness]]` alike), the
+# control's gate runs on the control's one case twice:
 #   on   as built: must pass;
 #   off  with `MEGA_EVM2_DISABLE=<switch>`: must fail because the gate reported a difference for
 #        that case. A run that panics before the gate's summary, fails on anything other than the
 #        gate's difference assertion, or passes, is a miss.
-# It also checks the manifest against the source both ways: a switch without a control is
-# `unlisted`, a control whose switch is not in the source is `stale`.
+# It also checks the manifest against the sources both ways: a switch without a table is
+# `unlisted`, a table whose switch is not in its source is `stale` (`[[control]]` against
+# `next/mega-evm2/src`, `[[harness]]` against `next/diff`).
 #
 # Usage: controls.sh sample|full
 #   sample  the controls with `scope = "sample"`, on the in-repo sample (`next/diff/data`)
@@ -50,8 +53,8 @@ if ! cargo test --release --locked -p mega-evm2-diff --no-run > "$logs/build.log
   exit 1
 fi
 if ! list=$(cargo run --release --locked -q -p mega-evm2-diff --bin negative-controls -- \
-  "$here/negative-controls.toml" "$next/mega-evm2/src" "$mode"); then
-  echo "controls.sh: the manifest or the engine source cannot be read (see above)" >&2
+  "$here/negative-controls.toml" "$next/mega-evm2/src" "$here" "$mode"); then
+  echo "controls.sh: the manifest or the switch sources cannot be read (see above)" >&2
   exit 2
 fi
 
@@ -105,11 +108,14 @@ verdict() {
   esac
 }
 
+# source_dir <table>: the source a manifest table's switches are in.
+source_dir() { if [ "$1" = harness ]; then echo next/diff; else echo next/mega-evm2/src; fi; }
+
 total=0 caught=0 missed=0 baseline_failed=0 unlisted=0 stale=0
 while read -r kind switch gate _ case; do
   case "$kind" in
-    UNLISTED) unlisted=$((unlisted + 1)); echo "UNLISTED $switch: no control in negative-controls.toml"; continue ;;
-    STALE) stale=$((stale + 1)); echo "STALE $switch: no off(\"$switch\") in next/mega-evm2/src"; continue ;;
+    UNLISTED) unlisted=$((unlisted + 1)); echo "UNLISTED $switch: no [[$gate]] in negative-controls.toml"; continue ;;
+    STALE) stale=$((stale + 1)); echo "STALE $switch: [[$gate]] names no off(\"$switch\") in $(source_dir "$gate")"; continue ;;
     CONTROL) ;;
     *) continue ;;
   esac

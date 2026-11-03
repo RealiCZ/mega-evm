@@ -1,11 +1,18 @@
-# Negative controls of the differential gates: one control per engine switch.
+# Negative controls of the differential gates: one control per switch.
 #
 # Every fix the Satin engine makes on top of stock evm2 is behind a named switch: `off("<name>")`
-# in `next/mega-evm2/src`, which reads `MEGA_EVM2_DISABLE=<name>,...` (feature `compare` only;
-# otherwise a constant `false`). A control names the one gate case that differs from the
-# reference when its switch is off. `scripts/controls.sh` runs that case with the switch on (it
-# must pass) and off (the gate must report a difference for the case), and fails when a switch in
-# the source has no control here, or a control's switch is not in the source.
+# in `next/mega-evm2/src`, which reads `MEGA_EVM2_DISABLE=<name>,...` (a comma-separated list;
+# feature `compare` only, otherwise a constant `false`). Each engine switch has a `[[control]]`
+# table. The gate harness has switches of its own, `off("<name>")` in `next/diff`, for fixture
+# choices that make the engine's inputs match the reference's (absent accounts, delegation code,
+# reads of absent storage); each has a `[[harness]]` table with the same keys.
+#
+# A control names the one gate case that differs from the reference when its switch is off.
+# `scripts/controls.sh` runs that case with the switch on (it must pass) and off (the gate must
+# report a difference for the case), and fails when a switch in either source has no table here
+# (`unlisted`), or a table's switch is not in its source (`stale`). The source scan is textual and
+# finds `off("<name>")` with any whitespace or line breaks inside the parentheses and an optional
+# trailing comma (names of a-z, 0-9 and _); a name built at run time is not found.
 #
 # Keys of a control:
 #   switch    the name in `off("…")`
@@ -16,7 +23,9 @@
 #   block     (replay, block) the recorded block, `<set>:<number>`
 #   scope     sample: the case is in the in-repo sample (run by CI on every change);
 #             full: only the full corpus has a case that catches the switch (run daily)
-#   why       what the fix does, so a reader knows what the control proves
+#   why       what the fix does, so a reader knows what the control proves; the case should
+#             differ in what `why` names (a price or gas claim needs a case whose gas differs, not
+#             only its reads)
 #
 # Adding a switch: find a case that differs with it off (run the gate tests directly with
 # `MEGA_EVM2_DISABLE=<name>` and look for `DIFFER` lines or a non-zero `differ=`), prefer a case
@@ -375,3 +384,27 @@ mode = 2
 seed = 1392
 scope = "full"
 why = "A frame's own resource draws see its budget minus its net use, unclamped, so a restore gives room back; off, the room is clamped to the budget. Full corpus only: no sample case draws on room a restore gave back."
+
+# The gate harness's fixture switches (`next/diff`).
+
+[[harness]]
+switch = "absent_storage_read"
+gate = "main"
+scenario = "e11b_list_fits_growth"
+scope = "sample"
+why = "The harness has evm2 read the storage of an account its database lacks, as revm does for the reference, so both engines record the same reads; off, the read is skipped and only the reads differ (the value read is zero either way)."
+
+[[harness]]
+switch = "empty_fixture_account"
+gate = "fuzz"
+mode = 4
+seed = 159
+scope = "sample"
+why = "The harness leaves out a fixture account with no balance, code, nonce or storage, as the reference's database builder does, so the account is absent on both sides; off, it exists as an empty account, so the transaction no longer creates it (its state growth and state gas differ)."
+
+[[harness]]
+switch = "fixture_delegation"
+gate = "main"
+scenario = "t03_recipient_delegates_to_beneficiary"
+scope = "sample"
+why = "The harness loads 23-byte fixture code `0xef0100 || address` as an EIP-7702 delegation, as the reference's database reads it; off, it is plain bytecode and a call to the account no longer follows the delegation."

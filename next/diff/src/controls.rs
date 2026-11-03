@@ -1,10 +1,30 @@
-//! The negative-control manifest (`next/diff/negative-controls.toml`): for every engine switch
-//! (`mega_evm2::off("…")`), the gate case that must fail when the switch is off.
+//! The negative-control manifest (`next/diff/negative-controls.toml`): for every switch
+//! (`mega_evm2::off("…")`), the gate case that must fail when the switch is off. The engine's
+//! switches (`next/mega-evm2/src`) are `[[control]]` tables, the gate harness's own fixture
+//! switches (`next/diff`) are `[[harness]]` tables.
 //!
 //! `scripts/controls.sh` runs the controls; this module parses and validates the manifest and
-//! checks it against the switch names in the engine source.
+//! checks each table against the switch names in its source.
 
 use std::{collections::BTreeSet, fmt, path::Path};
+
+/// Where a control's switch is: a fix of the engine (`[[control]]`, `next/mega-evm2/src`) or a
+/// fixture choice of the gate harness (`[[harness]]`, `next/diff`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Engine,
+    Harness,
+}
+
+impl Kind {
+    /// The manifest table of this kind.
+    pub fn table(self) -> &'static str {
+        match self {
+            Kind::Engine => "control",
+            Kind::Harness => "harness",
+        }
+    }
+}
 
 /// The gate a control runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +55,7 @@ pub enum Case {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Control {
+    pub kind: Kind,
     pub switch: String,
     pub gate: Gate,
     pub case: Case,
@@ -84,31 +105,37 @@ pub fn fuzz_name(mode: u8, seed: u64) -> String {
     }
 }
 
-/// Parses the manifest. Fails on a missing or unknown key, a selector of another gate, an
-/// unknown gate or scope, an empty `why`, and a switch listed twice.
+/// Parses the manifest, the `[[control]]` tables first. Fails on an unknown table, a missing or
+/// unknown key, a selector of another gate, an unknown gate or scope, an empty `why`, and a
+/// switch listed twice (in one table or in both).
 pub fn parse(text: &str) -> Result<Vec<Control>, String> {
     let doc: toml::Table = text.parse().map_err(|e| format!("negative-controls.toml: {e}"))?;
-    if let Some(key) = doc.keys().find(|k| *k != "control") {
+    let kinds = [Kind::Engine, Kind::Harness];
+    if let Some(key) = doc.keys().find(|k| !kinds.iter().any(|kind| kind.table() == *k)) {
         return Err(format!("negative-controls.toml: unknown table `{key}`"));
-    }
-    let entries = doc.get("control").and_then(toml::Value::as_array).cloned().unwrap_or_default();
-    if entries.is_empty() {
-        return Err("negative-controls.toml: no control".into());
     }
     let mut seen = BTreeSet::new();
     let mut controls = Vec::new();
-    for (i, entry) in entries.iter().enumerate() {
-        let table = entry.as_table().ok_or(format!("control {i}: not a table"))?;
-        let control = control(table).map_err(|e| format!("control {i}: {e}"))?;
-        if !seen.insert(control.switch.clone()) {
-            return Err(format!("control {i}: switch `{}` is listed twice", control.switch));
+    for kind in kinds {
+        let name = kind.table();
+        let entries =
+            doc.get(name).map(|v| v.as_array().ok_or(format!("`{name}` is not a list of tables")));
+        for (i, entry) in entries.transpose()?.into_iter().flatten().enumerate() {
+            let table = entry.as_table().ok_or(format!("{name} {i}: not a table"))?;
+            let control = control(kind, table).map_err(|e| format!("{name} {i}: {e}"))?;
+            if !seen.insert(control.switch.clone()) {
+                return Err(format!("{name} {i}: switch `{}` is listed twice", control.switch));
+            }
+            controls.push(control);
         }
-        controls.push(control);
+    }
+    if controls.is_empty() {
+        return Err("negative-controls.toml: no control".into());
     }
     Ok(controls)
 }
 
-fn control(t: &toml::Table) -> Result<Control, String> {
+fn control(kind: Kind, t: &toml::Table) -> Result<Control, String> {
     let text = |k: &str| -> Result<String, String> {
         t.get(k).and_then(toml::Value::as_str).map(str::to_owned).ok_or(format!("missing `{k}`"))
     };
@@ -163,11 +190,13 @@ fn control(t: &toml::Table) -> Result<Control, String> {
     if why.trim().is_empty() {
         return Err("empty `why`".into());
     }
-    Ok(Control { switch, gate, case, scope, why })
+    Ok(Control { kind, switch, gate, case, scope, why })
 }
 
-/// Every name `n` that occurs as `off("n")` (`n` of `a-z`, `0-9` and `_`) in the `.rs` files
-/// under `dir`.
+/// Every name that occurs as a call `off("<name>")` (a name of `a-z`, `0-9` and `_`) in the
+/// `.rs` files under `dir`. Whitespace, line breaks included, may stand on either side of the
+/// string literal, and a trailing comma after it, as rustfmt writes a call it breaks across
+/// lines. The scan is textual: a comment that spells such a call counts as one.
 pub fn source_switches(dir: &Path) -> std::io::Result<BTreeSet<String>> {
     let mut found = BTreeSet::new();
     let mut dirs = vec![dir.to_path_buf()];
@@ -178,25 +207,40 @@ pub fn source_switches(dir: &Path) -> std::io::Result<BTreeSet<String>> {
                 dirs.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let text = std::fs::read_to_string(&path)?;
-                for (at, _) in text.match_indices("off(\"") {
-                    let rest = &text[at + 5..];
-                    let len = rest
-                        .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
-                        .unwrap_or(rest.len());
-                    if len > 0 && rest[len..].starts_with("\")") {
-                        found.insert(rest[..len].to_owned());
-                    }
-                }
+                found.extend(off_calls(&text));
             }
         }
     }
     Ok(found)
 }
 
-/// The switches of `source` without a control (unlisted), and the controls whose switch is not in
-/// `source` (stale).
-pub fn completeness(controls: &[Control], source: &BTreeSet<String>) -> (Vec<String>, Vec<String>) {
-    let listed: BTreeSet<String> = controls.iter().map(|c| c.switch.clone()).collect();
+/// The names of the `off("…")` calls in `text` (see `source_switches`).
+fn off_calls(text: &str) -> impl Iterator<Item = String> + '_ {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    text.match_indices("off(").filter_map(move |(at, _)| {
+        // `off` itself, not the end of a longer name such as `cutoff`.
+        if text[..at].chars().next_back().is_some_and(ident) {
+            return None;
+        }
+        let rest = text[at + 4..].trim_start().strip_prefix('"')?;
+        let len = rest
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(rest.len());
+        let after = rest[len..].strip_prefix('"')?.trim_start();
+        let after = after.strip_prefix(',').map_or(after, str::trim_start);
+        (len > 0 && after.starts_with(')')).then(|| rest[..len].to_owned())
+    })
+}
+
+/// The switches of `source` (the switches of `kind`'s source) without a control of `kind`
+/// (unlisted), and the controls of `kind` whose switch is not in `source` (stale).
+pub fn completeness(
+    controls: &[Control],
+    kind: Kind,
+    source: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    let listed: BTreeSet<String> =
+        controls.iter().filter(|c| c.kind == kind).map(|c| c.switch.clone()).collect();
     (source.difference(&listed).cloned().collect(), listed.difference(source).cloned().collect())
 }
 
@@ -220,6 +264,7 @@ mod tests {
         assert_eq!(
             main,
             vec![Control {
+                kind: Kind::Engine,
                 switch: "s".into(),
                 gate: Gate::Main,
                 case: Case::Scenario("p6_add".into()),
@@ -300,13 +345,78 @@ mod tests {
     }
 
     #[test]
+    fn test_source_switches_tolerate_whitespace_and_rustfmt_splits() {
+        let dir =
+            std::env::temp_dir().join(format!("mega-evm2-controls-ws-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("a.rs"),
+            concat!(
+                // rustfmt breaks a long argument list: one argument per line, trailing comma.
+                "if !crate::off(\n        \"split_by_rustfmt\",\n    ) {}\n",
+                "let a = off( \"spaced\" );\n",
+                "let b = off(\t\"tab_comma\" , );\n",
+                "let c = off(\r\n\"crlf\"\r\n);\n",
+                // Not switches: another function, two arguments, an unclosed call, a variable.
+                "cutoff(\"other_fn\"); off(\"two\", 2); off(\"open\"; off(name);\n",
+            ),
+        )
+        .unwrap();
+        let found = source_switches(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            found,
+            ["crlf", "spaced", "split_by_rustfmt", "tab_comma"]
+                .map(String::from)
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[test]
     fn test_completeness_reports_unlisted_and_stale_switches() {
         let controls = one("gate = \"main\"\nscenario = \"a\"").unwrap();
         let mut renamed = controls[0].clone();
         renamed.switch = "old".into();
         let source: BTreeSet<String> = ["s", "new"].map(String::from).into_iter().collect();
-        let (unlisted, stale) = completeness(&[controls[0].clone(), renamed], &source);
+        let (unlisted, stale) =
+            completeness(&[controls[0].clone(), renamed], Kind::Engine, &source);
         assert_eq!((unlisted, stale), (vec!["new".to_string()], vec!["old".to_string()]));
+    }
+
+    #[test]
+    fn test_harness_controls_are_checked_against_their_own_source() {
+        let c = |table: &str, switch: &str| {
+            format!(
+                "[[{table}]]\nswitch = \"{switch}\"\ngate = \"main\"\nscenario = \"a\"\nscope = \"sample\"\nwhy = \"w\"\n"
+            )
+        };
+        let controls =
+            parse(&format!("{}{}", c("control", "fix"), c("harness", "fixture"))).unwrap();
+        assert_eq!(
+            controls.iter().map(|c| (c.kind, c.switch.as_str())).collect::<Vec<_>>(),
+            [(Kind::Engine, "fix"), (Kind::Harness, "fixture")]
+        );
+        let engine: BTreeSet<String> = ["fix".to_string()].into();
+        let harness: BTreeSet<String> = ["fixture".to_string(), "new_fixture".to_string()].into();
+        assert_eq!(completeness(&controls, Kind::Engine, &engine), (vec![], vec![]));
+        assert_eq!(
+            completeness(&controls, Kind::Harness, &harness),
+            (vec!["new_fixture".to_string()], vec![])
+        );
+        // A harness switch listed as an engine control is stale there and unlisted here.
+        let misplaced = parse(&c("control", "fixture")).unwrap();
+        assert_eq!(
+            completeness(&misplaced, Kind::Engine, &engine),
+            (vec!["fix".to_string()], vec!["fixture".to_string()])
+        );
+        assert_eq!(
+            completeness(&misplaced, Kind::Harness, &harness),
+            (vec!["fixture".to_string(), "new_fixture".to_string()], vec![])
+        );
+        // One name, one switch: listed in both tables is listed twice.
+        let err = parse(&format!("{}{}", c("control", "x"), c("harness", "x"))).unwrap_err();
+        assert!(err.contains("`x`") && err.contains("twice"), "{err}");
     }
 
     #[test]

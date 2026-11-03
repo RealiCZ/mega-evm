@@ -48,12 +48,15 @@ A green gate means something only if the gate goes red on a wrong engine or a wr
 Two scripts show that it does, and CI runs both.
 
 `diff/scripts/controls.sh sample|full` runs the negative controls listed in `diff/negative-controls.toml`.
-Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`, which `MEGA_EVM2_DISABLE=<name>` turns off (feature `compare` only).
+Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`, which `MEGA_EVM2_DISABLE=<name>` turns off (feature `compare` only); the variable takes a comma-separated list of names.
+Each engine switch has a `[[control]]` table.
+The gate harness's fixture choices that make the engine's inputs match the reference's are switches too, `off("<name>")` in `diff`, and each has a `[[harness]]` table.
 Each control names one case (a scenario, a fuzz seed or a recorded block), the gate that runs it, and in `why` what the fix does.
 The script runs the case with the switch on, where the gate must pass, and with the switch off, where the gate must report a difference for that case; a panic, a harness error or a failure for another reason is a miss.
 `sample` runs the controls whose case is in the in-repo sample, `full` runs all of them on the full corpus.
 The last line is `CONTROLS scope=<s> total=<n> caught=<n> missed=<m> baseline_failed=<b> unlisted=<u> stale=<t>`, and the script fails unless `missed`, `baseline_failed`, `unlisted` and `stale` are all 0.
-A switch in the source without a control is `unlisted` and a control whose switch is gone is `stale`, so a new `off("…")` without a manifest entry fails CI.
+A switch in `mega-evm2/src` or `diff` without a table is `unlisted` and a table whose switch is gone from its source is `stale`, so a new `off("…")` in either without a manifest entry fails CI.
+The source scan is textual: it finds `off("<name>")` with whitespace or line breaks inside the parentheses and an optional trailing comma, as rustfmt writes a broken call, but not a switch name built at run time.
 
 To add a control for a new switch, find a case that differs with the switch off: run a gate test directly with `MEGA_EVM2_DISABLE=<name>` and look for `DIFFER` lines or a non-zero `differ=`.
 Prefer a case of the sample, and add a `[[control]]` with the switch, the gate, the case, its scope and a one-line `why` (the manifest's header lists the keys).
