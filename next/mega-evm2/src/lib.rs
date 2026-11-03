@@ -209,7 +209,8 @@ impl EvmConfigSelector<MegaTypes> for MegaSelector {
 }
 
 /// Satin's `Version`: Osaka features + EIP-8037/2780/7708, Amsterdam gas, Satin's state prices,
-/// 98/100 forward, 512 KiB / 1 MiB size limits, 200M execution cap.
+/// 98/100 forward, 512 KiB / 1 MiB size limits, 200M execution cap, and no EIP-8037 total gas
+/// cap: a transaction's gas limit is bounded by the block's gas limit alone.
 pub fn satin_version() -> Version {
     let mut v = Version::new(SpecId::OSAKA);
     v.features.insert(EvmFeatures::EIP8037 | EvmFeatures::EIP2780 | EvmFeatures::EIP7708);
@@ -221,6 +222,7 @@ pub fn satin_version() -> Version {
     p.set(GasId::CodeDepositState, CPSB as u32);
     p.set(GasId::CallStipendReduction, 50);
     v.tx_gas_limit_cap = EXECUTION_CAP;
+    v.tx_total_gas_cap = u64::MAX;
     v.max_code_size = 512 * 1024;
     v.max_initcode_size = 1024 * 1024;
     v.chain_id = 1;

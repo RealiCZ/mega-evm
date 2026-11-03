@@ -14,7 +14,8 @@ So `next/` is its own workspace with its own `Cargo.lock`, outside the root one.
 - `mega-evm2` — the Satin engine on evm2: Satin and later specs, resource
   metering, system contracts and block execution.
 - `op-evm2` — a vendored Optimism execution layer, so the Satin engine does not
-  depend on `op-revm` (revm-based) for its OP semantics.
+  depend on `op-revm` (revm-based) for its OP semantics. `op-evm2/VENDORED.md`
+  records its upstream base and every local change.
 - `diff` — shared scenarios and strict differential gates that compare the Satin
   engine with the Satin implementation under review (outputs produced by
   `reference/`).
@@ -24,6 +25,8 @@ So `next/` is its own workspace with its own `Cargo.lock`, outside the root one.
 ## Building
 
 The toolchain is pinned in `next/rust-toolchain.toml`.
+Until our thin evm2 fork is pushed and pinned by git revision, `evm2` is a path
+dependency on a checkout of the fork next to this repository (`../evm2`).
 
 ```bash
 cd next && cargo check --workspace
