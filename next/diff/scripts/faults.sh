@@ -34,9 +34,8 @@ target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 base=$target/mega-evm2-diff/sample
 gate_inputs sample "$base"
-work=$target/mega-evm2-diff/faults
-rm -rf "$work"
-mkdir -p "$work"
+# This run's directory: a passing run removes it, a failing one keeps it for the lines' `see`.
+work=$(run_dir "$base" faults)
 
 cd "$next"
 if ! cargo test --release --locked -p mega-evm2-diff --no-run > "$work/build.log" 2>&1; then
@@ -157,4 +156,9 @@ for id in "${ids[@]}"; do
 done
 
 echo "FAULTS total=$total rejected=$rejected accepted=$accepted baselines=$baselines passed=$passed"
-[ "$total" -gt 0 ] && [ "$accepted" = 0 ] && [ "$passed" = "$baselines" ]
+if [ "$total" -gt 0 ] && [ "$accepted" = 0 ] && [ "$passed" = "$baselines" ]; then
+  rm -rf "$work"
+else
+  echo "faults.sh: FAILED; the run's files are in $work" >&2
+  exit 1
+fi

@@ -17,12 +17,12 @@ next=$(cd "$here/.." && pwd)
 source "$here/scripts/common.sh"
 refuse_overrides
 target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
-work=$target/mega-evm2-diff/reference-sample
+# This run's directory (removed when the outputs are identical).
+work=$(run_dir "$target/mega-evm2-diff/reference-sample" check)
 export CARGO_TARGET_DIR=$target/mega-evm2-reference
 export RUST_MIN_STACK=8388608
 export CARGO_NET_GIT_FETCH_WITH_CLI=${CARGO_NET_GIT_FETCH_WITH_CLI:-true}
 
-rm -rf "$work"
 mkdir -p "$work/blocks" "$work/expected" "$work/out"
 unz() { mkdir -p "$(dirname "$2")"; zstd -q -d -f -o "$2" "$1"; }
 
@@ -57,4 +57,5 @@ gen replay MEGA_EVM2_BLOCK_DIR="$work/blocks" MEGA_EVM2_REPLAY_OUT="$work/out/re
 gen block MEGA_EVM2_BLOCK_DIR="$work/blocks" MEGA_EVM2_BLOCK_OUT="$work/out/block"
 
 python3 -I "$here/scripts/compare_outputs.py" "$work/expected" "$work/out"
+rm -rf "$work"
 echo "REFERENCE sample identical"

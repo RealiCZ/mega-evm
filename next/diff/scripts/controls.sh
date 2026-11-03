@@ -41,10 +41,8 @@ refuse_overrides
 target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 work=$target/mega-evm2-diff/$mode
-logs=$work/controls
 gate_inputs "$mode" "$work"
-rm -rf "$logs"
-mkdir -p "$logs"
+logs=$(run_dir "$work" controls)
 # shellcheck disable=SC1091
 source "$work/expect.env"
 

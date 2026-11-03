@@ -15,6 +15,15 @@ abs_dir() {
   (cd "$1" && pwd)
 }
 
+# run_dir <dir> <name>: creates and prints a new directory `<dir>/runs/<name>.XXXXXX` for one run's
+# logs and scratch files, so runs that share <dir> (two scripts on one cargo target) keep their
+# files apart. Run directories under `<dir>/runs` older than a day are removed first.
+run_dir() {
+  mkdir -p "$1/runs"
+  find "$1/runs" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2> /dev/null || true
+  mktemp -d "$1/runs/$2.XXXXXX"
+}
+
 # refuse_overrides: exits 2 when the environment carries any `MEGA_EVM2_*` variable except
 # `MEGA_EVM2_CORPUS_DIR`. Those variables select or replace what a gate runs on (blocks, sets,
 # scenarios, fuzz seeds, reference and output paths, expected counts, engine switches); a script

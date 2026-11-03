@@ -13,8 +13,9 @@
 # The run fails (exit status 1) when a gate fails or does not print its summary line, or when a
 # summary differs from the expected counts, and it refuses to start when a `MEGA_EVM2_*` variable
 # other than `MEGA_EVM2_CORPUS_DIR` is set (see `common.sh`). Inputs, expected counts and the gate
-# runs are in `gate-lib.sh`. Test output goes to logs under the cargo target directory; the tail
-# of a failing gate's log is printed.
+# runs are in `gate-lib.sh`. Test output goes to logs in a directory of this run,
+# `<target>/mega-evm2-diff/<mode>/runs/gate.XXXXXX`; the tail of a failing gate's log is printed.
+# Runs of `gate.sh`, `controls.sh` and `faults.sh` on one cargo target may run at the same time.
 set -euo pipefail
 
 mode=${1:-}
@@ -31,16 +32,17 @@ target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 work=$target/mega-evm2-diff/$mode
 gate_inputs "$mode" "$work"
+logs=$(run_dir "$work" gate)
 
 fail=0
 summaries=()
 for gate in main fuzz replay block; do
-  line=$(gate_run "$work" "$work/logs" "$gate") || fail=1
+  line=$(gate_run "$work" "$logs" "$gate") || fail=1
   summaries+=("${line:-GATE $gate FAILED}")
 done
 
 printf '%s\n' "${summaries[@]}"
 if [ "$fail" != 0 ]; then
-  echo "gate.sh $mode: FAILED (a summary above differs from the expected line, or a gate failed)" >&2
+  echo "gate.sh $mode: FAILED (a summary above differs from the expected line, or a gate failed; logs in $logs)" >&2
   exit 1
 fi
