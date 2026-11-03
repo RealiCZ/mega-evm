@@ -27,11 +27,17 @@ Each line is one change against the base commit.
 
 ## Re-syncing
 
-1. In a checkout of `foundry-rs/evm2-networks`, list what changed upstream since the base: `git log --oneline <base>..origin/main -- crates/op`.
-2. Export that range as a patch and apply it here from the repository root: `git diff <base> <new> -- crates/op | git apply -p3 --directory=next/op-evm2 --3way`.
-3. Resolve conflicts against the local changes above.
+This copy has no upstream history in this repository, so upstream's objects are fetched first: `git apply --3way` merges against the upstream blobs a patch was made from, and without them it falls back to a plain apply, which fails on every hunk a local change touched.
+It uses `--3way` rather than `--reject`, so a conflict is left in the file as conflict markers instead of in a `.rej` file.
+Run the steps from the repository root, on a clean tree (`--3way` also updates the index).
+
+1. Fetch upstream and list what changed in `crates/op` since the base: `git fetch https://github.com/foundry-rs/evm2-networks main`, then `git log --oneline <base>..FETCH_HEAD -- crates/op`.
+   An empty list means `crates/op` did not change; go on with step 4.
+2. Apply that range here with a three-way merge: `git diff --full-index <base> FETCH_HEAD -- crates/op | git apply -p3 --directory=next/op-evm2 --3way`.
+   Hunks that do not touch a local change apply cleanly; the others are left with conflict markers, and `git status` lists their files as unmerged.
+3. Resolve the conflicts against the local changes above, then `git add` the files.
    Drop a local change once upstream has it (for example change 1 once #12 is merged), and remove its line here.
 4. If upstream moved its evm2 pin, check that the thin fork has the API it needs; changes 6 and 7 follow the fork, not upstream.
 5. If upstream changed the parity test's `op-revm` or `revm` versions, update them in `next/Cargo.toml`.
 6. Run, from `next/`: `cargo test -p op-evm2`, `cargo clippy -p op-evm2 --all-targets -- -D warnings`, and `cargo check -p op-evm2 --no-default-features --target riscv64imac-unknown-none-elf`.
-7. Update the base commit at the top of this file.
+7. Set the base commit at the top of this file to the fetched commit (`git rev-parse FETCH_HEAD`).
