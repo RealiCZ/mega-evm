@@ -1,0 +1,10 @@
+[package]
+name = "op-evm2"
+description = "Vendored Optimism execution layer for the Satin engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
