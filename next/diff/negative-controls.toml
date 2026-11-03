@@ -1,0 +1,377 @@
+# Negative controls of the differential gates: one control per engine switch.
+#
+# Every fix the Satin engine makes on top of stock evm2 is behind a named switch: `off("<name>")`
+# in `next/mega-evm2/src`, which reads `MEGA_EVM2_DISABLE=<name>,...` (feature `compare` only;
+# otherwise a constant `false`). A control names the one gate case that differs from the
+# reference when its switch is off. `scripts/controls.sh` runs that case with the switch on (it
+# must pass) and off (the gate must report a difference for the case), and fails when a switch in
+# the source has no control here, or a control's switch is not in the source.
+#
+# Keys of a control:
+#   switch    the name in `off("…")`
+#   gate      main | fuzz | replay | block
+#   scenario  (main) the scenario name
+#   mode      (fuzz) the generator mode, 1..=4
+#   seed      (fuzz) the seed
+#   block     (replay, block) the recorded block, `<set>:<number>`
+#   scope     sample: the case is in the in-repo sample (run by CI on every change);
+#             full: only the full corpus has a case that catches the switch (run daily)
+#   why       what the fix does, so a reader knows what the control proves
+#
+# Adding a switch: find a case that differs with it off (run the gate tests directly with
+# `MEGA_EVM2_DISABLE=<name>` and look for `DIFFER` lines or a non-zero `differ=`), prefer a case
+# of the sample, and add its control here. `MEGA_EVM2_ONLY=<scenario>` (main),
+# `MEGA_EVM2_FUZZ_MODE=<m> MEGA_EVM2_FUZZ=<s>..=<s>` (fuzz) and `MEGA_EVM2_BLOCKS=<set>:<n>`
+# (replay, block) select a single case.
+
+[[control]]
+switch = "access_control"
+gate = "main"
+scenario = "a05_is_disabled"
+scope = "sample"
+why = "The engine answers MegaAccessControl calls itself and refuses volatile reads in frames at or below one that disabled access; off, the call runs the contract's bytecode and nothing is refused."
+
+[[control]]
+switch = "allowance"
+gate = "main"
+scenario = "p6_allowance_value_call"
+scope = "sample"
+why = "A value-carrying CALL or CALLCODE gives the child a history allowance next to the 2,300 stipend; off, the child's logs and writes are paid from its own gas."
+
+[[control]]
+switch = "auth_beneficiary"
+gate = "main"
+scenario = "e14_beneficiary_authority_detained"
+scope = "sample"
+why = "An applied EIP-7702 authority that is the block beneficiary detains the transaction from its start; off, it runs undetained."
+
+[[control]]
+switch = "auth_counts"
+gate = "main"
+scenario = "e18_delegate_halts"
+scope = "sample"
+why = "The authorities' write records and created accounts count on the transaction's data size, KV updates and state growth, and come out of the first frame's budgets; off, they are not counted."
+
+[[control]]
+switch = "auth_history"
+gate = "main"
+scenario = "e18_delegate_halts"
+scope = "sample"
+why = "The history gas of the authorization records is charged before the first frame, in one charge with the first frame's start record; off, it is not charged."
+
+[[control]]
+switch = "auth_history_report"
+gate = "main"
+scenario = "e18_delegate_halts"
+scope = "sample"
+why = "The authorities' history is reported in the transaction's history totals once nothing can take the list back; off, the charge is made but not reported."
+
+[[control]]
+switch = "auth_list_rule"
+gate = "main"
+scenario = "e10_list_skipped_kv"
+scope = "sample"
+why = "An authorization list with more entries than the KV or state-growth room left is simulated and skipped, as Satin's list rule does; off, the list is applied."
+
+[[control]]
+switch = "beneficiary"
+gate = "main"
+scenario = "q53_beneficiary_call_detains"
+scope = "sample"
+why = "Reading or calling the block beneficiary's account is a volatile read that caps the remaining compute gas (detention); off, it is not."
+
+[[control]]
+switch = "body_records"
+gate = "main"
+scenario = "e16_body_records_over_data_limit"
+scope = "sample"
+why = "The transaction body plus one write record per authorization entry is checked against the data-size limit before any gas check, and refuses the transaction; off, it runs."
+
+[[control]]
+switch = "built_check"
+gate = "fuzz"
+mode = 4
+seed = 59
+scope = "sample"
+why = "A result for a message whose frame was never built (a precompile or interceptor answer, a refused start) is settled against its caller's detention entry; off, it pops the caller's entry as its own."
+
+[[control]]
+switch = "call_lend"
+gate = "main"
+scenario = "q42_det_unfunded_value_new_account"
+scope = "sample"
+why = "A CALL's new-account state charge that spills past the reservoir is funded from the frame's withheld gas first; off, it is charged to the spendable gas only."
+
+[[control]]
+switch = "classify"
+gate = "main"
+scenario = "d1_top_frame_crosses"
+scope = "sample"
+why = "An out-of-gas whose failed charge the withheld gas could have paid is a detention crossing (limit exceeded, compute burned as Satin burns it), not a plain out-of-gas halt."
+
+[[control]]
+switch = "create_lend"
+gate = "main"
+scenario = "q01_det_create_spill_salt2"
+scope = "sample"
+why = "A CREATE's state charge that spills past the reservoir is funded from the frame's withheld gas first; off, it is charged to the spendable gas only."
+
+[[control]]
+switch = "delegate_no_debit"
+gate = "fuzz"
+mode = 4
+seed = 1788
+scope = "sample"
+why = "A CALL whose EIP-7702 delegate load cannot be paid halts with a failed-charge record, so the inspected run keeps the frame's gas; off, the plain and inspected runs of the engine disagree."
+
+[[control]]
+switch = "deposit_caller"
+gate = "main"
+scenario = "p6_deposit_new_caller_m1"
+scope = "sample"
+why = "A deposit whose caller account does not exist yet counts the new account on state growth and charges its new-account state gas; off, the creation is free."
+
+[[control]]
+switch = "deposit_loan_back"
+gate = "fuzz"
+mode = 1
+seed = 1142
+scope = "full"
+why = "When a code deposit's data-size draw is refused, the withheld gas lent to its history charge goes back to the frame. Full corpus only: no sample case refuses such a draw."
+
+[[control]]
+switch = "deposit_oof"
+gate = "main"
+scenario = "fz087"
+scope = "sample"
+why = "A deposit whose first frame cannot fund its value (OutOfFunds) is a failed deposit, as op-revm makes it; off, evm2's revert-class stop leaves it a normal reverted deposit."
+
+[[control]]
+switch = "deposit_site"
+gate = "main"
+scenario = "q03_det_create_ctor_write_salt8"
+scope = "sample"
+why = "The code-deposit hook checks the deposit's regular cost against spendable gas and funds the deposited code's history from withheld gas first; off, the stock deposit runs."
+
+[[control]]
+switch = "empty_deposit_price"
+gate = "fuzz"
+mode = 4
+seed = 515
+scope = "sample"
+why = "An empty code deposit prices nothing and reads no SALT bucket, as Satin prices it; off, it is priced and reads the bucket."
+
+[[control]]
+switch = "emulate_detained_calls"
+gate = "fuzz"
+mode = 4
+seed = 533
+scope = "sample"
+why = "CALL-family opcodes use the copied body whenever detention keeps figures, so a skipped cold load leaves a failed-charge record; off, the stock body runs and the engine's inspected run differs."
+
+[[control]]
+switch = "forward"
+gate = "main"
+scenario = "i9_limit_call_detained"
+scope = "sample"
+why = "A CALL's 63/64 forward in a frame with withheld gas is computed from spendable plus withheld gas, as Satin computes it; off, from spendable gas only."
+
+[[control]]
+switch = "gas_total"
+gate = "main"
+scenario = "d3_gas_reads_full_gas"
+scope = "sample"
+why = "The GAS opcode reports spendable plus withheld gas; off, only the spendable part."
+
+[[control]]
+switch = "hand_back"
+gate = "fuzz"
+mode = 4
+seed = 1995
+scope = "sample"
+why = "A caller that cannot pay a frame's start records starts no frame: the forward is handed back and the halt's failed-charge record rewritten, so its burn is exact; off, the forward is lost."
+
+[[control]]
+switch = "hold"
+gate = "main"
+scenario = "d1_top_frame_crosses"
+scope = "sample"
+why = "After a volatile read the remaining gas above the detention cap is withheld from the frame; off, the cap is never applied."
+
+[[control]]
+switch = "hold_caller"
+gate = "main"
+scenario = "h11_hold_caller_limit_490"
+scope = "sample"
+why = "A caller resuming from a failed child that sent an Oracle hint is checked against the transaction's limits (the hint stays counted); off, it resumes unchecked."
+
+[[control]]
+switch = "hold_start"
+gate = "main"
+scenario = "fz010"
+scope = "sample"
+why = "A frame start is checked against the limits before it is counted (a transaction already over a limit is stopped there); off, the start is drawn first."
+
+[[control]]
+switch = "keyless"
+gate = "main"
+scenario = "k01_ok"
+scope = "sample"
+why = "The engine executes keyless deployment calls (system contract 0x6342...0003) itself; off, the call runs the contract's bytecode."
+
+[[control]]
+switch = "keyless_beneficiary"
+gate = "main"
+scenario = "k25b_signer_is_beneficiary_tight"
+scope = "sample"
+why = "A keyless deployment whose signer is the block beneficiary is a volatile read that detains the frame; off, it is not."
+
+[[control]]
+switch = "keyless_empty_deposit"
+gate = "main"
+scenario = "k04_empty_code"
+scope = "sample"
+why = "A keyless deployment that deposits empty code is refused, as Satin refuses it; off, it succeeds."
+
+[[control]]
+switch = "keyless_signer_growth"
+gate = "main"
+scenario = "k01_ok"
+scope = "sample"
+why = "A keyless deployment that creates its signer's account counts it on state growth; off, it is not counted."
+
+[[control]]
+switch = "keyless_takeback"
+gate = "main"
+scenario = "k16_signer_nonce_one_taken_back"
+scope = "sample"
+why = "After a keyless deployment, the creation's nonce bump of a signer that already had a nonce is taken back (and its write record refunded when nothing else changed), as Satin settles it; off, the bump stays."
+
+[[control]]
+switch = "lend"
+gate = "main"
+scenario = "d3_gas_reads_full_gas"
+scope = "sample"
+why = "A state charge that spills past the reservoir (SSTORE and the other state sites) is funded from the frame's withheld gas first; off, it is charged to the spendable gas only."
+
+[[control]]
+switch = "modexp_two_step"
+gate = "fuzz"
+mode = 3
+seed = 775
+scope = "full"
+why = "ModExp's price is probed in two steps (its 500 minimum, then the rest), as evm2 charges it; off, only the minimum is seen. Full corpus only: no sample case prices a ModExp call this way."
+
+[[control]]
+switch = "no_debit_record"
+gate = "fuzz"
+mode = 4
+seed = 533
+scope = "sample"
+why = "A halt that attempts no debit (the SSTORE sentry, a skipped cold load) records a failed charge no gas could pay, so the inspected run keeps the frame's gas; off, the engine's plain and inspected runs disagree."
+
+[[control]]
+switch = "oracle_hints"
+gate = "main"
+scenario = "h08_direct_hint"
+scope = "sample"
+why = "An Oracle sendHint call is counted on the transaction's data size and forwarded by the engine (or stopped at the limit); off, the hint is neither counted nor reported."
+
+[[control]]
+switch = "pre_frame_stop"
+gate = "main"
+scenario = "e10_list_skipped_kv"
+scope = "sample"
+why = "A transaction whose authorization list the KV or state-growth rule skipped stops its first frame with that limit; off, the frame runs."
+
+[[control]]
+switch = "precompile_catalog"
+gate = "main"
+scenario = "p_bls_g2_msm_two_detained"
+scope = "sample"
+why = "A precompile without a fixed price is priced by probing it, so detention can hold the call to its price; off, it has no price and is not held."
+
+[[control]]
+switch = "precompile_hold"
+gate = "main"
+scenario = "d9_precompile_price_crosses"
+scope = "sample"
+why = "A precompile call is held to the detention cap and the limits with its price before it runs; off, it runs unheld."
+
+[[control]]
+switch = "refuse_delegate"
+gate = "main"
+scenario = "t05_call_follows_delegation_refused"
+scope = "sample"
+why = "In a frame with volatile access off, a CALL of an account whose EIP-7702 delegate is the beneficiary is refused at the delegate's load; off, it proceeds."
+
+[[control]]
+switch = "registry_read"
+gate = "main"
+scenario = "p6_add"
+scope = "sample"
+why = "Every transaction reads the SequencerRegistry's account and slot 0 (the live system address), so both engines read the same state; off, the read sets differ."
+
+[[control]]
+switch = "salt"
+gate = "main"
+scenario = "ctl_sstore"
+scope = "sample"
+why = "State gas prices are multiplied by the SALT bucket multiplier of the account or slot (and read its bucket); off, every multiplier is 1."
+
+[[control]]
+switch = "sd_existing_record"
+gate = "replay"
+block = "d4:28399774"
+scope = "full"
+why = "SELFDESTRUCT of an account created in the transaction gives back the account's own write record only when it was absent at the transaction's start; off, always. Full corpus only: the one recorded case is not in the sample."
+
+[[control]]
+switch = "sd_records"
+gate = "main"
+scenario = "fz040"
+scope = "sample"
+why = "SELFDESTRUCT's own write records are rebuilt from what it moved (each account's change since before the opcode); off, they are counted from the move alone."
+
+[[control]]
+switch = "selfdestruct_lend"
+gate = "main"
+scenario = "q18_det_selfdestruct_to_new_beneficiary"
+scope = "sample"
+why = "SELFDESTRUCT to a new beneficiary funds the beneficiary's new-account state spill from withheld gas first; off, it is charged to the spendable gas only."
+
+[[control]]
+switch = "sload_copy"
+gate = "main"
+scenario = "q56_det_oracle_read_crosses"
+scope = "sample"
+why = "The skip-cold checks of SLOAD, the account opcodes and SELFDESTRUCT see spendable plus withheld gas; off, spendable gas only, so a cold load is skipped where Satin makes it."
+
+[[control]]
+switch = "system_nonce"
+gate = "replay"
+block = "d4:3224158"
+scope = "sample"
+why = "A system-address transaction's nonce and EIP-3607 are checked (the deposit path it runs on checks neither); off, a stale system transaction runs instead of being refused."
+
+[[control]]
+switch = "system_tx"
+gate = "replay"
+block = "d4:3224158"
+scope = "sample"
+why = "A legacy transaction from the live system address to the Oracle runs as a system transaction (exempt, fee-free, through the deposit path); off, it is an ordinary transaction."
+
+[[control]]
+switch = "tx_beneficiary"
+gate = "main"
+scenario = "t01_recipient_is_beneficiary"
+scope = "sample"
+why = "A transaction whose sender or recipient is the block beneficiary (or whose recipient delegates to it) is detained from its start; off, it runs undetained."
+
+[[control]]
+switch = "unclamped_draw"
+gate = "fuzz"
+mode = 2
+seed = 1392
+scope = "full"
+why = "A frame's own resource draws see its budget minus its net use, unclamped, so a restore gives room back; off, the room is clamped to the budget. Full corpus only: no sample case draws on room a restore gave back."
