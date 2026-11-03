@@ -1,7 +1,6 @@
 //! A frame starts with its caller's EIP-8037 reservoir less the two per cent the caller keeps,
-//! rounded down (Satin spec §4 and §9). Satin bounds a transaction's gas limit by the block gas
-//! limit alone, so a reservoir can exceed 2^63, where twice the reservoir no longer fits in a
-//! `u64`.
+//! rounded down. Satin bounds a transaction's gas limit by the block gas limit alone, so a
+//! reservoir can exceed 2^63, where twice the reservoir no longer fits in a `u64`.
 //!
 //! Each frame test runs a transaction of gas limit 2^63 + 10^9 in a block of gas limit
 //! `u64::MAX` and records, for the first frame below the transaction's, the reservoir its caller
@@ -182,7 +181,7 @@ fn test_call_child_reservoir_above_2_63_is_the_98_percent_share() {
     db.insert_account_info(&CALLEE, contract(&STORE_ONE));
     let starts = run(db, &legacy(CALLER, Bytes::new()));
     let (reservoir, share) = assert_first_child_share(&starts);
-    // The legacy Satin implementation's figures for this transaction.
+    // The reference Satin implementation's figures for this transaction.
     assert_eq!(starts.top, Some(9_223_372_037_654_748_528));
     assert_eq!(reservoir, 9_223_372_037_654_748_528, "the CALL is the caller's first state use");
     assert_eq!(share, 9_038_904_596_901_653_558);
@@ -202,9 +201,9 @@ fn test_keyless_child_reservoir_above_2_63_is_the_98_percent_share() {
     assert_first_child_share(&starts);
 }
 
-/// The share table of the legacy Satin implementation's own test, including `u64::MAX`.
+/// The share table of the reference Satin implementation's own test, including `u64::MAX`.
 #[test]
-fn test_reservoir_share_matches_the_legacy_table() {
+fn test_reservoir_share_matches_the_reference_table() {
     for (reservoir, share) in [
         (0, 0),
         (1, 1),
