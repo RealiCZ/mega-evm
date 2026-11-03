@@ -50,7 +50,7 @@ gen() {
     > "$work/$test.log" 2>&1 || { echo "reference $test failed; tail:" >&2; tail -n 25 "$work/$test.log" >&2; exit 1; }
 }
 
-gen synthetic MEGA_EVM2_ORACLE_OUT="$work/out/main.json" MEGA_EVM2_EXPECT=698
+gen synthetic MEGA_EVM2_ORACLE_OUT="$work/out/main.json" MEGA_EVM2_EXPECT=707
 gen synthetic MEGA_EVM2_ORACLE_OUT="$work/out/fuzz-mode4.json" MEGA_EVM2_FUZZ_ONLY=1 \
   MEGA_EVM2_FUZZ_MODE=4 MEGA_EVM2_FUZZ=1..=2000 MEGA_EVM2_EXPECT=2000
 gen replay MEGA_EVM2_BLOCK_DIR="$work/blocks" MEGA_EVM2_REPLAY_OUT="$work/out/replay"

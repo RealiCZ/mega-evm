@@ -348,6 +348,7 @@ pub fn everything() -> Vec<Scenario> {
     v.extend(q2::all());
     v.extend(fz::all());
     v.extend(q8::all());
+    v.extend(cap::all());
     // The L1Block predeploy and the SequencerRegistry exist on a real chain: give both a code
     // byte so their slots are read below the journal on both engines (an absent account's slots
     // are not read by evm2).
@@ -374,6 +375,8 @@ pub const L1_BLOCK: Address =
 pub const SEQUENCER_REGISTRY: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x06]);
 
+#[path = "cap_scenarios.rs"]
+pub mod cap;
 #[path = "fuzz_scenarios.rs"]
 pub mod fz;
 #[path = "p6_scenarios.rs"]

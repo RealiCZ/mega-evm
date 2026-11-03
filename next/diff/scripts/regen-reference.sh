@@ -53,7 +53,7 @@ gen() {
     > "$stage/$name.log" 2>&1 || { echo "reference $name failed; tail:" >&2; tail -n 25 "$stage/$name.log" >&2; exit 1; }
 }
 
-gen main synthetic MEGA_EVM2_ORACLE_OUT="$stage/new/satin-oracle.json" MEGA_EVM2_EXPECT=698
+gen main synthetic MEGA_EVM2_ORACLE_OUT="$stage/new/satin-oracle.json" MEGA_EVM2_EXPECT=707
 for spec in "${FULL_FUZZ_BATCHES[@]}"; do
   IFS=: read -r name fmode range count <<< "$spec"
   gen "fuzz-$name" synthetic MEGA_EVM2_ORACLE_OUT="$stage/new/oracles/$name.json" MEGA_EVM2_FUZZ_ONLY=1 \

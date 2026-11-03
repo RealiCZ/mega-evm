@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs the strict differential gates of `next/diff` and prints one summary line per gate:
 #
-#   GATE main total=698 match=697 known=1 differ=0
+#   GATE main total=707 match=706 known=1 differ=0
 #   GATE fuzz total=<n> match=<n> differ=0
 #   GATE replay blocks=<b> match=<m> pre=<p> refused=<r> differ=0 applied=0
 #   GATE block blocks=<b> included=<i> refused=<r> counters=<b> post=<b> differ=0 applied=0
@@ -123,9 +123,9 @@ run_test() {
 cd "$next"
 
 # main: the hand-written scenarios plus the default fuzz seeds; one known difference.
-line=$(run_test main synthetic MEGA_EVM2_ORACLE="$work/main.json" MEGA_EVM2_GATE_NAME=main MEGA_EVM2_EXPECT=698) || line=""
+line=$(run_test main synthetic MEGA_EVM2_ORACLE="$work/main.json" MEGA_EVM2_GATE_NAME=main MEGA_EVM2_EXPECT=707) || line=""
 summaries+=("${line:-GATE main FAILED}")
-[ "$line" = "GATE main total=698 match=697 known=1 differ=0" ] || fail=1
+[ "$line" = "GATE main total=707 match=706 known=1 differ=0" ] || fail=1
 
 # fuzz: batches summed into one line.
 total=0
