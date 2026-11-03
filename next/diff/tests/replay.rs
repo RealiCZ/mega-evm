@@ -66,9 +66,11 @@ fn test_replay_matches_reference_plain_and_inspected() {
     let cmp_dir = std::env::var("MEGA_EVM2_OUT").ok();
     let mut totals: BTreeMap<String, u64> = BTreeMap::new();
     let mut field_counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut processed = Vec::new();
     for (set, path) in blockdb::block_list() {
         let b = blockdb::load_block(&path, &set);
         let n = b.number;
+        processed.push(format!("{set}:{n}"));
         let satin_path = format!("{satin_dir}/{set}/{n}.jsonl");
         let f = std::fs::File::open(&satin_path)
             .unwrap_or_else(|e| panic!("missing oracle {satin_path}: {e}"));
@@ -279,6 +281,9 @@ fn test_replay_matches_reference_plain_and_inspected() {
     println!("TOTAL {totals:?}");
     println!("FIELDS {field_counts:?}");
     assert!(!totals.is_empty(), "empty block selection");
-    println!("{}", gate::replay_line(&totals));
+    // Only a run of exactly the manifest's blocks is the gate: any other selection prints a
+    // line `gate.sh` does not take for a summary.
+    let complete = blockdb::check_processed_identities(&processed);
+    println!("{}{}", if complete { "" } else { "PARTIAL " }, gate::replay_line(&totals));
     gate::finish(&totals);
 }

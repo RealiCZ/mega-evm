@@ -194,9 +194,11 @@ fn test_blocks_match_reference_plain_and_inspected() {
     let outdir = std::env::var("MEGA_EVM2_OUT").ok();
     let mut totals = BTreeMap::<String, u64>::new();
     let mut fields = BTreeMap::<String, u64>::new();
+    let mut processed = Vec::new();
     for (set, path) in blockdb::block_list() {
         let b = blockdb::load_block(&path, &set);
         let n = b.number;
+        processed.push(format!("{set}:{n}"));
         let txcount = b.txs.len();
         drop(b);
         let sb = read_lines(&format!("{reference}/{set}/{n}.jsonl"));
@@ -261,6 +263,9 @@ fn test_blocks_match_reference_plain_and_inspected() {
     println!("TOTAL {totals:?}");
     println!("FIELDS {fields:?}");
     assert!(!totals.is_empty());
-    println!("{}", gate::block_line(&totals));
+    // Only a run of exactly the manifest's blocks is the gate: any other selection prints a
+    // line `gate.sh` does not take for a summary.
+    let complete = blockdb::check_processed_identities(&processed);
+    println!("{}{}", if complete { "" } else { "PARTIAL " }, gate::block_line(&totals));
     gate::finish(&totals);
 }

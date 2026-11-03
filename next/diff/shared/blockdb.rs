@@ -307,30 +307,155 @@ pub fn load_block(path: &str, set: &str) -> Block {
     }
 }
 
+/// The sets of a run when `MEGA_EVM2_SETS` is not given: the whole recorded corpus.
+pub const DEFAULT_SETS: &str = "d4,p9";
+
+/// True when the environment narrows or replaces the manifest's block selection. Such a run is a
+/// debugging run: it cannot stand for the corpus gate.
+pub fn selection_is_custom() -> bool {
+    std::env::var_os("MEGA_EVM2_BLOCKS").is_some() || std::env::var_os("MEGA_EVM2_SETS").is_some()
+}
+
 /// The block files of a run: `MEGA_EVM2_BLOCKS=<set>:<n>[,<set>:<n>...]` or `MEGA_EVM2_SETS=d4,p9`
 /// (all blocks of each set, in block order), under `MEGA_EVM2_BLOCK_DIR` (required).
+/// A block named twice, in the list or in a manifest, is a panic: a repeated block must not stand
+/// in for a missing one.
 pub fn block_list() -> Vec<(String, String)> {
     let data = std::env::var("MEGA_EVM2_BLOCK_DIR").expect("MEGA_EVM2_BLOCK_DIR");
-    if let Ok(list) = std::env::var("MEGA_EVM2_BLOCKS") {
-        return list
+    select_blocks(
+        &data,
+        std::env::var("MEGA_EVM2_BLOCKS").ok().as_deref(),
+        std::env::var("MEGA_EVM2_SETS").ok().as_deref(),
+    )
+}
+
+/// The block numbers of `<data>/<set>/manifest.json`, in manifest order.
+fn manifest_numbers(data: &str, set: &str) -> Vec<String> {
+    let man: Value = serde_json::from_str(
+        &std::fs::read_to_string(format!("{data}/{set}/manifest.json")).expect("manifest"),
+    )
+    .expect("manifest json");
+    man.as_array().expect("manifest").iter().map(|b| b["number"].to_string()).collect()
+}
+
+fn select_blocks(data: &str, list: Option<&str>, sets: Option<&str>) -> Vec<(String, String)> {
+    let ids: Vec<(String, String)> = match list {
+        Some(list) => list
             .split(',')
             .filter(|s| !s.is_empty())
             .map(|s| {
                 let (set, n) = s.split_once(':').expect("set:number");
-                (set.to_string(), format!("{data}/{set}/{n}.json"))
+                (set.to_string(), n.to_string())
             })
-            .collect();
+            .collect(),
+        None => sets
+            .unwrap_or(DEFAULT_SETS)
+            .split(',')
+            .flat_map(|set| {
+                manifest_numbers(data, set).into_iter().map(move |n| (set.to_string(), n))
+            })
+            .collect(),
+    };
+    let mut seen = BTreeSet::new();
+    for (set, n) in &ids {
+        assert!(
+            seen.insert((set.clone(), n.clone())),
+            "duplicate block {set}:{n} in the selection"
+        );
     }
-    let sets = std::env::var("MEGA_EVM2_SETS").unwrap_or("d4,p9".into());
-    let mut out = Vec::new();
-    for set in sets.split(',') {
-        let man: Value = serde_json::from_str(
-            &std::fs::read_to_string(format!("{data}/{set}/manifest.json")).expect("manifest"),
-        )
-        .expect("manifest json");
-        for b in man.as_array().expect("manifest") {
-            out.push((set.to_string(), format!("{data}/{set}/{}.json", b["number"])));
-        }
+    ids.into_iter()
+        .map(|(set, n)| {
+            let path = format!("{data}/{set}/{n}.json");
+            (set, path)
+        })
+        .collect()
+}
+
+/// The identities (`set:number`) of every block the manifests of `MEGA_EVM2_SETS` (default
+/// `d4,p9`) under `MEGA_EVM2_BLOCK_DIR` name.
+pub fn manifest_identities() -> BTreeSet<String> {
+    let data = std::env::var("MEGA_EVM2_BLOCK_DIR").expect("MEGA_EVM2_BLOCK_DIR");
+    let sets = std::env::var("MEGA_EVM2_SETS").unwrap_or(DEFAULT_SETS.into());
+    sets.split(',')
+        .flat_map(|set| manifest_numbers(&data, set).into_iter().map(move |n| format!("{set}:{n}")))
+        .collect()
+}
+
+/// Asserts that the blocks a gate processed (`set:number`, in run order) are exactly the blocks
+/// of the manifests: none missing, none extra, none twice. Returns whether it was checked: a run
+/// with an environment selection (`selection_is_custom`) is a debugging run and is not.
+pub fn check_processed_identities(processed: &[String]) -> bool {
+    if selection_is_custom() {
+        return false;
     }
-    out
+    assert_same_identities(processed, &manifest_identities());
+    true
+}
+
+pub fn assert_same_identities(processed: &[String], manifest: &BTreeSet<String>) {
+    let set: BTreeSet<String> = processed.iter().cloned().collect();
+    assert_eq!(set.len(), processed.len(), "a block was processed twice: {processed:?}");
+    let missing: Vec<_> = manifest.difference(&set).collect();
+    let extra: Vec<_> = set.difference(manifest).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "processed blocks differ from the manifest: missing {missing:?}, extra {extra:?}"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest_dir(name: &str, numbers: &str) -> String {
+        let dir =
+            std::env::temp_dir().join(format!("mega-evm2-blockdb-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(dir.join("d4")).unwrap();
+        std::fs::write(dir.join("d4/manifest.json"), numbers).unwrap();
+        dir.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate block d4:1")]
+    fn test_duplicate_block_in_env_list_is_rejected() {
+        select_blocks("/data", Some("d4:1,p9:2,d4:1"), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate block d4:7")]
+    fn test_duplicate_block_in_manifest_is_rejected() {
+        let dir = manifest_dir("dup", r#"[{"number":7},{"number":8},{"number":7}]"#);
+        select_blocks(&dir, None, Some("d4"));
+    }
+
+    #[test]
+    fn test_distinct_blocks_are_listed_in_order() {
+        let dir = manifest_dir("ok", r#"[{"number":8},{"number":7}]"#);
+        let list = select_blocks(&dir, None, Some("d4"));
+        assert_eq!(list[0].1, format!("{dir}/d4/8.json"));
+        assert_eq!(list[1].1, format!("{dir}/d4/7.json"));
+        assert_eq!(select_blocks("/data", Some("d4:1,p9:1"), None).len(), 2);
+    }
+
+    #[test]
+    fn test_processed_identities_equal_to_manifest_pass() {
+        let manifest: BTreeSet<String> = ["d4:1", "p9:2"].map(String::from).into();
+        assert_same_identities(&["p9:2".into(), "d4:1".into()], &manifest);
+    }
+
+    #[test]
+    #[should_panic(expected = "missing [\"d4:19010529\"]")]
+    fn test_replaced_block_is_not_a_complete_run() {
+        // Two blocks processed and two in the manifest, but one is another block: the counts
+        // agree, the identities do not.
+        let manifest: BTreeSet<String> = ["d4:19010529", "p9:26400020"].map(String::from).into();
+        assert_same_identities(&["p9:26400020".into(), "p9:26400000".into()], &manifest);
+    }
+
+    #[test]
+    #[should_panic(expected = "processed twice")]
+    fn test_duplicate_processed_block_is_rejected() {
+        let manifest: BTreeSet<String> = ["d4:1", "p9:2"].map(String::from).into();
+        assert_same_identities(&["d4:1".into(), "d4:1".into(), "p9:2".into()], &manifest);
+    }
 }
