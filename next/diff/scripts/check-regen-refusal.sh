@@ -3,20 +3,25 @@
 # the corpus and writes nothing into it, whatever paths it is given. Refused with exit status 2,
 # before anything is built or written:
 #   - an output directory in the corpus: its `reference/` directory, a symlink to it, a directory
-#     below it (also spelled in other letter case, where the file system ignores case), the
-#     corpus itself;
+#     below it (also spelled in other letter case, where the file system ignores case, and below
+#     a corpus whose name ends in a line break), the corpus itself;
 #   - an archive path (`<out-dir>/reference-outputs.tar.zst`) that is a hard link or a symlink to a
 #     corpus archive, a symlink to another corpus file or to a missing path in the corpus, the
 #     corpus itself, a directory, or a symlink to a directory (the corpus's `reference/`, or one
 #     outside the corpus);
-#   - a cargo target directory in the corpus, or one whose `mega-evm2-reference` (where cargo
-#     builds) is the corpus;
-#   - in default mode, a corpus below `next/diff/data` or holding it (the default mode rewrites it).
+#   - a cargo target directory in the corpus, one whose `mega-evm2-reference` (where cargo
+#     builds) is the corpus, or one holding a link into the corpus (a symlink to the corpus or to a
+#     missing path in it, a hard link to a corpus file);
+#   - in default mode, a corpus below `next/diff/data` or holding it (the default mode rewrites it);
+#   - the same through a corpus made of symlinks to another one (an output directory in the linked
+#     corpus; a corpus that links into `next/diff/data`), and a corpus with a symlink that leads
+#     nowhere (the run could create its target).
 # Writing there would delete or replace corpus files, or write into a linked directory; for the
 # corpus archive, `--check` would then compare the new outputs with themselves.
 # Not refused, and left unchanged: a corpus elsewhere inside the output directory, at
 # `<out-dir>/stage`, deeper below it, or as another child. The run writes there only a new
-# directory of its own and the archive path, so no path it writes reaches such a corpus.
+# directory of its own and the archive path, so no path it writes reaches such a corpus. Nor a
+# corpus with a symlink cycle, which the check walks once.
 # The archive is renamed into place: a symlink to the corpus's `reference/` that appears at the
 # archive path during the build, after the checks, is replaced and not written through.
 #
@@ -139,13 +144,13 @@ data=$(stamp_dir "$here/data")
 # The output directory in the corpus.
 ln -s "$corpus/reference" "$tmp/alias"
 for out in "$corpus/reference" "$tmp/alias" "$corpus/reference/new" "$corpus"; do
-  refused corpus "$out"
+  refused 'the corpus (' "$out"
 done
 # A directory to be created below the corpus spelled in other letter case, where the file system
 # ignores case (macOS by default).
 upper=$tmp/CORPUS
 if [ -d "$upper" ]; then
-  refused corpus "$upper/reference/new"
+  refused 'the corpus (' "$upper/reference/new"
 fi
 
 # The archive path a corpus file or path, under another name.
@@ -155,7 +160,7 @@ ln -s "$corpus/reference/q11-oracles.tar.zst" "$tmp/soft/reference-outputs.tar.z
 ln -s "$corpus/real-blocks/keep.json" "$tmp/file/reference-outputs.tar.zst"
 ln -s "$corpus/reference/new.tar.zst" "$tmp/dangling/reference-outputs.tar.zst"
 for out in "$tmp/hard" "$tmp/soft" "$tmp/file" "$tmp/dangling"; do
-  refused corpus "$out"
+  refused 'the corpus (' "$out"
 done
 
 # The archive path a directory, or a symlink to one: the corpus's `reference/` (with its sentinel),
@@ -165,33 +170,73 @@ echo sentinel > "$tmp/outside/archive.tar.zst"
 echo sentinel > "$tmp/dir/reference-outputs.tar.zst/archive.tar.zst"
 ln -s "$corpus/reference" "$tmp/dirlink/reference-outputs.tar.zst"
 ln -s "$tmp/outside" "$tmp/outlink/reference-outputs.tar.zst"
-refused corpus "$tmp/dirlink"
+refused 'the corpus (' "$tmp/dirlink"
 refused 'a directory' "$tmp/outlink" "$tmp/outside"
 refused 'a directory' "$tmp/dir"
 
 # The corpus itself at the archive path.
 corpus=$tmp/at-archive/reference-outputs.tar.zst
 make_corpus "$corpus"
-refused corpus "$tmp/at-archive"
+refused 'the corpus (' "$tmp/at-archive"
 
 # The cargo target directory in the corpus, and the corpus as cargo's directory.
 corpus=$tmp/target-corpus
 make_corpus "$corpus"
 target=$corpus/target
-refused corpus "$tmp/elsewhere"
+refused 'the corpus (' "$tmp/elsewhere"
 corpus=$tmp/target-holder/mega-evm2-reference
 make_corpus "$corpus"
 target=$tmp/target-holder
-refused corpus "$tmp/elsewhere"
+refused 'the corpus (' "$tmp/elsewhere"
+
+# A link in cargo's directory into the corpus, where cargo (`release/`) or anything else writes: a
+# symlink to the corpus, one to a missing path in it, a hard link to a corpus file.
+corpus=$tmp/corpus
+target=$tmp/target-links
+mkdir -p "$target/mega-evm2-reference/tmp"
+ln -s "$corpus" "$target/mega-evm2-reference/release"
+refused 'the corpus (' "$tmp/elsewhere"
+rm "$target/mega-evm2-reference/release"
+ln -s "$corpus/reference/new" "$target/mega-evm2-reference/release"
+refused 'the corpus (' "$tmp/elsewhere"
+rm "$target/mega-evm2-reference/release"
+ln "$corpus/real-blocks/keep.json" "$target/mega-evm2-reference/tmp/keep.json"
+refused 'the corpus (' "$tmp/elsewhere"
 target=$tmp/target
+
+# A corpus directory whose name ends in a line break, which `$(...)` would drop, next to a corpus of
+# the name without it: the output directory below the first is still in the corpus.
+make_corpus "$tmp/newline"
+corpus=$tmp/newline$'\n'
+make_corpus "$corpus"
+refused 'the corpus (' "$corpus/nested-out"
 
 # Default mode: a corpus below `next/diff/data`, and one holding it (both only read here).
 modes=default
 corpus=$here/data/real-blocks
-refused corpus "$tmp/elsewhere"
+refused 'the corpus (' "$tmp/elsewhere"
 corpus=$here
-refused corpus "$tmp/elsewhere"
+refused 'the corpus (' "$tmp/elsewhere"
 modes="--check default"
+
+# A corpus made of links to another one covers that one: an output directory in the linked
+# corpus, and (default mode) a corpus that links into `next/diff/data`. A link that leads nowhere
+# is refused (the run could create its target).
+corpus=$tmp/farm
+mkdir -p "$corpus"
+ln -s "$tmp/corpus/real-blocks" "$corpus/real-blocks"
+ln -s "$tmp/corpus/reference" "$corpus/reference"
+refused 'the corpus (' "$tmp/corpus/reference/new"
+refused 'the corpus (' "$tmp/corpus/real-blocks/new"
+corpus=$tmp/farm-data
+mkdir -p "$corpus"
+ln -s "$here/data/real-blocks" "$corpus/real-blocks"
+ln -s "$tmp/corpus/reference" "$corpus/reference"
+modes=default refused 'the corpus (' "$tmp/elsewhere"
+corpus=$tmp/broken
+make_corpus "$corpus"
+ln -s "$tmp/elsewhere/reference-outputs.tar.zst" "$corpus/reference/next.tar.zst"
+refused 'leads nowhere' "$tmp/elsewhere"
 
 # A corpus elsewhere inside the output directory: not refused, not touched. A fresh corpus for each
 # run, so one run's damage cannot hide another's.
@@ -204,8 +249,13 @@ for mode in --check default; do
   done
 done
 
-# A directory outside the corpus: not refused, the run gets as far as the build.
+# A directory outside the corpus: not refused, the run gets as far as the build. Also with a link
+# cycle in the corpus, which the check walks once.
 corpus=$tmp/corpus
+reached "$tmp/elsewhere"
+corpus=$tmp/cycle
+make_corpus "$corpus"
+ln -s .. "$corpus/real-blocks/up"
 reached "$tmp/elsewhere"
 
 # The archive is renamed over its path: a symlink to the corpus's `reference/` that the stand-in

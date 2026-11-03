@@ -21,17 +21,20 @@
 #
 # A run deletes nothing in the corpus and writes nothing into it. It writes only: a new directory of
 # its own, `<out-dir>/stage.XXXXXX` (removed when the run succeeds; a failed run keeps it, with its
-# logs); the archive path, over which the new archive is renamed (rename(2)), so a link there is
-# replaced and never written through; cargo's directory `<target>/mega-evm2-reference`; and, in
-# default mode, `next/diff/data`. It creates <out-dir> and the target directory when missing. It
-# removes its own directory, the previous entry at the archive path, and, in default mode, what
-# `make-sample.sh` rewrites; nothing else.
+# logs; `make-sample.sh`'s scratch files go there too); the archive path, over which the new
+# archive is renamed (rename(2)), so a link there is replaced and never written through; cargo's
+# directory `<target>/mega-evm2-reference`; and, in default mode, `next/diff/data`. It creates
+# <out-dir> and the target directory when missing. It removes its own directory, the previous entry
+# at the archive path, and, in default mode, what `make-sample.sh` rewrites under `next/diff/data`;
+# nothing else.
 # Before anything is built or written (`refuse_corpus_writes.py`), it exits with status 2 when one
 # of these paths could reach the corpus: <out-dir> in the corpus (its `reference/`, a link to it, a
 # directory below it, the corpus itself); an archive path that resolves into the corpus (a symlink
-# to a corpus file, directory or missing path, or a hard link to a corpus archive) or is a
-# directory or a link to one; a target directory that overlaps the corpus; in default mode, a corpus
-# that overlaps `next/diff/data`. A corpus elsewhere inside <out-dir> is not touched. Replace the
+# to a corpus file, directory or missing path, or a hard link to a corpus file) or is a directory
+# or a link to one; a cargo directory in the corpus, holding it, or holding a link into it (cargo
+# writes anywhere below it); in default mode, a corpus that overlaps `next/diff/data`. The corpus
+# is everything reachable from `$MEGA_EVM2_CORPUS_DIR`, through its symlinks too; a symlink in it
+# that leads nowhere is refused. A corpus elsewhere inside <out-dir> is not touched. Replace the
 # corpus archive by hand once the regenerated one is reviewed: a `--check` against an archive the
 # run itself had replaced would compare the new outputs with themselves. `--check` takes the
 # expected outputs out of the corpus archive before it generates anything.
@@ -53,17 +56,24 @@ next=$(cd "$here/.." && pwd)
 # shellcheck source=common.sh
 source "$here/scripts/common.sh"
 refuse_overrides
-corpus=$(cd -P "$MEGA_EVM2_CORPUS_DIR" && pwd -P)
 
-# resolved <path>: <path> with every symlink resolved; components that do not exist yet are kept.
-resolved() { python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+# resolve <var> <path>: sets <var> to <path> with every symlink resolved (components that do not
+# exist yet are kept). Exact: a line break at the end of a name stays, where `$(...)` drops it.
+resolve() {
+  local r
+  r=$(python3 -I -c 'import os, sys; sys.stdout.write(os.path.realpath(sys.argv[1]) + "/")' "$2")
+  printf -v "$1" '%s' "${r%/}"
+}
 
 # Decided before anything is built or written, on the paths the run then uses (resolved, so a
 # directory it creates is exactly the one checked): none of them can reach the corpus, and the
 # archive `--check` compares with is the one `gate.sh full` reads (a regenerated archive wins over
 # the original one).
-out=$(resolved "$1")
-target=$(resolved "${CARGO_TARGET_DIR:-$next/target}")
+corpus='' out='' target=''
+resolve corpus "$MEGA_EVM2_CORPUS_DIR"
+[ -d "$corpus" ] || { echo "regen-reference.sh: MEGA_EVM2_CORPUS_DIR is not a directory: $MEGA_EVM2_CORPUS_DIR" >&2; exit 2; }
+resolve out "$1"
+resolve target "${CARGO_TARGET_DIR:-$next/target}"
 archive=$out/reference-outputs.tar.zst
 data=
 [ "$check" = 1 ] || data=$here/data
@@ -139,7 +149,9 @@ fi
 mkdir -p "$run/view/reference"
 ln -s "$corpus/real-blocks" "$run/view/real-blocks"
 ln -s "$archive" "$run/view/reference/reference-outputs.tar.zst"
-MEGA_EVM2_CORPUS_DIR=$run/view bash "$here/scripts/make-sample.sh"
+# Its scratch directory (`$CARGO_TARGET_DIR/mega-evm2-diff/make-sample`, which it removes first) is
+# put in this run's directory.
+MEGA_EVM2_CORPUS_DIR=$run/view CARGO_TARGET_DIR=$run/sample bash "$here/scripts/make-sample.sh"
 {
   grep '^#' "$here/data/expected.env"
   python3 -I "$here/scripts/count_expected.py" "$here/data/replay" "$here/data/block"
