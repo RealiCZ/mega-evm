@@ -106,11 +106,21 @@ and packs `<out-dir>/reference-outputs.tar.zst` in the layout above, which `gate
   Only `micros` is ignored.
 - Without `--check` it also re-cuts this sample with `make-sample.sh` from the new archive and rewrites `expected.env` from the regenerated files.
 
-`<out-dir>` must be outside the corpus.
-The script refuses, with exit status 2 and before it builds or writes anything, the corpus's `reference/` directory, a link to it or any directory inside the corpus, and a directory whose `reference-outputs.tar.zst` is a hard link or symlink to a corpus archive.
-Writing there would replace the corpus's archive, and `--check` would compare the new outputs with themselves.
+A run deletes nothing in the corpus and writes nothing into it.
+It writes only a new directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run succeeds; a failed run keeps it, with its logs), the archive path `<out-dir>/reference-outputs.tar.zst`, cargo's directory `<target>/mega-evm2-reference`, and, without `--check`, this directory.
+The new archive is renamed over the archive path, so a link there is replaced and never written through.
+Before it builds or writes anything, the script refuses, with exit status 2, every input for which one of these paths could reach the corpus:
+
+- `<out-dir>` in the corpus: the corpus's `reference/` directory, a link to it, any directory inside the corpus, or the corpus itself;
+- an archive path that resolves into the corpus (a symlink to a corpus file, directory or missing path, or a hard link to a corpus archive), or that is a directory or a link to one;
+- a cargo target directory that overlaps the corpus (one is or holds the other);
+- without `--check`, a corpus that overlaps this directory.
+
+Paths are compared after resolving symlinks, by device and inode, so another name of the corpus (a symlink, other letter case on a case-insensitive file system) counts.
+A corpus elsewhere inside `<out-dir>`, at `<out-dir>/stage` for instance, is left alone: no path the run writes reaches it.
+Replace the corpus archive by hand once the regenerated one is reviewed: a `--check` against an archive the run itself had replaced would compare the new outputs with themselves.
 `--check` takes the expected outputs out of the corpus archive before it generates anything.
-`scripts/check-regen-refusal.sh`, run by CI, checks the refusal on a scratch corpus.
+`scripts/check-regen-refusal.sh`, run by CI, checks each of these inputs on scratch corpora, in both modes.
 
 **Bumping the reference pin** (the `mega-evm` revision in `next/reference/Cargo.toml`) requires running `regen-reference.sh <out-dir>` and reviewing the resulting `git diff` of this directory:
 every changed file is a behavior change of the reference, and must be explained by the change that moved the pin.

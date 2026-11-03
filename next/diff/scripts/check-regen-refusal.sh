@@ -1,14 +1,28 @@
 #!/bin/bash
-# Checks that `regen-reference.sh` refuses an output directory in the corpus before it builds or
-# writes anything, in `--check` and in default mode: the corpus's `reference/` directory, a
-# symlink to it, a directory below it, the corpus itself, and a directory whose
-# `reference-outputs.tar.zst` is a hard link or a symlink to a corpus archive. Writing there would
-# replace the archive `--check` compares with (and `gate.sh full` reads), and `--check` would then
-# compare the new outputs with themselves. Also checks that a directory outside the corpus gets
-# as far as the build.
+# Checks that a run of `regen-reference.sh`, in `--check` and in default mode, deletes nothing in
+# the corpus and writes nothing into it, whatever paths it is given. Refused with exit status 2,
+# before anything is built or written:
+#   - an output directory in the corpus: its `reference/` directory, a symlink to it, a directory
+#     below it (also spelled in other letter case, where the file system ignores case), the
+#     corpus itself;
+#   - an archive path (`<out-dir>/reference-outputs.tar.zst`) that is a hard link or a symlink to a
+#     corpus archive, a symlink to another corpus file or to a missing path in the corpus, the
+#     corpus itself, a directory, or a symlink to a directory (the corpus's `reference/`, or one
+#     outside the corpus);
+#   - a cargo target directory in the corpus, or one whose `mega-evm2-reference` (where cargo
+#     builds) is the corpus;
+#   - in default mode, a corpus below `next/diff/data` or holding it (the default mode rewrites it).
+# Writing there would delete or replace corpus files, or write into a linked directory; for the
+# corpus archive, `--check` would then compare the new outputs with themselves.
+# Not refused, and left unchanged: a corpus elsewhere inside the output directory, at
+# `<out-dir>/stage`, deeper below it, or as another child. The run writes there only a new
+# directory of its own and the archive path, so no path it writes reaches such a corpus.
+# The archive is renamed into place: a symlink to the corpus's `reference/` that appears at the
+# archive path during the build, after the checks, is replaced and not written through.
 #
-# Runs on a scratch corpus of small archives, with a `cargo` on PATH that only records that it was
-# started; nothing is built. Prints `REGEN refusal ok`.
+# Runs on scratch corpora of small archives, with a `cargo` on PATH that records that it was
+# started and fails (for the rename case, writes the file the run packs and succeeds); nothing is
+# built. Every case runs; the failures are listed. Prints `REGEN refusal ok`.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -16,65 +30,199 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 source "$here/scripts/stamp.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-fail() { echo "check-regen-refusal.sh: $*" >&2; exit 1; }
+failed=0
+fail() {
+  echo "check-regen-refusal.sh: $*" >&2
+  failed=1
+}
 
-# A scratch corpus whose archives hold the members `--check` extracts.
-corpus=$tmp/corpus
-mkdir -p "$corpus/real-blocks" "$corpus/reference" "$tmp/members/oracles" "$tmp/members/raw/satin" \
-  "$tmp/members/raw/satin-block" "$tmp/bin"
+# The members `--check` extracts, for the scratch corpora's archives.
+mkdir -p "$tmp/members/oracles" "$tmp/members/raw/satin" "$tmp/members/raw/satin-block" "$tmp/bin"
 for f in satin-oracle.json oracles/fq.json oracles/fqbig.json oracles/fqh.json oracles/fqhbig.json \
   oracles/big.json oracles/harsh.json; do
   echo '{}' > "$tmp/members/$f"
 done
-for name in reference-outputs q11-oracles; do
-  echo "$name" > "$tmp/members/raw/satin/marker"
-  tar -cf - -C "$tmp/members" satin-oracle.json oracles raw | zstd -q -o "$corpus/reference/$name.tar.zst"
-done
+
+# make_corpus <dir>: a scratch corpus at <dir>: both archives, a block file, and a sentinel
+# `reference/archive.tar.zst` (the name a new archive moved into `reference/` would take).
+make_corpus() {
+  mkdir -p "$1/real-blocks" "$1/reference"
+  echo keep > "$1/real-blocks/keep.json"
+  echo sentinel > "$1/reference/archive.tar.zst"
+  for name in reference-outputs q11-oracles; do
+    echo "$name" > "$tmp/members/raw/satin/marker"
+    tar -cf - -C "$tmp/members" satin-oracle.json oracles raw | zstd -q -o "$1/reference/$name.tar.zst"
+  done
+}
+
+# state <path>: every path under <path>, where each symlink points, and the content of every file.
+state() {
+  if [ ! -e "$1" ] && [ ! -L "$1" ]; then
+    echo missing
+    return
+  fi
+  (
+    cd "$1"
+    find . | LC_ALL=C sort
+    find . -type l | LC_ALL=C sort | while IFS= read -r l; do echo "$l -> $(readlink "$l")"; done
+    find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort
+  )
+}
+
 cat > "$tmp/bin/cargo" << 'EOF'
 #!/bin/sh
+# Records that it was started and fails. With STANDIN_LINK set it writes the oracle file the run
+# packs, puts the symlink STANDIN_LINK -> STANDIN_LINK_TO during the last generator (block), and
+# succeeds.
 echo "cargo $*" >> "$CARGO_STARTED"
-exit 1
+[ -n "${STANDIN_LINK:-}" ] || exit 1
+[ -z "${MEGA_EVM2_ORACLE_OUT:-}" ] || echo '{}' > "$MEGA_EVM2_ORACLE_OUT"
+if [ -n "${MEGA_EVM2_BLOCK_OUT:-}" ]; then
+  ln -s "$STANDIN_LINK_TO" "$STANDIN_LINK"
+  echo planted >> "$CARGO_STARTED"
+fi
+exit 0
 EOF
 chmod +x "$tmp/bin/cargo"
 export CARGO_STARTED=$tmp/cargo-started
 
-ln -s "$corpus/reference" "$tmp/alias"
-mkdir -p "$tmp/hard" "$tmp/soft"
-ln "$corpus/reference/reference-outputs.tar.zst" "$tmp/hard/reference-outputs.tar.zst"
-ln -s "$corpus/reference/q11-oracles.tar.zst" "$tmp/soft/reference-outputs.tar.zst"
+# The corpus and cargo target directory of the next runs, and their modes.
+corpus=$tmp/corpus
+target=$tmp/target
+modes="--check default"
 
-# Every path and the content of every file under the corpus.
-corpus_state() { (cd "$corpus" && find . | LC_ALL=C sort && find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort); }
-before=$(corpus_state)
-data=$(stamp_dir "$here/data")
-
-# regen <args...>: runs regen-reference.sh on the scratch corpus; sets `status` and `log`.
+# regen <mode> <out-dir>: runs regen-reference.sh on $corpus with the stand-in cargo; sets `status`
+# and `log`.
 regen() {
   status=0
-  log=$(PATH="$tmp/bin:$PATH" MEGA_EVM2_CORPUS_DIR=$corpus CARGO_TARGET_DIR=$tmp/target \
-    bash "$here/scripts/regen-reference.sh" "$@" 2>&1) || status=$?
+  rm -f "$CARGO_STARTED"
+  local args=("$2")
+  [ "$1" = default ] || args=(--check "$2")
+  log=$(PATH="$tmp/bin:$PATH" MEGA_EVM2_CORPUS_DIR=$corpus CARGO_TARGET_DIR=$target \
+    bash "$here/scripts/regen-reference.sh" "${args[@]}" 2>&1) || status=$?
 }
 
-for out in "$corpus/reference" "$tmp/alias" "$corpus/reference/new" "$corpus" "$tmp/hard" "$tmp/soft"; do
-  for mode in --check default; do
-    if [ "$mode" = --check ]; then regen --check "$out"; else regen "$out"; fi
-    what="$mode $out"
+# refused <pattern> <out-dir> [<path>...]: in each of $modes the run exits 2 with a message
+# matching <pattern>, before cargo starts, and leaves the corpus, the target directory, <out-dir>
+# and every <path> as they were (a missing one is not created).
+refused() {
+  local pattern=$1 out=$2 mode p what before
+  shift 2
+  for mode in $modes; do
+    what="$mode $out (corpus $corpus)"
+    before=$(for p in "$corpus" "$target" "$out" "$@"; do state "$p"; done)
+    regen "$mode" "$out"
     [ "$status" = 2 ] || fail "$what: exit status $status, not the refusal's 2: $log"
-    grep -q 'corpus' <<< "$log" || fail "$what: the refusal does not name the corpus: $log"
+    grep -q -- "$pattern" <<< "$log" || fail "$what: the refusal does not say '$pattern': $log"
     [ ! -e "$CARGO_STARTED" ] || fail "$what: cargo started before the refusal"
-    [ ! -e "$tmp/target" ] || fail "$what: the target directory was created before the refusal"
-    [ "$(corpus_state)" = "$before" ] || fail "$what: the corpus changed"
+    [ "$(for p in "$corpus" "$target" "$out" "$@"; do state "$p"; done)" = "$before" ] \
+      || fail "$what: the corpus, the target, the output directory or one of: $* changed"
+  done
+}
+
+# reached <out-dir>: in each of $modes the run is not refused, gets as far as the build (the
+# stand-in cargo started), and leaves the corpus as it was.
+reached() {
+  local out=$1 mode what before
+  for mode in $modes; do
+    what="$mode $out (corpus $corpus)"
+    before=$(state "$corpus")
+    regen "$mode" "$out"
+    [ -s "$CARGO_STARTED" ] || fail "$what: refused or failed before the build: $log"
+    [ "$(state "$corpus")" = "$before" ] || fail "$what: the corpus changed: $log"
+  done
+}
+
+make_corpus "$corpus"
+data=$(stamp_dir "$here/data")
+
+# The output directory in the corpus.
+ln -s "$corpus/reference" "$tmp/alias"
+for out in "$corpus/reference" "$tmp/alias" "$corpus/reference/new" "$corpus"; do
+  refused corpus "$out"
+done
+# A directory to be created below the corpus spelled in other letter case, where the file system
+# ignores case (macOS by default).
+upper=$tmp/CORPUS
+if [ -d "$upper" ]; then
+  refused corpus "$upper/reference/new"
+fi
+
+# The archive path a corpus file or path, under another name.
+mkdir -p "$tmp/hard" "$tmp/soft" "$tmp/file" "$tmp/dangling"
+ln "$corpus/reference/reference-outputs.tar.zst" "$tmp/hard/reference-outputs.tar.zst"
+ln -s "$corpus/reference/q11-oracles.tar.zst" "$tmp/soft/reference-outputs.tar.zst"
+ln -s "$corpus/real-blocks/keep.json" "$tmp/file/reference-outputs.tar.zst"
+ln -s "$corpus/reference/new.tar.zst" "$tmp/dangling/reference-outputs.tar.zst"
+for out in "$tmp/hard" "$tmp/soft" "$tmp/file" "$tmp/dangling"; do
+  refused corpus "$out"
+done
+
+# The archive path a directory, or a symlink to one: the corpus's `reference/` (with its sentinel),
+# a directory outside the corpus, a directory in place.
+mkdir -p "$tmp/dirlink" "$tmp/outside" "$tmp/outlink" "$tmp/dir/reference-outputs.tar.zst"
+echo sentinel > "$tmp/outside/archive.tar.zst"
+echo sentinel > "$tmp/dir/reference-outputs.tar.zst/archive.tar.zst"
+ln -s "$corpus/reference" "$tmp/dirlink/reference-outputs.tar.zst"
+ln -s "$tmp/outside" "$tmp/outlink/reference-outputs.tar.zst"
+refused corpus "$tmp/dirlink"
+refused 'a directory' "$tmp/outlink" "$tmp/outside"
+refused 'a directory' "$tmp/dir"
+
+# The corpus itself at the archive path.
+corpus=$tmp/at-archive/reference-outputs.tar.zst
+make_corpus "$corpus"
+refused corpus "$tmp/at-archive"
+
+# The cargo target directory in the corpus, and the corpus as cargo's directory.
+corpus=$tmp/target-corpus
+make_corpus "$corpus"
+target=$corpus/target
+refused corpus "$tmp/elsewhere"
+corpus=$tmp/target-holder/mega-evm2-reference
+make_corpus "$corpus"
+target=$tmp/target-holder
+refused corpus "$tmp/elsewhere"
+target=$tmp/target
+
+# Default mode: a corpus below `next/diff/data`, and one holding it (both only read here).
+modes=default
+corpus=$here/data/real-blocks
+refused corpus "$tmp/elsewhere"
+corpus=$here
+refused corpus "$tmp/elsewhere"
+modes="--check default"
+
+# A corpus elsewhere inside the output directory: not refused, not touched. A fresh corpus for each
+# run, so one run's damage cannot hide another's.
+for mode in --check default; do
+  for sub in stage stage/deep/c corpus; do
+    out=$tmp/inside-$mode-${sub//\//-}
+    corpus=$out/$sub
+    make_corpus "$corpus"
+    modes=$mode reached "$out"
   done
 done
-[ ! -e "$corpus/reference/new" ] || fail "a refused run created its output directory"
 
-# A directory outside the corpus is not refused: the run reaches the build (which the stand-in
-# cargo fails), still without touching the corpus.
-for mode in --check default; do
-  rm -f "$CARGO_STARTED"
-  if [ "$mode" = --check ]; then regen --check "$tmp/elsewhere"; else regen "$tmp/elsewhere"; fi
-  [ -s "$CARGO_STARTED" ] || fail "$mode $tmp/elsewhere: refused or failed before the build: $log"
-  [ "$(corpus_state)" = "$before" ] || fail "$mode $tmp/elsewhere: the corpus changed"
-done
+# A directory outside the corpus: not refused, the run gets as far as the build.
+corpus=$tmp/corpus
+reached "$tmp/elsewhere"
+
+# The archive is renamed over its path: a symlink to the corpus's `reference/` that the stand-in
+# cargo puts there during the build is replaced, not written through. `--check` only: a default
+# run that got this far would go on to rewrite `next/diff/data`.
+corpus=$tmp/rename-corpus
+make_corpus "$corpus"
+out=$tmp/rename-out
+before=$(state "$corpus")
+export STANDIN_LINK=$out/reference-outputs.tar.zst STANDIN_LINK_TO=$corpus/reference
+regen --check "$out"
+unset STANDIN_LINK STANDIN_LINK_TO
+grep -q '^planted$' "$CARGO_STARTED" 2> /dev/null || fail "rename: the stand-in did not put the link: $log"
+[ "$(state "$corpus")" = "$before" ] || fail "rename: the corpus changed (the archive was written through the link): $log"
+{ [ -f "$out/reference-outputs.tar.zst" ] && [ ! -L "$out/reference-outputs.tar.zst" ]; } \
+  || fail "rename: the archive path is not the new archive: $(ls -l "$out" 2>&1)"
+
 [ "$(stamp_dir "$here/data")" = "$data" ] || fail "next/diff/data changed"
+[ "$failed" = 0 ] || exit 1
 echo "REGEN refusal ok"
