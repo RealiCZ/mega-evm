@@ -6,13 +6,16 @@
 //! the summary line, default `main`), `MEGA_EVM2_EXPECT` (the expected scenario count), and the
 //! scenario selectors of `shared/scenarios.rs` (`MEGA_EVM2_FUZZ*`, `MEGA_EVM2_ONLY`).
 //! Output: the `GATE` summary line; `MEGA_EVM2_OUT` additionally writes every comparison.
+//! Every reference entry must belong to a selected scenario: an extra one is a difference. A run
+//! that selects scenarios by name (`MEGA_EVM2_ONLY`) leaves the others out on purpose; it is a
+//! debugging run, does not check for extra entries, and prints `PARTIAL GATE ...`.
 
 use mega_evm2_diff::{
     driver::{run, scenarios},
     gate::{self, Verdict},
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[test]
 fn test_synthetic_matches_reference_plain_and_inspected() {
@@ -26,10 +29,22 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
         oracle.into_iter().map(|o| (o["name"].as_str().unwrap().to_owned(), o)).collect();
     assert_eq!(by_name.len(), oracle_count, "duplicate oracle names");
     let known = gate::known_differences();
+    let partial = std::env::var_os("MEGA_EVM2_ONLY").is_some();
     let mut report = Vec::new();
     let (mut matched, mut accepted, mut differ, mut missing) = (0u64, 0u64, 0u64, 0u64);
     let mut groups = BTreeMap::<&str, (u64, u64)>::new();
-    for s in scenarios::everything() {
+    let selected = scenarios::everything();
+    let mut extra: Vec<&String> = if partial {
+        Vec::new()
+    } else {
+        let names: HashSet<&str> = selected.iter().map(|s| s.name).collect();
+        by_name.keys().filter(|n| !names.contains(n.as_str())).collect()
+    };
+    extra.sort();
+    for name in &extra {
+        println!("EXTRA {name}");
+    }
+    for s in selected {
         let Some(o) = by_name.get(s.name) else {
             missing += 1;
             println!("MISSING {}", s.name);
@@ -83,10 +98,12 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
     // the hand-written scenarios); one that was selected and does not differ is `Differ` above.
     let total = report.len() as u64;
     println!(
-        "GATE {name} total={total} match={matched} known={accepted} differ={}",
-        differ + missing
+        "{}GATE {name} total={total} match={matched} known={accepted} differ={}",
+        if partial { "PARTIAL " } else { "" },
+        differ + missing + extra.len() as u64
     );
     assert_eq!(missing, 0, "missing oracle entries");
+    assert!(extra.is_empty(), "oracle entries of no selected scenario: {extra:?}");
     assert_eq!(differ, 0, "differential mismatches");
     assert!(!report.is_empty(), "empty selection");
     gate::expected("MEGA_EVM2_EXPECT", total);
