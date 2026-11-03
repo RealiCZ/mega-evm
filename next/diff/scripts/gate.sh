@@ -25,6 +25,8 @@ work=$target/mega-evm2-diff/$mode
 logs=$work/logs
 mkdir -p "$work" "$logs"
 export RUST_MIN_STACK=8388608
+# shellcheck source=stamp.sh
+source "$here/scripts/stamp.sh"
 
 # --- inputs -------------------------------------------------------------------------------------
 # Both modes end up with the same layout under $work:
@@ -35,7 +37,9 @@ export RUST_MIN_STACK=8388608
 #   fuzz/<name>.json                        reference, fuzz batches
 fuzz_batches=()  # name:mode:first..=last:count
 if [ "$mode" = sample ]; then
-  stamp=$(cat "$here/data/README.md" "$here/data/expected.env" | cksum)
+  bash "$here/scripts/check-stamp.sh" > /dev/null
+  # Every file of the sample, and this script (it defines the extracted layout).
+  stamp=$(stamp_dir "$here/data")-$(stamp_file "$here/scripts/gate.sh")
   if [ "$(cat "$work/.stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$work/blocks" "$work/replay" "$work/block" "$work/fuzz" "$work/main.json"
     mkdir -p "$work/fuzz"
@@ -64,7 +68,7 @@ else
   : "${MEGA_EVM2_CORPUS_DIR:?set MEGA_EVM2_CORPUS_DIR to the full corpus}"
   corpus=$(cd "$MEGA_EVM2_CORPUS_DIR" && pwd)
   archive=$corpus/reference/q11-oracles.tar.zst
-  stamp=$(cksum < "$archive")
+  stamp=$(stamp_file "$archive")-$(stamp_file "$here/scripts/gate.sh")
   if [ "$(cat "$work/.stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$work/extract" "$work/replay" "$work/block" "$work/fuzz" "$work/main.json"
     mkdir -p "$work/extract" "$work/fuzz"
