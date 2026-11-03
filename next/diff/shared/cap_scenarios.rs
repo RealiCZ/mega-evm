@@ -21,23 +21,23 @@ fn cap(name: &'static str, gas: u64) -> Scenario {
 }
 
 pub fn all() -> Vec<Scenario> {
-    let gases: [(&str, u64); 3] =
-        [("2p32m1", (1 << 32) - 1), ("2p32", 1 << 32), ("block", BLOCK_GAS_LIMIT)];
+    // (legacy, deposit, EIP-7702) names per gas limit.
+    let rows: [(u64, [&'static str; 3]); 3] = [
+        ((1 << 32) - 1, ["cap_legacy_2p32m1", "cap_deposit_2p32m1", "cap_7702_2p32m1"]),
+        (1 << 32, ["cap_legacy_2p32", "cap_deposit_2p32", "cap_7702_2p32"]),
+        (BLOCK_GAS_LIMIT, ["cap_legacy_block", "cap_deposit_block", "cap_7702_block"]),
+    ];
     let mut v = Vec::new();
-    for (tag, gas) in gases {
-        v.push(cap(leak(format!("cap_legacy_{tag}")), gas));
-        let mut s = cap(leak(format!("cap_deposit_{tag}")), gas);
+    for (gas, [legacy, deposit, eip7702]) in rows {
+        v.push(cap(legacy, gas));
+        let mut s = cap(deposit, gas);
         s.deposit = Some(0);
         v.push(s);
-        let mut s = cap(leak(format!("cap_7702_{tag}")), gas);
+        let mut s = cap(eip7702, gas);
         s.auths =
             vec![Auth { chain_id: 1, address: super::D, nonce: 0, authority: Some(AUTHORITY) }];
         s.accounts.push(Account { address: super::D, code: vec![op::STOP], ..Account::default() });
         v.push(s);
     }
     v
-}
-
-fn leak(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
 }
