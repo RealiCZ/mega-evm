@@ -6,13 +6,15 @@ name: next
 # next/evm2-fork.env and from nowhere else.
 #
 # check     — every pull request and push that touches next/** or this file.
-#             The commands are next/diff/scripts/ci-local.sh.
+#             The commands are next/diff/scripts/ci-local.sh (with the sample gate,
+#             its negative controls and the gate fault injection).
 # reference — daily, and pulls or pushes that touch next/reference/**,
 #             next/diff/data/**, or next/diff/shared/**.
 #             Runs next/diff/scripts/check-reference.sh sample.
 # full      — daily and workflow_dispatch. Downloads MEGA_EVM2_CORPUS_URL
 #             (repository variable, else secret of the same name) and runs
-#             gate.sh full. Succeeds with a notice when the URL is unset.
+#             gate.sh full, then controls.sh full. Succeeds with a notice when
+#             the URL is unset.
 
 on:
   pull_request:
@@ -112,7 +114,7 @@ jobs:
             sudo apt-get install -y --no-install-recommends zstd
           fi
 
-      - name: Fmt, clippy, test, no_std, and the sample gate
+      - name: Fmt, clippy, test, no_std, the sample gate, its controls and faults
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
         run: bash next/diff/scripts/ci-local.sh
@@ -272,7 +274,7 @@ jobs:
             sudo apt-get install -y --no-install-recommends zstd
           fi
 
-      - name: Run the full corpus gate
+      - name: Run the full corpus gate and its negative controls
         env:
           CORPUS_URL_VAR: ${{ vars.MEGA_EVM2_CORPUS_URL }}
           CORPUS_URL_SECRET: ${{ secrets.MEGA_EVM2_CORPUS_URL }}
@@ -318,3 +320,5 @@ jobs:
           fi
           echo "Running gate.sh full on the downloaded corpus."
           MEGA_EVM2_CORPUS_DIR=$corpus bash next/diff/scripts/gate.sh full
+          echo "Running controls.sh full on the downloaded corpus."
+          MEGA_EVM2_CORPUS_DIR=$corpus bash next/diff/scripts/controls.sh full
