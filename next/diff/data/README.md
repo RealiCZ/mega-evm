@@ -22,6 +22,14 @@ Expected counts of the sample: 707 main scenarios (706 match, 1 known difference
 20 blocks with 499 matching transactions, 40 pre-block calls and 52 refusals in the engine replay;
 479 included and 72 refused transactions in the block executor.
 
+## The `cap_` scenarios
+
+Satin does not apply the EIP-8037 total transaction gas cap (2^32 − 1); a transaction is bounded by the block's gas limit alone (10,000,000,000 in the synthetic block).
+Nine scenarios (group `cap`) call a contract that stores one slot, as a legacy transaction, an OP deposit and an EIP-7702 transaction, each at gas limit 2^32 − 1, 2^32 and the block's gas limit.
+The reference accepts and executes all nine, and the engine matches it.
+A system-address transaction is promoted to a deposit by the block executor, which the synthetic format does not go through, so the block gates cover that kind.
+EIP-2930 and EIP-1559 are not expressed: the shared transaction format has no access list or fee-cap fields, and the two sides build their transactions separately, so adding them means extending both builders.
+
 ## Selection of the sample blocks
 
 Corpus `d4` holds blocks sampled across the whole history of the chain, so it covers the early specs;
