@@ -23,10 +23,14 @@ pub struct Known {
     pub candidate: String,
 }
 
-/// The accepted differences of the synthetic gate.
+/// The accepted differences of the synthetic gate: `known-differences.toml` as built, or the file
+/// `MEGA_EVM2_KNOWN_DIFFERENCES` names (fault injection; the gate scripts refuse it from outside).
 pub fn known_differences() -> Vec<Known> {
-    let doc: toml::Table =
-        include_str!("../known-differences.toml").parse().expect("known-differences.toml");
+    let text = match std::env::var("MEGA_EVM2_KNOWN_DIFFERENCES") {
+        Ok(path) => std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}")),
+        Err(_) => include_str!("../known-differences.toml").to_owned(),
+    };
+    let doc: toml::Table = text.parse().expect("known-differences.toml");
     let entries =
         doc.get("difference").and_then(toml::Value::as_array).cloned().unwrap_or_default();
     entries
