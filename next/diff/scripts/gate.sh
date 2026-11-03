@@ -1,12 +1,10 @@
 #!/bin/bash
 # Runs the strict differential gates of `next/diff` and prints one summary line per gate:
 #
-#   GATE main total=707 match=706 known=1 differ=0
+#   GATE main total=<n> match=<n> known=<n> differ=0
 #   GATE fuzz total=<n> match=<n> differ=0
 #   GATE replay blocks=<b> match=<m> pre=<p> refused=<r> differ=0 applied=0
 #   GATE block blocks=<b> included=<i> refused=<r> counters=<b> post=<b> differ=0 applied=0
-#
-# The expected main counts (`MAIN_EXPECT`) are defined once, in `common.sh`.
 #
 # Usage: gate.sh sample|full
 #   sample  the in-repo sample under `next/diff/data`
@@ -14,7 +12,7 @@
 #
 # The run fails (exit status 1) when a gate fails or does not print its summary line, or when a
 # summary differs from the expected counts, and it refuses to start when a `MEGA_EVM2_*` variable
-# other than `MEGA_EVM2_CORPUS_DIR` is set (see `common.sh`). Inputs, expected counts and the gate
+# other than `MEGA_EVM2_CORPUS_DIR` is set (see `common.sh`). Inputs and the gate
 # runs are in `gate-lib.sh`. Test output goes to logs in a directory of this run,
 # `<target>/mega-evm2-diff/<mode>/runs/gate.XXXXXX`; the tail of a failing gate's log is printed.
 # Runs of `gate.sh`, `controls.sh` and `faults.sh` on one cargo target may run at the same time.

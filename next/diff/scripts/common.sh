@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# Sourced by gate.sh, controls.sh, faults.sh, check-reference.sh and regen-reference.sh.
+# Sourced by gate.sh, controls.sh, faults.sh, check-reference.sh, regen-reference.sh and
+# make-sample.sh.
 #
 # The six fuzz batches of the full gate, as name:mode:first..=last:count. `gate.sh full` runs the
 # engine on them and `regen-reference.sh` generates their reference outputs, so both read this list.
