@@ -1,3 +1,8 @@
+# The reference generator: the Satin implementation under review (mega-evm, a revm-based engine)
+# run on the shared scenarios and the recorded blocks. Its own workspace, because it resolves a
+# different dependency graph than the Satin engine on evm2 (the root workspace's alloy 2.0 pins).
+#
+# `next/diff/scripts/check-reference.sh` regenerates the sample outputs with it.
 [workspace]
 
 [package]
@@ -10,3 +15,49 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
+# The Satin implementation under review: mega-evm at PR #409 (5e3f30ad).
+mega-evm = { git = "https://github.com/megaeth-labs/mega-evm", rev = "5e3f30ad4692f3815105dea1368f789f032ddd2b", features = ["test-utils"] }
+
+# revm: the crates.io version the megaeth fork is based on; the patch below redirects it.
+revm = { version = "=40.0.3" }
+op-revm = { git = "https://github.com/ethereum-optimism/optimism", rev = "f67d87cd5c9992b62d215c043917b94e3f019629" }
+
+# alloy
+alloy-consensus = { version = "2.0.5" }
+alloy-eips = { version = "2.0.5" }
+alloy-evm = { version = "0.36.0" }
+alloy-op-evm = { git = "https://github.com/ethereum-optimism/optimism", rev = "f67d87cd5c9992b62d215c043917b94e3f019629" }
+alloy-primitives = { version = "1.6.0" }
+op-alloy-consensus = { git = "https://github.com/ethereum-optimism/optimism", rev = "f67d87cd5c9992b62d215c043917b94e3f019629" }
+
+# misc
+serde_json = { version = "1.0" }
+
+# Patches are not inherited from a dependency: these are the blocks of mega-evm's own root
+# Cargo.toml at the pinned revision.
+[patch.crates-io]
+# megaeth fork of revm (revm 40.0.3 + the revm 43 gas core + the megaeth hooks).
+# All twelve crates move together, otherwise the build resolves a second copy of revm.
+revm = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-primitives = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-interpreter = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-context = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-context-interface = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-handler = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-database = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-database-interface = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-state = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-bytecode = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-precompile = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+revm-inspector = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43b70f2175f9ce0132cc343283f9a29548" }
+
+[patch."https://github.com/ethereum-optimism/optimism"]
+# megaeth fork of op-revm (the OP monorepo copy ported to the revm fork's gas core), built
+# against the revm pin above.
+op-revm = { git = "https://github.com/megaeth-labs/op-revm", rev = "8c0db939291e1c4cbf2375782d1483bc371d6b94" }
+
+# The reference builds are for output, not for measurement: skip debug info and link-time
+# optimization to keep the build short. The outputs do not depend on either.
+[profile.release]
+debug = "none"
+lto = false
