@@ -95,6 +95,12 @@ and packs `<out-dir>/reference-outputs.tar.zst` in the layout above, which `gate
   Only `micros` is ignored.
 - Without `--check` it also re-cuts this sample with `make-sample.sh` from the new archive and rewrites `expected.env` from the regenerated files.
 
+`<out-dir>` must be outside the corpus.
+The script refuses, with exit status 2 and before it builds or writes anything, the corpus's `reference/` directory, a link to it or any directory inside the corpus, and a directory whose `reference-outputs.tar.zst` is a hard link or symlink to a corpus archive.
+Writing there would replace the corpus's archive, and `--check` would compare the new outputs with themselves.
+`--check` takes the expected outputs out of the corpus archive before it generates anything.
+`scripts/check-regen-refusal.sh`, run by CI, checks the refusal on a scratch corpus.
+
 **Bumping the reference pin** (the `mega-evm` revision in `next/reference/Cargo.toml`) requires running `regen-reference.sh <out-dir>` and reviewing the resulting `git diff` of this directory:
 every changed file is a behavior change of the reference, and must be explained by the change that moved the pin.
 Replace the corpus archive with the new `reference-outputs.tar.zst` in the same change.

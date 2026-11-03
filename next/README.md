@@ -33,6 +33,7 @@ The only accepted difference is listed in `diff/known-differences.toml`.
 `diff/scripts/check-reference.sh sample` regenerates the sample's reference outputs with
 `reference/` and checks they equal the stored ones.
 `diff/scripts/regen-reference.sh [--check] <out-dir>` does it for the full corpus and, without `--check`, rewrites the sample and `diff/data/expected.env`; moving the reference pin requires running it (see `diff/data/README.md`).
+`<out-dir>` must be outside the corpus: the script refuses a directory whose new archive would replace the corpus's, before it builds anything.
 
 `gate.sh` and the other scripts refuse to run when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set:
 the official runner decides what is gated, so an inherited block selection or override cannot narrow a gate.
@@ -93,7 +94,7 @@ Local builds keep the path dependency above.
 
 **check** runs on every pull request and on every push that touches `next/**` or the workflow file.
 It installs the toolchain from `rust-toolchain.toml`, adds the `riscv64imac-unknown-none-elf` target, and caches the build.
-It then runs `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings` for `mega-evm2` (without `--features compare`, then with it), `op-evm2`, and `mega-evm2-diff`, then `cargo test --locked -p mega-evm2 -p op-evm2`, a `no_std` check of `op-evm2` for `riscv64imac-unknown-none-elf`, `diff/scripts/gate.sh sample`, `diff/scripts/controls.sh sample` and `diff/scripts/faults.sh`.
+It then runs `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings` for `mega-evm2` (without `--features compare`, then with it), `op-evm2`, and `mega-evm2-diff`, then `cargo test --locked -p mega-evm2 -p op-evm2`, a `no_std` check of `op-evm2` for `riscv64imac-unknown-none-elf`, `diff/scripts/check-regen-refusal.sh` (on a scratch corpus, `regen-reference.sh` refuses an output directory in the corpus before it builds anything), `diff/scripts/gate.sh sample`, `diff/scripts/controls.sh sample` and `diff/scripts/faults.sh`.
 
 **reference** runs every day, and on pull requests and pushes that touch `next/reference/**`, `next/diff/data/**`, or `next/diff/shared/**`.
 It runs `diff/scripts/check-reference.sh sample`, which rebuilds the Satin implementation under review from git and compares it with the stored sample.

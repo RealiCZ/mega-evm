@@ -39,6 +39,7 @@ run cargo test --locked -p mega-evm2 -p op-evm2
 run cargo test --locked -p mega-evm2-diff --lib
 run cargo test --locked -p mega-evm2-diff --test known_differences
 run cargo check --locked -p op-evm2 --target riscv64imac-unknown-none-elf --no-default-features
+run bash diff/scripts/check-regen-refusal.sh
 run bash diff/scripts/gate.sh sample
 run bash diff/scripts/controls.sh sample
 run bash diff/scripts/faults.sh
