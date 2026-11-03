@@ -128,12 +128,8 @@ gate_link() {
   rm -f "$2.new.$$"
   ln -s "$1" "$2.new.$$"
   [ -L "$2" ] || rm -rf "$2"
-  gate_rename "$2.new.$$" "$2"
+  rename_exact "$2.new.$$" "$2"
 }
-
-# gate_rename <from> <to>: rename(2), which replaces <to> itself even when it is a link to a
-# directory (where `mv` would move <from> into that directory).
-gate_rename() { python3 -I -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$1" "$2"; }
 
 # gate_flock <fd> sh|ex|un [<note>]: flock(2) on this shell's file descriptor <fd>, through python3
 # (`flock(1)` is not on every system). The lock belongs to the open file, so it outlives the python

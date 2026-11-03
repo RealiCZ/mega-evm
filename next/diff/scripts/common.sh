@@ -25,6 +25,10 @@ abs_dir() {
   (cd "$1" && pwd)
 }
 
+# rename_exact <from> <to>: rename(2), which replaces <to> itself even when it is a link to a
+# directory (where `mv` would move <from> into that directory, writing through the link).
+rename_exact() { python3 -I -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$1" "$2"; }
+
 # run_dir <dir> <name>: creates and prints a new directory `<dir>/runs/<name>.XXXXXX` for one run's
 # logs and scratch files, so runs that share <dir> (two scripts on one cargo target) keep their
 # files apart. Run directories under `<dir>/runs` older than a day are removed first.
