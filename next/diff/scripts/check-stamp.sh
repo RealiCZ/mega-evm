@@ -1,5 +1,5 @@
 #!/bin/bash
-# Checks that the cache stamp of `gate.sh` follows the content of the sample data: an unchanged
+# Checks that the cache stamp of `gate-lib.sh` follows the content of the sample data: an unchanged
 # copy gets the same stamp, and changing one byte of one data file changes it.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)

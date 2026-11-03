@@ -1,4 +1,4 @@
-# Sourced by gate.sh and check-stamp.sh.
+# Sourced by gate-lib.sh and check-stamp.sh.
 #
 # stamp_dir <dir>: one line that changes when any file under <dir> is added, removed, renamed or
 # changed in content (sorted relative paths with the SHA-256 of each file's content).
