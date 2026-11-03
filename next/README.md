@@ -36,10 +36,35 @@ The only accepted difference is listed in `diff/known-differences.toml`.
 
 `gate.sh` and the other scripts refuse to run when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set:
 the official runner decides what is gated, so an inherited block selection or override cannot narrow a gate.
-Running `cargo test -p mega-evm2-diff` directly with those variables stays available for debugging; a run with `MEGA_EVM2_BLOCKS` or `MEGA_EVM2_SETS` prints `PARTIAL GATE ...` lines.
+Running `cargo test -p mega-evm2-diff` directly with those variables stays available for debugging; a run with `MEGA_EVM2_BLOCKS`, `MEGA_EVM2_SETS` or `MEGA_EVM2_ONLY` prints `PARTIAL GATE ...` lines.
+A synthetic gate also fails on a reference entry that no selected scenario has, except in a run that selects scenarios by name (`MEGA_EVM2_ONLY`).
 
 The reference is pinned to mega-evm `5e3f30ad`, the head of the Satin review pull request (reachable through `refs/pull/409/head`).
 Move the pin to a tag or a merged commit before that pull request's branch disappears, or the reference can no longer be built.
+
+## Negative controls and fault injection
+
+A green gate means something only if the gate goes red on a wrong engine or a wrong reference.
+Two scripts show that it does, and CI runs both.
+
+`diff/scripts/controls.sh sample|full` runs the negative controls listed in `diff/negative-controls.toml`.
+Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`, which `MEGA_EVM2_DISABLE=<name>` turns off (feature `compare` only).
+Each control names one case (a scenario, a fuzz seed or a recorded block), the gate that runs it, and in `why` what the fix does.
+The script runs the case with the switch on, where the gate must pass, and with the switch off, where the gate must report a difference for that case; a panic, a harness error or a failure for another reason is a miss.
+`sample` runs the controls whose case is in the in-repo sample, `full` runs all of them on the full corpus.
+The last line is `CONTROLS scope=<s> total=<n> caught=<n> missed=<m> baseline_failed=<b> unlisted=<u> stale=<t>`, and the script fails unless `missed`, `baseline_failed`, `unlisted` and `stale` are all 0.
+A switch in the source without a control is `unlisted` and a control whose switch is gone is `stale`, so a new `off("…")` without a manifest entry fails CI.
+
+To add a control for a new switch, find a case that differs with the switch off: run a gate test directly with `MEGA_EVM2_DISABLE=<name>` and look for `DIFFER` lines or a non-zero `differ=`.
+Prefer a case of the sample, and add a `[[control]]` with the switch, the gate, the case, its scope and a one-line `why` (the manifest's header lists the keys).
+Use `scope = "full"` only when no sample case catches the switch, and say so in `why`.
+
+`diff/scripts/faults.sh` injects faults into a copy of the sample's reference data, one at a time, and runs the gate each one concerns through the code `gate.sh` accepts and rejects with; the repository is not modified.
+The faults (listed in `diff/scripts/faults.py`) change a value of every field the gates compare (outcome fields, inspected frames, pre-block calls, receipts, block counters and post-state), remove, duplicate or add an entry, change an expected count, mark a reference whose plain and inspected runs disagree, hand a transaction back to the reference (Satin-applied), and make the accepted difference of `known-differences.toml` miss (a stale entry, another field, another case, another value, or the entry listed twice).
+A fault counts as rejected only when the gate fails and its output shows the check the fault names, while the unmutated run's output does not.
+The unmutated copy must pass every gate first (the baselines).
+The last line is `FAULTS total=<n> rejected=<n> accepted=<a> baselines=<k> passed=<k>`, and the script fails unless `accepted` is 0 and every baseline passed.
+When a gate gains a compared field or a new check, add a fault for it.
 
 ## Building
 
@@ -65,7 +90,7 @@ Local builds keep the path dependency above.
 
 **check** runs on every pull request and on every push that touches `next/**` or the workflow file.
 It installs the toolchain from `rust-toolchain.toml`, adds the `riscv64imac-unknown-none-elf` target, and caches the build.
-It then runs `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings` for `mega-evm2` (without `--features compare`, then with it), `op-evm2`, and `mega-evm2-diff`, then `cargo test --locked -p mega-evm2 -p op-evm2`, a `no_std` check of `op-evm2` for `riscv64imac-unknown-none-elf`, and `diff/scripts/gate.sh sample`.
+It then runs `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings` for `mega-evm2` (without `--features compare`, then with it), `op-evm2`, and `mega-evm2-diff`, then `cargo test --locked -p mega-evm2 -p op-evm2`, a `no_std` check of `op-evm2` for `riscv64imac-unknown-none-elf`, `diff/scripts/gate.sh sample`, `diff/scripts/controls.sh sample` and `diff/scripts/faults.sh`.
 
 **reference** runs every day, and on pull requests and pushes that touch `next/reference/**`, `next/diff/data/**`, or `next/diff/shared/**`.
 It runs `diff/scripts/check-reference.sh sample`, which rebuilds the Satin implementation under review from git and compares it with the stored sample.
@@ -73,5 +98,5 @@ It runs `diff/scripts/check-reference.sh sample`, which rebuilds the Satin imple
 **full** runs every day and from `workflow_dispatch`.
 It downloads the corpus archive from the repository variable `MEGA_EVM2_CORPUS_URL`, or from the secret of the same name when the variable is unset, into a temporary directory.
 The archive (tar.zst, tar.gz, tar.xz, tar.bz2, zip, or tar) must unpack to the layout in `diff/data/README.md`: a directory that contains `real-blocks/` and `reference/reference-outputs.tar.zst` (or the original `reference/q11-oracles.tar.zst`).
-The job then runs `MEGA_EVM2_CORPUS_DIR=<that directory> diff/scripts/gate.sh full`.
+The job then runs `MEGA_EVM2_CORPUS_DIR=<that directory> diff/scripts/gate.sh full`, then `diff/scripts/controls.sh full` on the same directory.
 When neither the variable nor the secret is set, the job prints a notice and succeeds without running the gate.
