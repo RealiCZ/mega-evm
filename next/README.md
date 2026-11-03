@@ -54,7 +54,7 @@ The gate harness's fixture choices that make the engine's inputs match the refer
 Each control names one case (a scenario, a fuzz seed or a recorded block), the gate that runs it, and in `why` what the fix does.
 The script runs the case with the switch on, where the gate must pass, and with the switch off, where the gate must report a difference for that case; a panic, a harness error or a failure for another reason is a miss.
 `sample` runs the controls whose case is in the in-repo sample, `full` runs all of them on the full corpus.
-The last line is `CONTROLS scope=<s> total=<n> caught=<n> missed=<m> baseline_failed=<b> unlisted=<u> stale=<t>`, and the script fails unless `missed`, `baseline_failed`, `unlisted` and `stale` are all 0.
+The last line is `CONTROLS scope=<s> total=<n> caught=<n> missed=<m> baseline_failed=<b> unlisted=<u> stale=<t>`, and the script fails unless `missed`, `baseline_failed`, `unlisted` and `stale` are all 0 and every gate (main, fuzz, replay and block) ran at least one control (a gate that ran none is reported as `NO_CONTROL <gate>`), so a run that proves nothing cannot pass.
 A switch in `mega-evm2/src` or `diff` without a table is `unlisted` and a table whose switch is gone from its source is `stale`, so a new `off("…")` in either without a manifest entry fails CI.
 The source scan is textual: it finds `off("<name>")` with whitespace or line breaks inside the parentheses and an optional trailing comma, as rustfmt writes a broken call, but not a switch name built at run time.
 

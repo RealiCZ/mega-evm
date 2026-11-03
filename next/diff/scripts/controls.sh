@@ -21,8 +21,11 @@
 #
 # Prints one line per control, and last:
 #   CONTROLS scope=<s> total=<n> caught=<n> missed=<m> baseline_failed=<b> unlisted=<u> stale=<t>
-# Exit status 0 only when missed, baseline_failed, unlisted and stale are all 0. Like `gate.sh`, it
-# refuses to start when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set.
+# Exit status 0 only when missed, baseline_failed, unlisted and stale are all 0 and every gate
+# (main, fuzz, replay, block; both modes have cases of all four) ran at least one control, so a
+# run that proves nothing, or nothing about one gate, fails; a gate that ran none is reported as
+# `NO_CONTROL <gate>`. Like `gate.sh`, it refuses to start when a `MEGA_EVM2_*` variable other
+# than `MEGA_EVM2_CORPUS_DIR` is set.
 set -euo pipefail
 
 mode=${1:-}
@@ -111,7 +114,7 @@ verdict() {
 # source_dir <table>: the source a manifest table's switches are in.
 source_dir() { if [ "$1" = harness ]; then echo next/diff; else echo next/mega-evm2/src; fi; }
 
-total=0 caught=0 missed=0 baseline_failed=0 unlisted=0 stale=0
+total=0 caught=0 missed=0 baseline_failed=0 unlisted=0 stale=0 gates_run=" "
 while read -r kind switch gate _ case; do
   case "$kind" in
     UNLISTED) unlisted=$((unlisted + 1)); echo "UNLISTED $switch: no [[$gate]] in negative-controls.toml"; continue ;;
@@ -120,6 +123,7 @@ while read -r kind switch gate _ case; do
     *) continue ;;
   esac
   total=$((total + 1))
+  gates_run="$gates_run$gate "
   scenario="" test=synthetic
   case "$gate" in
     main)
@@ -172,5 +176,14 @@ while read -r kind switch gate _ case; do
   esac
 done <<< "$list"
 
+no_control=0
+for gate in main fuzz replay block; do
+  case "$gates_run" in
+    *" $gate "*) ;;
+    *) no_control=$((no_control + 1)); echo "NO_CONTROL $gate: no control of the $gate gate ran in the $mode run" ;;
+  esac
+done
+
 echo "CONTROLS scope=$mode total=$total caught=$caught missed=$missed baseline_failed=$baseline_failed unlisted=$unlisted stale=$stale"
-[ "$missed" = 0 ] && [ "$baseline_failed" = 0 ] && [ "$unlisted" = 0 ] && [ "$stale" = 0 ]
+[ "$total" -gt 0 ] && [ "$no_control" = 0 ] &&
+  [ "$missed" = 0 ] && [ "$baseline_failed" = 0 ] && [ "$unlisted" = 0 ] && [ "$stale" = 0 ]

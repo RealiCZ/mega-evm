@@ -358,7 +358,7 @@ why = "The skip-cold checks of SLOAD, the account opcodes and SELFDESTRUCT see s
 
 [[control]]
 switch = "system_nonce"
-gate = "replay"
+gate = "block"
 block = "d4:3224158"
 scope = "sample"
 why = "A system-address transaction's nonce and EIP-3607 are checked (the deposit path it runs on checks neither); off, a stale system transaction runs instead of being refused."
