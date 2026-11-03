@@ -8,3 +8,27 @@ edition = "2024"
 version = "0.1.0"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# megaeth
+op-evm2 = { path = "op-evm2", default-features = false }
+
+# evm2: our thin fork of alloy-rs/evm2, checked out next to this repository.
+# Switch both to a git rev of the fork once it is pushed.
+# Features are chosen by each member, so that `op-evm2` still builds without `std`.
+evm2 = { path = "../../evm2/crates/evm2", default-features = false }
+evm2-macros = { path = "../../evm2/crates/macros" }
+
+# alloy
+alloy-consensus = { version = "2.5.0", default-features = false }
+alloy-eips = { version = "2.5.0", default-features = false }
+alloy-primitives = { version = "1.7.0", default-features = false }
+alloy-rlp = { version = "0.3", default-features = false }
+
+# misc
+secp256k1 = { version = "0.33.1", default-features = false }
+thiserror = { version = "2", default-features = false }
+
+# op-evm2's differential parity tests: the op-revm revision pinned by Foundry.
+op-revm = { git = "https://github.com/foundry-rs/optimism", rev = "206d26cedb9d861b983d89fc71e1122187dfa877", default-features = false }
+revm = { version = "43.0.2", default-features = false }
