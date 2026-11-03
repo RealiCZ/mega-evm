@@ -73,13 +73,25 @@ jobs:
           printf 'EVM2_FORK_REPO=%s\n' "$EVM2_FORK_REPO" >> "$GITHUB_ENV"
           printf 'EVM2_FORK_REV=%s\n' "$EVM2_FORK_REV" >> "$GITHUB_ENV"
 
+      # The fork's default branch is checked out first; the pinned commit is then fetched by hash, so
+      # a pin that was never pushed fails with its own message instead of a checkout error.
       - name: Checkout evm2
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ env.EVM2_FORK_REPO }}
-          ref: ${{ env.EVM2_FORK_REV }}
           path: evm2
           persist-credentials: false
+
+      - name: Check that the evm2 fork pin is pushed
+        working-directory: evm2
+        run: |
+          set -euo pipefail
+          if ! git fetch --no-tags --depth=1 "https://github.com/${EVM2_FORK_REPO}.git" "$EVM2_FORK_REV" \
+            || ! git cat-file -e "${EVM2_FORK_REV}^{commit}" \
+            || ! git checkout --detach --quiet "$EVM2_FORK_REV"; then
+            echo "fork pin not pushed: commit ${EVM2_FORK_REV} is not in ${EVM2_FORK_REPO}. Push it there or update next/evm2-fork.env." >&2
+            exit 1
+          fi
 
       - name: Install the next/ toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
@@ -117,7 +129,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           path: mega-evm
-          # Keep the read token so the path filter can fetch the base commit.
+          persist-credentials: false
 
       - name: Pull request touches the reference inputs
         id: pr
@@ -126,7 +138,8 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          if ! git fetch --no-tags --depth=1 origin "$BASE"; then
+          # The repository is public: the base is fetched over https without the token.
+          if ! git fetch --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" "$BASE"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -147,7 +160,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! git fetch --no-tags --depth=1 origin "$BEFORE"; then
+          if ! git fetch --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" "$BEFORE"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -169,8 +182,8 @@ jobs:
           rust-src-dir: mega-evm/next
           rustflags: ""
           cache: true
-          # Lockfile of next/reference. The script builds into next/target; the registry cache is what this restores.
-          cache-workspaces: mega-evm/next/reference
+          # The script builds next/reference into next/target/mega-evm2-reference.
+          cache-workspaces: "mega-evm/next/reference -> ../target/mega-evm2-reference"
           cache-shared-key: next-reference
 
       - name: Install zstd
@@ -222,13 +235,25 @@ jobs:
           printf 'EVM2_FORK_REPO=%s\n' "$EVM2_FORK_REPO" >> "$GITHUB_ENV"
           printf 'EVM2_FORK_REV=%s\n' "$EVM2_FORK_REV" >> "$GITHUB_ENV"
 
+      # The fork's default branch is checked out first; the pinned commit is then fetched by hash, so
+      # a pin that was never pushed fails with its own message instead of a checkout error.
       - name: Checkout evm2
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ env.EVM2_FORK_REPO }}
-          ref: ${{ env.EVM2_FORK_REV }}
           path: evm2
           persist-credentials: false
+
+      - name: Check that the evm2 fork pin is pushed
+        working-directory: evm2
+        run: |
+          set -euo pipefail
+          if ! git fetch --no-tags --depth=1 "https://github.com/${EVM2_FORK_REPO}.git" "$EVM2_FORK_REV" \
+            || ! git cat-file -e "${EVM2_FORK_REV}^{commit}" \
+            || ! git checkout --detach --quiet "$EVM2_FORK_REV"; then
+            echo "fork pin not pushed: commit ${EVM2_FORK_REV} is not in ${EVM2_FORK_REPO}. Push it there or update next/evm2-fork.env." >&2
+            exit 1
+          fi
 
       - name: Install the next/ toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
@@ -281,13 +306,13 @@ jobs:
           corpus=""
           while IFS= read -r dir; do
             root=$(dirname "$dir")
-            if [ -f "$root/reference/q11-oracles.tar.zst" ]; then
+            if [ -f "$root/reference/reference-outputs.tar.zst" ] || [ -f "$root/reference/q11-oracles.tar.zst" ]; then
               corpus=$root
               break
             fi
           done < <(find "$extract" -type d -name real-blocks | sort)
           if [ -z "$corpus" ]; then
-            echo "the corpus archive has no real-blocks/ next to reference/q11-oracles.tar.zst" >&2
+            echo "the corpus archive has no real-blocks/ next to reference/reference-outputs.tar.zst or reference/q11-oracles.tar.zst" >&2
             find "$extract" -maxdepth 3 -print >&2
             exit 1
           fi
