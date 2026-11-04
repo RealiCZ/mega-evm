@@ -17,8 +17,8 @@ next=$(cd "$here/.." && pwd)
 source "$here/scripts/common.sh"
 refuse_overrides
 target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
-# This run's directory (removed when the outputs are identical).
-work=$(run_dir "$target/mega-evm2-diff/reference-sample" check)
+# This script's directory, cleared at the start (removed when the outputs are identical).
+work=$(fresh_dir "$target/mega-evm2-diff/reference-sample")
 export CARGO_TARGET_DIR=$target/mega-evm2-reference
 export RUST_MIN_STACK=8388608
 export CARGO_NET_GIT_FETCH_WITH_CLI=${CARGO_NET_GIT_FETCH_WITH_CLI:-true}

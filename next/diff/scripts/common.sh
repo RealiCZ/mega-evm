@@ -29,13 +29,11 @@ abs_dir() {
 # directory (where `mv` would move <from> into that directory, writing through the link).
 rename_exact() { python3 -I -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$1" "$2"; }
 
-# run_dir <dir> <name>: creates and prints a new directory `<dir>/runs/<name>.XXXXXX` for one run's
-# logs and scratch files, so runs that share <dir> (two scripts on one cargo target) keep their
-# files apart. Run directories under `<dir>/runs` older than a day are removed first.
-run_dir() {
-  mkdir -p "$1/runs"
-  find "$1/runs" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2> /dev/null || true
-  mktemp -d "$1/runs/$2.XXXXXX"
+# fresh_dir <dir>: empties <dir> (a script's logs and scratch files), creates it and prints it.
+fresh_dir() {
+  rm -rf "${1:?}"
+  mkdir -p "$1"
+  echo "$1"
 }
 
 # refuse_overrides: exits 2 when the environment carries any `MEGA_EVM2_*` variable except

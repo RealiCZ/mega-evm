@@ -14,10 +14,9 @@
 #     FUZZ_BATCHES   the fuzz batches, space-separated `name:mode:first..=last:count`
 #     EXPECT_REPLAY  the counts of the replay summary before `differ=0 applied=0`
 #     EXPECT_BLOCK   the counts of the block summary before `differ=0 applied=0`
-#   runs/<script>.XXXXXX/                   one run's logs (`run_dir` of `common.sh`)
+#   <script>-logs/                          one run's logs, cleared at the start of the run
 #
-# Runs may share a work directory (`gate.sh full` and `controls.sh full` on one cargo target, at
-# the same time): see `gate_inputs`.
+# Two gate scripts must not run on the same cargo target at the same time.
 
 gate_lib_diff=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 gate_lib_next=$(cd "$gate_lib_diff/.." && pwd)
@@ -27,21 +26,9 @@ source "$gate_lib_diff/scripts/stamp.sh"
 # gate_inputs sample|full <work>: fills <work> with the inputs of the sample (`next/diff/data`)
 # or of the full corpus ($MEGA_EVM2_CORPUS_DIR) and writes <work>/expect.env. The extracted files
 # are reused while the sample (or the corpus archive) and this file are unchanged.
-#
-# Runs that share <work> do not change each other's inputs. The check and the extraction run
-# under an exclusive lock (`<work>/.inputs.lock`), so one run extracts and the others then reuse
-# its files; afterwards the calling script holds `<work>/.readers.lock` shared until it exits.
-# When the inputs are current (same stamp, the blocks link already pointing at the corpus, the
-# same `expect.env`), nothing is written. Inputs that must change (another sample, archive,
-# corpus or expected counts) are replaced only with the readers' lock held exclusively, that is
-# when no other run reads them; the link and `expect.env` are replaced by renaming a new one over
-# them. Call it once per process, from the script's own shell (not a subshell): the locks are held
-# on its file descriptors 8 and 9.
 gate_inputs() {
   local mode=$1 work=$2 stamp corpus archive batches blocks=""
   mkdir -p "$work"
-  exec 8>> "$work/.inputs.lock" 9>> "$work/.readers.lock"
-  gate_flock 8 ex "gate inputs: waiting for another run to prepare $work"
   if [ "$mode" = sample ]; then
     bash "$gate_lib_diff/scripts/check-stamp.sh" > /dev/null
     # Every file of the sample, and this file (it defines the extracted layout).
@@ -58,6 +45,13 @@ gate_inputs() {
     blocks=$corpus/real-blocks
     batches="${FULL_FUZZ_BATCHES[*]}"
   fi
+  if [ "$(cat "$work/.stamp" 2> /dev/null)" != "$stamp" ]; then
+    # No stamp while the files are incomplete: an interrupted extraction is redone.
+    rm -f "$work/.stamp"
+    gate_extract "$mode" "$work" "${archive:-}"
+    echo "$stamp" > "$work/.stamp"
+  fi
+  [ -z "$blocks" ] || { rm -rf "$work/blocks"; ln -s "$blocks" "$work/blocks"; }
   (
     # shellcheck disable=SC1091
     source "$gate_lib_diff/data/expected.env"
@@ -65,26 +59,7 @@ gate_inputs() {
     [ "$mode" = full ] && replay=$EXPECT_FULL_REPLAY block=$EXPECT_FULL_BLOCK
     printf '%s="%s"\n' EXPECT_MAIN "$MAIN_EXPECT" FUZZ_BATCHES "$batches" \
       EXPECT_REPLAY "$replay" EXPECT_BLOCK "$block"
-  ) > "$work/expect.env.$$"
-  if [ "$(cat "$work/.stamp" 2> /dev/null)" = "$stamp" ] &&
-    { [ -z "$blocks" ] || [ "$(readlink "$work/blocks" 2> /dev/null)" = "$blocks" ]; } &&
-    cmp -s "$work/expect.env.$$" "$work/expect.env"; then
-    rm -f "$work/expect.env.$$"
-    gate_flock 9 sh
-  else
-    gate_flock 9 ex "gate inputs: waiting for the runs that read the current inputs of $work"
-    if [ "$(cat "$work/.stamp" 2> /dev/null)" != "$stamp" ]; then
-      # No stamp while the files are incomplete: an interrupted extraction is redone.
-      rm -f "$work/.stamp"
-      gate_extract "$mode" "$work" "${archive:-}"
-      echo "$stamp" > "$work/.stamp"
-    fi
-    [ -z "$blocks" ] || gate_link "$blocks" "$work/blocks"
-    mv -f "$work/expect.env.$$" "$work/expect.env"
-    gate_flock 9 sh
-  fi
-  gate_flock 8 un
-  exec 8>&-
+  ) > "$work/expect.env"
 }
 
 # gate_extract sample|full <work> [<archive>]: extracts the inputs into <work> (the blocks too
@@ -120,36 +95,6 @@ gate_extract() {
     for name in fq fqbig fqh fqhbig big harsh; do mv "$work/extract/oracles/$name.json" "$work/fuzz/$name.json"; done
     rm -rf "$work/extract"
   fi
-}
-
-# gate_link <target> <link>: points <link> at <target> by renaming a new link over it (an older
-# layout's directory at <link> is removed first).
-gate_link() {
-  rm -f "$2.new.$$"
-  ln -s "$1" "$2.new.$$"
-  [ -L "$2" ] || rm -rf "$2"
-  rename_exact "$2.new.$$" "$2"
-}
-
-# gate_flock <fd> sh|ex|un [<note>]: flock(2) on this shell's file descriptor <fd>, through python3
-# (`flock(1)` is not on every system). The lock belongs to the open file, so it outlives the python
-# process: it lasts until `un`, or until this shell and every child that inherited <fd> have
-# exited. A lock that has to wait prints <note> on stderr first.
-gate_flock() {
-  python3 -I -c '
-import fcntl, sys
-fd, op, note = int(sys.argv[1]), sys.argv[2], sys.argv[3]
-if op == "un":
-    fcntl.flock(fd, fcntl.LOCK_UN)
-    sys.exit()
-mode = fcntl.LOCK_SH if op == "sh" else fcntl.LOCK_EX
-try:
-    fcntl.flock(fd, mode | fcntl.LOCK_NB)
-except BlockingIOError:
-    if note:
-        print(note, file=sys.stderr, flush=True)
-    fcntl.flock(fd, mode)
-' "$1" "$2" "${3:-}"
 }
 
 gate_unz() { zstd -q -d -f -o "$2" "$1"; }

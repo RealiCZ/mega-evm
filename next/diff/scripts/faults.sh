@@ -34,8 +34,9 @@ target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 base=$target/mega-evm2-diff/sample
 gate_inputs sample "$base"
-# This run's directory: a passing run removes it, a failing one keeps it for the lines' `see`.
-work=$(run_dir "$base" faults)
+# This script's directory, cleared at the start: a passing run removes it, a failing one keeps it
+# for the lines' `see`.
+work=$(fresh_dir "$base/faults")
 
 cd "$next"
 if ! cargo test --release --locked -p mega-evm2-diff --no-run > "$work/build.log" 2>&1; then

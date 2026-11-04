@@ -42,7 +42,7 @@ target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 work=$target/mega-evm2-diff/$mode
 gate_inputs "$mode" "$work"
-logs=$(run_dir "$work" controls)
+logs=$(fresh_dir "$work/controls-logs")
 # shellcheck disable=SC1091
 source "$work/expect.env"
 

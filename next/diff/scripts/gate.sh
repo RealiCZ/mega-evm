@@ -13,9 +13,9 @@
 # The run fails (exit status 1) when a gate fails or does not print its summary line, or when a
 # summary differs from the expected counts, and it refuses to start when a `MEGA_EVM2_*` variable
 # other than `MEGA_EVM2_CORPUS_DIR` is set (see `common.sh`). Inputs and the gate
-# runs are in `gate-lib.sh`. Test output goes to logs in a directory of this run,
-# `<target>/mega-evm2-diff/<mode>/runs/gate.XXXXXX`; the tail of a failing gate's log is printed.
-# Runs of `gate.sh`, `controls.sh` and `faults.sh` on one cargo target may run at the same time.
+# runs are in `gate-lib.sh`. Test output goes to logs in a directory of this script,
+# `<target>/mega-evm2-diff/<mode>/gate-logs`, cleared at the start of a run; the tail of a failing
+# gate's log is printed. Do not run two gate scripts on the same cargo target at the same time.
 set -euo pipefail
 
 mode=${1:-}
@@ -32,7 +32,7 @@ target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 work=$target/mega-evm2-diff/$mode
 gate_inputs "$mode" "$work"
-logs=$(run_dir "$work" gate)
+logs=$(fresh_dir "$work/gate-logs")
 
 fail=0
 summaries=()
