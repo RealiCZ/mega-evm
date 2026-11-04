@@ -80,7 +80,7 @@ real-blocks/
 reference/
   reference-outputs.tar.zst         reference outputs, extracted by `gate.sh full` (made by `regen-reference.sh`;
                                     when absent the original `q11-oracles.tar.zst` is read instead):
-    satin-oracle.json               synthetic main (707 scenarios)
+    satin-oracle.json               synthetic main (709 scenarios)
     oracles/{fq,fqbig,fqh,fqhbig,big,harsh}.json
                                     the six fuzz batches, 25,000 scenarios in total
     raw/satin/<set>/<n>.jsonl       engine replay reference
