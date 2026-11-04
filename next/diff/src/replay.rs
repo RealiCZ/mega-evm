@@ -109,7 +109,7 @@ pub fn new_evm(h: &Header, chain_id: u64, db: Evm2Db) -> Evm<'static, MegaTypes>
         block_env(h),
         mega_evm2::tx::registry(),
         evm2::evm::Db::new(db),
-        mega_evm2::intercept::SatinProvider::new(),
+        mega_evm2::precompiles(),
     );
     // Read storage of an account the database lacks, as revm does.
     evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));

@@ -308,7 +308,7 @@ impl PrecompileProvider<OpEvmTypes> for OpPrecompiles {
     }
 
     fn execute(
-        &self,
+        &mut self,
         evm: &mut Evm<'_, OpEvmTypes>,
         message: &Message<OpEvmTypes>,
         gas: &mut GasTracker,

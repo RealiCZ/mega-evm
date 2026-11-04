@@ -491,26 +491,21 @@ fn det_built(det: &DetentionState, msg: &Message<MegaTypes>) -> bool {
     det.frames.len() == msg.depth as usize + 1
 }
 
-/// Input-only price catalog of the Satin set that the scenarios reach (Satin
-/// `PricedPrecompiles`).
+/// Input-only quotes of the Satin set's fixed-formula entries (Satin `PricedPrecompiles`):
+/// ECRECOVER, SHA256, RIPEMD160, IDENTITY, the BN254 addition and multiplication, and KZG point
+/// evaluation (repriced to 100,000). Every other entry is probed (`precompile_price_of`).
 pub fn precompile_price(address: &alloy_primitives::Address, input: &[u8]) -> Option<u64> {
-    let words = (input.len() as u64).div_ceil(32);
-    let last = address.0[19];
-    if address.0[..18] != [0u8; 18] || (address.0[18] != 0 && !(address.0[18] == 1 && last == 0)) {
+    if address.0[..19] != [0u8; 19] {
         return None;
     }
-    if address.0[18] == 1 {
-        return Some(6_900); // P256VERIFY (Osaka)
-    }
-    match last {
+    let words = (input.len() as u64).div_ceil(32);
+    match address.0[19] {
         1 => Some(3_000),
         2 => Some(60 + 12 * words),
         3 => Some(600 + 120 * words),
         4 => Some(15 + 3 * words),
         6 => Some(150),
         7 => Some(6_000),
-        8 => Some(45_000 + 34_000 * (input.len() as u64 / 192)),
-        9 => input.get(..4).map(|r| u32::from_be_bytes(r.try_into().unwrap()) as u64),
         10 => Some(100_000),
         _ => None,
     }
@@ -588,18 +583,16 @@ pub fn no_debit_halt(gas: &mut Gas) {
     gas.tracker_mut().record_failed_charge(before, u64::MAX);
 }
 
-/// The full price catalogue. An entry with an input-only quote is priced by it; every other entry
-/// of
-/// the Satin set (ModExp on the Osaka schedule, the BN254 pairing and the BLS12-381 MSMs and
-/// pairing behind op-evm2's Karst size caps, BLAKE2F, the other BLS12-381 entries, P256VERIFY)
-/// is priced by running it on a tracker with no gas: its first charge fails and the failed-charge
-/// record
-/// holds the charge (`GasTracker::failed_charge`), before any of its work; an input it refuses
-/// before any gas check (over a size cap, a malformed length) is priced at nothing, as Satin's
-/// op-revm fork prices it.
+/// The full price catalogue. An entry with an input-only quote (`precompile_price`) is priced by
+/// it; every other entry of the Satin set (ModExp on the Osaka schedule, the BN254 pairing and the
+/// BLS12-381 MSMs and pairing behind op-evm2's Karst size caps, BLAKE2F, the other BLS12-381
+/// entries, P256VERIFY) is priced by running it on a tracker with no gas: its first charge fails
+/// and the failed-charge record holds the charge (`GasTracker::failed_charge`), before any of its
+/// work; an input it refuses before any gas check (over a size cap, a malformed length) is priced
+/// at nothing, as Satin's op-revm fork prices it.
 pub fn precompile_price_of(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> Option<u64> {
     let p = crate::precompile_map().get(&msg.code_address)?;
-    if let Some(price) = p.required_gas(&msg.input) {
+    if let Some(price) = precompile_price(&msg.code_address, &msg.input) {
         return Some(price);
     }
     if crate::off("precompile_catalog") {

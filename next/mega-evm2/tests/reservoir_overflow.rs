@@ -16,7 +16,7 @@ use evm2::{
     inspector::Inspector,
     interpreter::{Interpreter, Message, MessageResult},
 };
-use mega_evm2::{MegaSpec, MegaTypes, intercept::SatinProvider, satin_version, tx::registry};
+use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
 use op_evm2::OpTxEnvelope;
 
 /// 2^63 + 10^9: the reservoir is above 2^63 once the 200M execution gas is taken out.
@@ -108,7 +108,7 @@ fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
         block,
         registry(),
         Db::new(db),
-        SatinProvider::new(),
+        precompiles(),
     );
     evm.state_mut().set_read_absent_storage(true);
     let ext = evm.ext_mut();

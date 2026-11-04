@@ -39,7 +39,7 @@ use evm2::{
         instructions::{self as ins, create_with_state_charge},
         op,
     },
-    precompiles::PrecompileMap,
+    precompiles::{PrecompileMap, Precompiles},
     utils::WordExt,
     version::{GasId, StateGasSite},
 };
@@ -231,8 +231,7 @@ pub fn satin_version() -> Version {
     v
 }
 
-/// The Satin precompile set: op-evm2's Karst map, KZG repriced to 100,000, every entry the
-/// catalog prices carrying its input-only gas quote.
+/// The Satin precompile set: op-evm2's Karst map, KZG repriced to 100,000.
 pub fn precompile_map() -> &'static PrecompileMap<MegaTypes> {
     static MAP: OnceLock<PrecompileMap<MegaTypes>> = OnceLock::new();
     MAP.get_or_init(|| {
@@ -249,28 +248,16 @@ pub fn precompile_map() -> &'static PrecompileMap<MegaTypes> {
             } else {
                 p
             };
-            let p = match a.0[19] {
-                1 => p.with_required_gas(|i| {
-                    detention::precompile_price(&Address::with_last_byte(1), i).unwrap()
-                }),
-                2 => p.with_required_gas(|i| {
-                    detention::precompile_price(&Address::with_last_byte(2), i).unwrap()
-                }),
-                3 => p.with_required_gas(|i| {
-                    detention::precompile_price(&Address::with_last_byte(3), i).unwrap()
-                }),
-                4 => p.with_required_gas(|i| {
-                    detention::precompile_price(&Address::with_last_byte(4), i).unwrap()
-                }),
-                6 => p.with_required_gas(|_| 150),
-                7 => p.with_required_gas(|_| 6_000),
-                10 => p.with_required_gas(|_| 100_000),
-                _ => p,
-            };
             out.insert(p);
         }
         out
     })
+}
+
+/// The Satin precompile provider: evm2's `Precompiles` over [`precompile_map`]. The system
+/// contracts are not in it; the `before` message hook answers them.
+pub fn precompiles() -> Precompiles<MegaTypes> {
+    Precompiles::new(std::borrow::Cow::Borrowed(precompile_map()))
 }
 
 fn kzg100k(
@@ -1030,7 +1017,7 @@ pub fn count_start(evm: &mut Evm<'_, MegaTypes>) -> Option<(u8, u64)> {
 pub struct StartHooks;
 
 fn is_precompile(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
-    evm.precompiles().contains_message(msg)
+    evm.precompiles().contains(&msg.call_target)
 }
 
 fn is_answered(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
@@ -1093,9 +1080,7 @@ impl MessageHooks<MegaTypes> for StartHooks {
         if let Some(answer) = intercept::hint_before(evm, msg) {
             return Ok(Some(answer));
         }
-        if evm.ext().intercept_before &&
-            let Some(answer) = intercept::answer_before(evm, msg)
-        {
+        if let Some(answer) = intercept::answer_before(evm, msg) {
             return Ok(Some(answer));
         }
         if off("precompile_hold") {

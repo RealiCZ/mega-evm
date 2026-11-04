@@ -326,7 +326,7 @@ pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
         block,
         mega_evm2::tx::registry(),
         evm2::evm::Db::new(RecordingDb { inner: db(s), reads }),
-        mega_evm2::intercept::SatinProvider::new(),
+        mega_evm2::precompiles(),
     );
     // Read storage of an account the database lacks, as revm does.
     evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));

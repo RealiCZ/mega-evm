@@ -22,8 +22,7 @@ use evm2::{
 use mega_evm2::{
     MegaSpec, MegaTypes, SEQUENCER_REGISTRY,
     block::BlockExecutor,
-    intercept::SatinProvider,
-    satin_version,
+    precompiles, satin_version,
     tx::{ORACLE, SEQUENCER_REGISTRY_CODE_HASH, registry},
 };
 use op_evm2::{OpTxEnvelope, TxDeposit};
@@ -94,7 +93,7 @@ fn satin_evm(db: InMemoryDB, block_gas_limit: u64) -> Evm<'static, MegaTypes> {
         block,
         registry(),
         Db::new(db),
-        SatinProvider::new(),
+        precompiles(),
     );
     evm.state_mut().set_read_absent_storage(true);
     let ext = evm.ext_mut();

@@ -13,7 +13,7 @@ use evm2::{
     evm::{AccountInfo, Db, InMemoryDB},
     interpreter::InstrStop,
 };
-use mega_evm2::{MegaSpec, MegaTypes, intercept::SatinProvider, satin_version, tx::registry};
+use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
 use op_evm2::OpTxEnvelope;
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -61,7 +61,7 @@ fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
         block,
         registry(),
         Db::new(db),
-        SatinProvider::new(),
+        precompiles(),
     );
     evm.state_mut().set_read_absent_storage(true);
     let ext = evm.ext_mut();

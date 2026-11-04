@@ -161,7 +161,6 @@ pub struct Lite {
     pub destroyed: Vec<Address>,
     /// Growth counted on the transaction (a deposit's created caller), survives failure.
     pub tx_growth: i64,
-    pub intercept_before: bool,
     pub is_system: bool,
     pub deposit_created_caller: bool,
     pub top_started: bool,
@@ -217,7 +216,6 @@ impl Lite {
         self.slot_undo.clear();
         self.destroyed.clear();
         self.tx_growth = 0;
-        self.intercept_before = true;
         self.is_system = false;
         self.deposit_created_caller = false;
         self.top_started = false;

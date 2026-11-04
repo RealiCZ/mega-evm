@@ -1,6 +1,5 @@
-//! Satin's `MegaLimitControl` interceptor as a precompile provider (the thin evm2 fork's message
-//! dispatch, alloy-rs/evm2#523): dispatch by
-//! message (scheme guard and selector in `contains_message`, so DELEGATECALL, CALLCODE and an
+//! Satin's `MegaLimitControl` interceptor, answered from the `before` message hook: dispatch by
+//! message (scheme guard and selector in [`is_intercepted`], so DELEGATECALL, CALLCODE and an
 //! unknown selector run the contract's bytecode), the value policy (`NonZeroTransfer()`), and the
 //! answer `remainingComputeGas()` = the caller's regular gas after the forward plus the forward,
 //! at most detention's allowance (Satin `system/limit_control.rs`).
@@ -8,11 +7,8 @@
 use crate::{MegaTypes, detention::regular_spent};
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use evm2::{
-    Evm, PrecompileError,
-    evm::PrewarmSet,
+    Evm,
     interpreter::{GasTracker, Message, MessageKind},
-    precompile::{PrecompileOutput, PrecompileProvider},
-    precompiles::{MovePrecompileError, PrecompileId, Precompiles},
 };
 
 /// Satin's `MegaLimitControl` system contract.
@@ -28,70 +24,20 @@ pub fn non_zero_transfer() -> Bytes {
     Bytes::copy_from_slice(&keccak256("NonZeroTransfer()")[..4])
 }
 
-#[derive(Debug)]
-pub struct SatinProvider {
-    pub base: Precompiles<MegaTypes>,
-}
-
-impl SatinProvider {
-    pub fn new() -> Self {
-        Self { base: Precompiles::new(std::borrow::Cow::Borrowed(crate::precompile_map())) }
+/// Whether the `before` hook answers `m` for a system contract: `MegaAccessControl` or
+/// `MegaLimitControl`, called with CALL or STATICCALL and a selector the contract answers.
+pub fn is_intercepted(m: &Message<MegaTypes>) -> bool {
+    if m.call_target == crate::satin_ext::ACCESS_CONTROL && !crate::off("access_control") {
+        // `MegaAccessControl`, scheme guard then selector.
+        return matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) &&
+            crate::satin_ext::access_control_method(&m.input).is_some();
     }
-}
-
-impl PrecompileProvider<MegaTypes> for SatinProvider {
-    fn addresses(&self) -> Vec<Address> {
-        // The system contract is not a precompile: its address is not pre-warmed.
-        self.base.addresses()
+    if m.call_target == LIMIT_CONTROL {
+        // Scheme guard, then the selector on its four bytes.
+        return matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) &&
+            m.input.get(..4) == Some(&remaining_compute_gas_selector()[..]);
     }
-
-    fn warm_addresses(&self, warm: &mut PrewarmSet) {
-        self.base.warm_addresses(warm);
-    }
-
-    fn precompile_ids(&self) -> Vec<(Address, PrecompileId)> {
-        self.base.precompile_ids()
-    }
-
-    fn contains(&self, address: &Address) -> bool {
-        *address == LIMIT_CONTROL || self.base.contains(address)
-    }
-
-    fn contains_message(&self, m: &Message<MegaTypes>) -> bool {
-        if m.call_target == crate::satin_ext::ACCESS_CONTROL && !crate::off("access_control") {
-            // `MegaAccessControl`, scheme guard then selector.
-            return matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) &&
-                crate::satin_ext::access_control_method(&m.input).is_some();
-        }
-        if m.call_target == LIMIT_CONTROL {
-            // Scheme guard, then the selector on its four bytes.
-            return matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) &&
-                m.input.get(..4) == Some(&remaining_compute_gas_selector()[..]);
-        }
-        self.base.contains_message(m)
-    }
-
-    fn move_precompiles(
-        &mut self,
-        moves: &[(Address, Address)],
-    ) -> Result<(), MovePrecompileError> {
-        self.base.move_precompiles(moves)
-    }
-
-    fn execute(
-        &self,
-        evm: &mut Evm<'_, MegaTypes>,
-        m: &Message<MegaTypes>,
-        gas: &mut GasTracker,
-    ) -> Option<Result<PrecompileOutput, PrecompileError>> {
-        if m.call_target != LIMIT_CONTROL {
-            return self.base.execute(evm, m, gas);
-        }
-        if !m.value.is_zero() {
-            return Some(Err(PrecompileError::Revert(non_zero_transfer())));
-        }
-        Some(Ok(PrecompileOutput::new(remaining_compute_gas(evm, m))))
-    }
+    false
 }
 
 /// The answer of `remainingComputeGas()` to the call `m`.
@@ -128,7 +74,7 @@ pub fn answer_before(
     evm: &mut Evm<'_, MegaTypes>,
     m: &Message<MegaTypes>,
 ) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
-    if m.call_target == crate::satin_ext::ACCESS_CONTROL && evm.precompiles().contains_message(m) {
+    if m.call_target == crate::satin_ext::ACCESS_CONTROL && is_intercepted(m) {
         // `MegaAccessControl` (Satin `system/control.rs`): the value policy, then the method,
         // answered on the untouched forward.
         let method = crate::satin_ext::access_control_method(&m.input)?;
@@ -156,7 +102,7 @@ pub fn answer_before(
             ..Default::default()
         });
     }
-    if m.call_target != LIMIT_CONTROL || !evm.precompiles().contains_message(m) {
+    if m.call_target != LIMIT_CONTROL || !is_intercepted(m) {
         return None;
     }
     let (stop, output) = if m.value.is_zero() {
@@ -170,12 +116,6 @@ pub fn answer_before(
         gas: GasTracker::new_with_execution_gas_and_reservoir(m.gas_limit, m.reservoir),
         ..Default::default()
     })
-}
-
-impl Default for SatinProvider {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// The Oracle's `sendHint` (Satin `system/oracle.rs`), from the `before` message hook: a hint

@@ -737,7 +737,7 @@ pub fn all() -> Vec<Scenario> {
         BELOW_CAP,
         det(1_500),
     ));
-    // --- interceptors (PR #523): MegaLimitControl.remainingComputeGas()
+    // --- interceptors: MegaLimitControl.remainingComputeGas()
     let sel = remaining_compute_gas_selector();
     let call_limit = |kind: u8, value: u64, s: [u8; 4]| {
         Asm::new()

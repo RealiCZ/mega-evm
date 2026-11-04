@@ -22,8 +22,7 @@ Each line is one change against the base commit.
 4. Add a default `std` feature instead of the upstream workspace forcing `evm2/std` — not proposed upstream.
 5. Build without `std`: `no_std` attribute, `alloc` imports, and a precompile map built per call where there is no `OnceLock` — not proposed upstream.
 6. Set `type MessageHooks = ()` on `OpEvmTypes`, the associated type our thin evm2 fork adds for message hooks — fork-only; it goes away with the fork's message-hook patch.
-7. Take `&self` in `PrecompileProvider::execute` for `OpPrecompiles`, as our thin evm2 fork's native precompile dispatch requires — follows [alloy-rs/evm2#523](https://github.com/alloy-rs/evm2/pull/523).
-8. Packaging only: `Cargo.toml` uses the `next/` workspace dependencies (evm2 is the thin fork, not upstream's git pin), and carries upstream's workspace lints as package lints.
+7. Packaging only: `Cargo.toml` uses the `next/` workspace dependencies (evm2 is the thin fork, not upstream's git pin), and carries upstream's workspace lints as package lints.
 
 ## Re-syncing
 
@@ -37,7 +36,7 @@ Run the steps from the repository root, on a clean tree (`--3way` also updates t
    Hunks that do not touch a local change apply cleanly; the others are left with conflict markers, and `git status` lists their files as unmerged.
 3. Resolve the conflicts against the local changes above, then `git add` the files.
    Drop a local change once upstream has it (for example change 1 once #12 is merged), and remove its line here.
-4. If upstream moved its evm2 pin, check that the thin fork has the API it needs; changes 6 and 7 follow the fork, not upstream.
+4. If upstream moved its evm2 pin, check that the thin fork has the API it needs; change 6 follows the fork, not upstream.
 5. If upstream changed the parity test's `op-revm` or `revm` versions, update them in `next/Cargo.toml`.
 6. Run, from `next/`: `cargo test -p op-evm2`, `cargo clippy -p op-evm2 --all-targets -- -D warnings`, and `cargo check -p op-evm2 --no-default-features --target riscv64imac-unknown-none-elf`.
 7. Set the base commit at the top of this file to the fetched commit (`git rev-parse FETCH_HEAD`).
