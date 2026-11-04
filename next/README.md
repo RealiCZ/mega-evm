@@ -88,8 +88,8 @@ It does not build the root workspace.
 `evm2-fork.env` is the only fork pin CI reads (`EVM2_FORK_REPO`, `EVM2_FORK_REV`).
 Each commit on that pin is described in [`evm2-fork.md`](evm2-fork.md).
 The repository must be public: the pin check fetches it over HTTPS without credentials, so a private fork fails it even when the commit is pushed.
-The commit must be pushed to that repository: a red "Check that the evm2 fork pin is pushed" step means "fork pin not pushed", so push the commit or update `evm2-fork.env`.
-The workflow checks this repository out at `mega-evm/` and that revision out at `evm2/`, so `../../evm2` from `next/` resolves.
+The commit must be pushed to that repository: a red "Check out the evm2 fork at its pin" step means "fork pin not pushed", so push the commit or update `evm2-fork.env`.
+The workflow checks this repository out at `mega-evm/` and that revision out at `evm2/` (by `scripts/fetch-evm2-fork.sh`), so `../../evm2` from `next/` resolves.
 Local builds keep the path dependency above.
 `diff/scripts/ci-local.sh` runs the check job's commands against that local checkout.
 

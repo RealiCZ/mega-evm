@@ -55,47 +55,8 @@ jobs:
           path: mega-evm
           persist-credentials: false
 
-      - name: Read the evm2 fork pin
-        run: |
-          set -euo pipefail
-          set -a
-          # shellcheck disable=SC1091
-          source next/evm2-fork.env
-          set +a
-          if [ -z "${EVM2_FORK_REPO:-}" ] || [ -z "${EVM2_FORK_REV:-}" ]; then
-            echo "next/evm2-fork.env must set EVM2_FORK_REPO and EVM2_FORK_REV" >&2
-            exit 1
-          fi
-          if ! printf '%s\n' "$EVM2_FORK_REPO" | grep -Eq '^[^/[:space:]]+/[^/[:space:]]+$'; then
-            echo "EVM2_FORK_REPO must be owner/name" >&2
-            exit 1
-          fi
-          if ! printf '%s\n' "$EVM2_FORK_REV" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "EVM2_FORK_REV must be a 40-character commit sha" >&2
-            exit 1
-          fi
-          printf 'EVM2_FORK_REPO=%s\n' "$EVM2_FORK_REPO" >> "$GITHUB_ENV"
-          printf 'EVM2_FORK_REV=%s\n' "$EVM2_FORK_REV" >> "$GITHUB_ENV"
-
-      # The fork's default branch is checked out first; the pinned commit is then fetched by hash, so
-      # a pin that was never pushed fails with its own message instead of a checkout error.
-      - name: Checkout evm2
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          repository: ${{ env.EVM2_FORK_REPO }}
-          path: evm2
-          persist-credentials: false
-
-      - name: Check that the evm2 fork pin is pushed
-        working-directory: evm2
-        run: |
-          set -euo pipefail
-          if ! git fetch --no-tags --depth=1 "https://github.com/${EVM2_FORK_REPO}.git" "$EVM2_FORK_REV" \
-            || ! git cat-file -e "${EVM2_FORK_REV}^{commit}" \
-            || ! git checkout --detach --quiet "$EVM2_FORK_REV"; then
-            echo "fork pin not pushed: commit ${EVM2_FORK_REV} is not in ${EVM2_FORK_REPO}. Push it there or update next/evm2-fork.env." >&2
-            exit 1
-          fi
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
 
       - name: Install the next/ toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
@@ -109,12 +70,7 @@ jobs:
           cache-shared-key: next
 
       - name: Install zstd
-        run: |
-          set -euo pipefail
-          if ! command -v zstd >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends zstd
-          fi
+        run: bash next/scripts/install-zstd.sh
 
       - name: Fmt, clippy, test, no_std, the sample gate, its controls and faults
         env:
@@ -194,12 +150,7 @@ jobs:
 
       - name: Install zstd
         if: github.event_name == 'schedule' || steps.pr.outputs.run == 'true' || steps.push.outputs.run == 'true'
-        run: |
-          set -euo pipefail
-          if ! command -v zstd >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends zstd
-          fi
+        run: bash next/scripts/install-zstd.sh
 
       - name: Regenerate the sample reference outputs
         if: github.event_name == 'schedule' || steps.pr.outputs.run == 'true' || steps.push.outputs.run == 'true'
@@ -219,47 +170,8 @@ jobs:
           path: mega-evm
           persist-credentials: false
 
-      - name: Read the evm2 fork pin
-        run: |
-          set -euo pipefail
-          set -a
-          # shellcheck disable=SC1091
-          source next/evm2-fork.env
-          set +a
-          if [ -z "${EVM2_FORK_REPO:-}" ] || [ -z "${EVM2_FORK_REV:-}" ]; then
-            echo "next/evm2-fork.env must set EVM2_FORK_REPO and EVM2_FORK_REV" >&2
-            exit 1
-          fi
-          if ! printf '%s\n' "$EVM2_FORK_REPO" | grep -Eq '^[^/[:space:]]+/[^/[:space:]]+$'; then
-            echo "EVM2_FORK_REPO must be owner/name" >&2
-            exit 1
-          fi
-          if ! printf '%s\n' "$EVM2_FORK_REV" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "EVM2_FORK_REV must be a 40-character commit sha" >&2
-            exit 1
-          fi
-          printf 'EVM2_FORK_REPO=%s\n' "$EVM2_FORK_REPO" >> "$GITHUB_ENV"
-          printf 'EVM2_FORK_REV=%s\n' "$EVM2_FORK_REV" >> "$GITHUB_ENV"
-
-      # The fork's default branch is checked out first; the pinned commit is then fetched by hash, so
-      # a pin that was never pushed fails with its own message instead of a checkout error.
-      - name: Checkout evm2
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          repository: ${{ env.EVM2_FORK_REPO }}
-          path: evm2
-          persist-credentials: false
-
-      - name: Check that the evm2 fork pin is pushed
-        working-directory: evm2
-        run: |
-          set -euo pipefail
-          if ! git fetch --no-tags --depth=1 "https://github.com/${EVM2_FORK_REPO}.git" "$EVM2_FORK_REV" \
-            || ! git cat-file -e "${EVM2_FORK_REV}^{commit}" \
-            || ! git checkout --detach --quiet "$EVM2_FORK_REV"; then
-            echo "fork pin not pushed: commit ${EVM2_FORK_REV} is not in ${EVM2_FORK_REPO}. Push it there or update next/evm2-fork.env." >&2
-            exit 1
-          fi
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
 
       - name: Install the next/ toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
@@ -271,12 +183,7 @@ jobs:
           cache-shared-key: next
 
       - name: Install zstd
-        run: |
-          set -euo pipefail
-          if ! command -v zstd >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends zstd
-          fi
+        run: bash next/scripts/install-zstd.sh
 
       - name: Run the full corpus gate and its negative controls
         env:

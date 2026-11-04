@@ -385,7 +385,7 @@ Build the JIT crate after the rebase, or the interpreter can be fine while the r
 
 Move `next/evm2-fork.env` only after the new commit is on the public fork.
 CI checks the pin out from `EVM2_FORK_REPO` by hash (`.github/workflows/next.yml`).
-A pin that was never pushed fails the step "Check that the evm2 fork pin is pushed".
+A pin that was never pushed fails the step "Check out the evm2 fork at its pin" (`next/scripts/fetch-evm2-fork.sh`).
 Push the rebased commit to `RealiCZ/evm2` first.
 Keep that repository public.
 Then set `EVM2_FORK_REV` to the new hash.
