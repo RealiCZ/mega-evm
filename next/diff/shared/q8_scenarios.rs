@@ -732,12 +732,29 @@ fn precompiles() -> Vec<Scenario> {
         ("bls_map_fp2_to_g2", 0x11, vec![0u8; 128]),
         ("p256verify", 0x100, vec![0u8; 160]),
         ("bls_g1_msm_bad_length", 0x0c, vec![0u8; 100]),
+        // Malformed inputs, priced by the probe: BLAKE2F refuses a length other than 213 before
+        // any gas (price 0, though the rounds word asks for 40,000); the BN254 pairing charges
+        // for the whole 192-byte pairs (113,000) before it checks the length.
+        ("blake2f_bad_length", 9, precompile_input(&[(0, rounds)], 212)),
+        ("bn_pairing_odd_length", 8, vec![0u8; 192 * 2 + 5]),
     ];
-    for (name, addr, input) in cases {
+    let cases =
+        cases.into_iter().map(|(name, addr, input)| (name, addr, input, 3_000_000, 10_000_000));
+    // Over op-evm2's Karst size cap with a forward that covers the pairing formula (45,000 + 34,000
+    // per pair, 10,279,000 here): refused before any gas, it is priced at nothing, so detention
+    // lets it run (and halt) instead of holding it.
+    let big = (
+        "bn_pairing_over_size_cap_big_forward",
+        8,
+        vec![0u8; 57_600 + 192],
+        12_000_000,
+        20_000_000,
+    );
+    for (name, addr, input, forward, gas) in cases.chain([big]) {
         for (tag, cap) in [("plain", None), ("detained", Some(25_000u64))] {
             let read =
                 if cap.is_some() { Asm::new().op(op::NUMBER).op(op::POP) } else { Asm::new() };
-            let a = mem_call(read, op::CALL, pc(addr), 0, 3_000_000, &input)
+            let a = mem_call(read, op::CALL, pc(addr), 0, forward, &input)
                 .record_call(1)
                 .stop()
                 .build();
@@ -745,7 +762,7 @@ fn precompiles() -> Vec<Scenario> {
             v.push(q8(
                 full,
                 vec![acct(A, a)],
-                10_000_000,
+                gas,
                 Limits { block_env_cap: cap, ..Limits::default() },
             ));
         }
