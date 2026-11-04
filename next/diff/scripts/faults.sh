@@ -5,7 +5,7 @@
 # `gate.sh sample` extracts them); the repository and the shared extracted inputs are never
 # written. Every fault of `faults.py` changes one thing (a value of a compared field, a missing,
 # duplicate or extra entry, a wrong expected count, a reference whose plain and inspected runs
-# disagree, a Satin-applied transaction, a known difference that no longer matches, ...); the
+# disagree, a known difference that no longer matches, ...); the
 # relevant gate then runs through `gate_run` of `gate-lib.sh`, the code `gate.sh` accepts and
 # rejects with. A fault is rejected only when that gate fails and its output shows the check the
 # fault names (`faults.py list`) while the unmutated run's output does not; a gate that fails

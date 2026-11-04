@@ -75,7 +75,7 @@ fn pending_diff(p: &evm2::evm::PendingState) -> Value {
     }
     json!({"accounts":accounts})
 }
-fn run_block(set: &str, path: &str, st: &[Value], sb: &[Value], inspected: bool) -> Vec<Value> {
+fn run_block(set: &str, path: &str, st: &[Value], inspected: bool) -> Vec<Value> {
     let b = blockdb::load_block(path, set);
     let n = b.number;
     let txlines: Vec<_> = st.iter().filter(|l| l["kind"] == "tx").collect();
@@ -100,27 +100,6 @@ fn run_block(set: &str, path: &str, st: &[Value], sb: &[Value], inspected: bool)
         let raw = blockdb::bytes(&l["raw"]);
         let tx = replay::decode(&raw, t).expect("decode");
         let mut row = json!({"kind":"tx","block":n,"index":i,"hash":t["hash"],"type":t["type"]});
-        let apply = std::env::var("MEGA_EVM2_SATIN_APPLY").unwrap_or_default();
-        let kind = if l["type"] == 4 {
-            "eip7702"
-        } else if l["frames"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|f| f["target"] == "0x6342000000000000000000000000000000000003")
-        {
-            "keyless"
-        } else {
-            ""
-        };
-        if !kind.is_empty() && apply.split(',').any(|x| x == kind) {
-            let s = &sb[i];
-            mega_evm2_diff::satin_applied::apply(&mut ex, s, blockdb::u64v(&t["type"]) as u8);
-            row = s.clone();
-            row["satin_applied"] = json!(kind);
-            rows.push(row);
-            continue;
-        }
         match ex.run_transaction(&tx, &raw) {
             Err(e) => {
                 row["status"] = json!("refused");
@@ -204,8 +183,8 @@ fn test_blocks_match_reference_plain_and_inspected() {
         let sb = read_lines(&format!("{reference}/{set}/{n}.jsonl"));
         let st = read_lines(&format!("{txref}/{set}/{n}.jsonl"));
         assert_eq!(sb.len(), txcount + 2, "oracle count {set}:{n}");
-        let p = run_block(&set, &path, &st, &sb, false);
-        let q = run_block(&set, &path, &st, &sb, true);
+        let p = run_block(&set, &path, &st, false);
+        let q = run_block(&set, &path, &st, true);
         assert_eq!(p.len(), sb.len());
         assert_eq!(q.len(), sb.len());
         let mut out: Box<dyn Write> = match &outdir {
@@ -246,8 +225,6 @@ fn test_blocks_match_reference_plain_and_inspected() {
                 "block_counters:match".into()
             } else if i == txcount + 1 {
                 "post_state:match".into()
-            } else if p.get("satin_applied").is_some() {
-                format!("satin_applied:{}", p["satin_applied"])
             } else if s["status"].as_str().unwrap().starts_with("refused") {
                 format!("refused_both:{}", gate::error_kind(s["reason"].as_str().unwrap()))
             } else {

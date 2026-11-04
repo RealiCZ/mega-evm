@@ -94,9 +94,9 @@ verdict() {
       fi
       ;;
     replay | block)
-      if [ "$status" = 0 ] && echo "$line" | grep -Eq "^PARTIAL GATE $gate blocks=1 .* differ=0 applied=0\$"; then
+      if [ "$status" = 0 ] && echo "$line" | grep -Eq "^PARTIAL GATE $gate blocks=1 .* differ=0\$"; then
         echo pass
-      elif [ "$status" != 0 ] && echo "$line" | grep -Eq "^PARTIAL GATE $gate blocks=1 .* differ=[1-9][0-9]* applied=0\$" &&
+      elif [ "$status" != 0 ] && echo "$line" | grep -Eq "^PARTIAL GATE $gate blocks=1 .* differ=[1-9][0-9]*\$" &&
         [ "$panics" = 1 ] && grep -q 'differential gate:' "$log"; then
         echo differ
       else

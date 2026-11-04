@@ -12,8 +12,8 @@
 #   expect.env                              what the summaries must be (written by `gate_inputs`):
 #     EXPECT_MAIN    the counts of the main summary, `total=<n> match=<n> known=<n>`
 #     FUZZ_BATCHES   the fuzz batches, space-separated `name:mode:first..=last:count`
-#     EXPECT_REPLAY  the counts of the replay summary before `differ=0 applied=0`
-#     EXPECT_BLOCK   the counts of the block summary before `differ=0 applied=0`
+#     EXPECT_REPLAY  the counts of the replay summary before `differ=0`
+#     EXPECT_BLOCK   the counts of the block summary before `differ=0`
 #   <script>-logs/                          one run's logs, cleared at the start of the run
 #
 # Two gate scripts must not run on the same cargo target at the same time.
@@ -113,7 +113,7 @@ gate_env() {
       ;;
     replay | block)
       GATE_ENV=(MEGA_EVM2_BLOCK_DIR="$work/blocks" MEGA_EVM2_REPLAY_REF="$work/replay"
-        MEGA_EVM2_BLOCK_REF="$work/block" MEGA_EVM2_EXPECT_APPLIED=0)
+        MEGA_EVM2_BLOCK_REF="$work/block")
       ;;
     *) echo "gate_env: unknown gate $2" >&2; return 2 ;;
   esac
@@ -191,7 +191,7 @@ gate_run() {
       gate_env "$work" "$gate"
       line=$(gate_summary "$logs/$gate.log" "$gate" "${GATE_ENV[@]}" "$@") || return 1
       echo "$line"
-      [ "$line" = "GATE $gate $expect differ=0 applied=0" ]
+      [ "$line" = "GATE $gate $expect differ=0" ]
       ;;
     *) echo "gate_run: unknown gate $gate" >&2; return 2 ;;
   esac

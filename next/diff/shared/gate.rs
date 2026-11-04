@@ -115,8 +115,7 @@ pub fn finish(totals: &BTreeMap<String, u64>) {
             **n > 0 &&
                 (k.contains("differ") ||
                     k.contains("missing") ||
-                    k.contains("envelope_error") ||
-                    k.contains("satin_applied"))
+                    k.contains("envelope_error"))
         })
         .collect();
     assert!(bad.is_empty(), "differential gate: {bad:?}");
@@ -131,10 +130,6 @@ pub fn finish(totals: &BTreeMap<String, u64>) {
         "MEGA_EVM2_EXPECT_REFUSED",
         totals.iter().filter(|(k, _)| k.starts_with("refused_both")).map(|(_, n)| n).sum(),
     );
-    expected(
-        "MEGA_EVM2_EXPECT_APPLIED",
-        totals.iter().filter(|(k, _)| k.starts_with("satin_applied")).map(|(_, n)| n).sum(),
-    );
 }
 
 fn sum(totals: &BTreeMap<String, u64>, pick: impl Fn(&str) -> bool) -> u64 {
@@ -148,27 +143,25 @@ fn differing(totals: &BTreeMap<String, u64>) -> u64 {
 /// The summary line of the engine replay gate.
 pub fn replay_line(totals: &BTreeMap<String, u64>) -> String {
     format!(
-        "GATE replay blocks={} match={} pre={} refused={} differ={} applied={}",
+        "GATE replay blocks={} match={} pre={} refused={} differ={}",
         sum(totals, |k| k == "blocks"),
         sum(totals, |k| k == "match"),
         sum(totals, |k| k == "pre_block:match"),
         sum(totals, |k| k.starts_with("refused_both")),
         differing(totals),
-        sum(totals, |k| k.starts_with("satin_applied")),
     )
 }
 
 /// The summary line of the block executor gate.
 pub fn block_line(totals: &BTreeMap<String, u64>) -> String {
     format!(
-        "GATE block blocks={} included={} refused={} counters={} post={} differ={} applied={}",
+        "GATE block blocks={} included={} refused={} counters={} post={} differ={}",
         sum(totals, |k| k == "blocks"),
         sum(totals, |k| k == "match"),
         sum(totals, |k| k.starts_with("refused_both")),
         sum(totals, |k| k == "block_counters:match"),
         sum(totals, |k| k == "post_state:match"),
         differing(totals),
-        sum(totals, |k| k.starts_with("satin_applied")),
     )
 }
 
@@ -258,8 +251,7 @@ pub fn error_kind(s: &str) -> String {
 pub fn canonical(v: &Value) -> Value {
     let mut v = v.clone();
     let o = v.as_object_mut().expect("outcome object");
-    for k in ["name", "group", "frames", "priced", "inspected_equal", "inspected", "satin_applied"]
-    {
+    for k in ["name", "group", "frames", "priced", "inspected_equal", "inspected"] {
         o.remove(k);
     }
     if let Some(h) = o.get_mut("halt") {

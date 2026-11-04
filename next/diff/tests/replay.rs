@@ -21,43 +21,11 @@ use std::{
     rc::Rc,
 };
 
-const KEYLESS: Address = address!("0x6342000000000000000000000000000000000003");
-const ACCESS_CONTROL: Address = address!("0x6342000000000000000000000000000000000004");
-const ORACLE: Address = address!("0x6342000000000000000000000000000000000001");
 const HISTORY_STORAGE: Address = address!("0x0000F90827F1C53a10cb7A02335B175320002935");
 const BEACON_ROOTS: Address = address!("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02");
 
 fn differ(a: &Value, b: &Value) -> Vec<String> {
     gate::differences(a, b)
-}
-
-/// A kind of transaction run on the Satin engine only, by what the Satin run did.
-fn satin_only(line: &Value) -> Option<&'static str> {
-    // The engine executes every kind itself; `MEGA_EVM2_SATIN_APPLY=eip7702,keyless,...` hands
-    // them back to the reference, for controls. The gate fails on any such transaction.
-    let applied = std::env::var("MEGA_EVM2_SATIN_APPLY").unwrap_or_default();
-    let applied: Vec<&str> = applied.split(',').collect();
-    if line["type"].as_u64() == Some(4) && applied.contains(&"eip7702") {
-        return Some("eip7702");
-    }
-    let hint =
-        format!("0x{}", alloy_primitives::hex::encode(&keccak256("sendHint(bytes32,bytes)")[..4]));
-    for f in line["frames"].as_array().into_iter().flatten() {
-        let target: Address = f["target"].as_str().unwrap_or_default().parse().unwrap_or_default();
-        if target == KEYLESS && applied.contains(&"keyless") {
-            return Some("keyless");
-        }
-        if target == ACCESS_CONTROL && applied.contains(&"access_control") {
-            return Some("access_control");
-        }
-        if applied.contains(&"oracle_hint") &&
-            target == ORACLE &&
-            f["selector"].as_str() == Some(hint.as_str())
-        {
-            return Some("oracle_hint");
-        }
-    }
-    None
 }
 
 #[test]
@@ -212,8 +180,6 @@ fn test_replay_matches_reference_plain_and_inspected() {
                     let verdict: String;
                     if line.get("envelope_error").is_some() {
                         verdict = "envelope_error".into();
-                    } else if let Some(kind) = satin_only(line) {
-                        verdict = format!("satin_applied:{kind}");
                     } else {
                         let raw = blockdb::bytes(&line["raw"]);
                         let tx = replay::decode(&raw, txs_by_hash[hash]).expect("decode");

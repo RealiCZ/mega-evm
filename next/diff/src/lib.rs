@@ -7,7 +7,6 @@
 pub mod controls;
 pub mod driver;
 pub mod replay;
-pub mod satin_applied;
 
 #[path = "../shared/gate.rs"]
 pub mod gate;

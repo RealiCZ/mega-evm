@@ -217,9 +217,6 @@ def drop_tx(rows):
     i = next(i for i, r in enumerate(rows) if is_tx(r))
     rows.pop(i)
 
-def env(*assignments):
-    return lambda work: list(assignments)
-
 def has_txs(n):
     return lambda rows: sum(1 for r in rows if is_tx(r)) >= n
 
@@ -266,7 +263,6 @@ FAULTS = [
     ("replay-pre-reference-inspected", "replay", r'"pre_block:differ": 1', pre_call(lambda c: True, lambda c: c.update(inspected_equal=False), "pre-block call")),
     ("replay-pre-registry-due", "replay", r'"registry_due:differ": 1', row_edit("replay", lambda r: r.get("kind") == "pre_block", lambda r: r.update(registry_due=not r["registry_due"]), "pre-block entry")),
     ("replay-missing-tx", "replay", r"oracle transaction count", file_edit("replay", has_txs(2), drop_tx, "block with two transactions")),
-    ("replay-satin-applied", "replay", r"satin_applied:eip7702", env("MEGA_EVM2_SATIN_APPLY=eip7702")),
     ("replay-expected-counts", "replay", SUMMARY, expect("EXPECT_REPLAY", count("match", 1))),
     # block
     ("block-gas-used", "block", cmp("gas_used"), block_row("tx", "gas_used")),
@@ -274,7 +270,6 @@ FAULTS = [
     ("block-counters-gas", "block", cmp("gas_used"), block_row("block_counters", "gas_used")),
     ("block-post-storage", "block", cmp("storage"), block_row("post_state", "storage", lambda r: r["storage"], first_value(lambda s: s + "1"))),
     ("block-missing-row", "block", r"oracle count", file_edit("block", has_txs(2), drop_tx, "block with two transactions")),
-    ("block-satin-applied", "block", r"satin_applied", env("MEGA_EVM2_SATIN_APPLY=eip7702")),
 ]
 
 NOTE = []

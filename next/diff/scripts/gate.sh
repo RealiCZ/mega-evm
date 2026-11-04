@@ -3,8 +3,8 @@
 #
 #   GATE main total=<n> match=<n> known=<n> differ=0
 #   GATE fuzz total=<n> match=<n> differ=0
-#   GATE replay blocks=<b> match=<m> pre=<p> refused=<r> differ=0 applied=0
-#   GATE block blocks=<b> included=<i> refused=<r> counters=<b> post=<b> differ=0 applied=0
+#   GATE replay blocks=<b> match=<m> pre=<p> refused=<r> differ=0
+#   GATE block blocks=<b> included=<i> refused=<r> counters=<b> post=<b> differ=0
 #
 # Usage: gate.sh sample|full
 #   sample  the in-repo sample under `next/diff/data`
