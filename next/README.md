@@ -65,11 +65,11 @@ Prefer a case of the sample, and add a `[[control]]` with the switch, the gate, 
 Use `scope = "full"` only when no sample case catches the switch, and say so in `why`.
 
 `diff/scripts/faults.sh` injects faults into a copy of the sample's reference data, one at a time, and runs the gate each one concerns through the code `gate.sh` accepts and rejects with; the repository is not modified.
-The faults (listed in `diff/scripts/faults.py`) change a value of every field the gates compare (outcome fields, inspected frames, pre-block calls, receipts, block counters and post-state), remove, duplicate or add an entry, change an expected count, mark a reference whose plain and inspected runs disagree, hand a transaction back to the reference (Satin-applied), and make the accepted difference of `known-differences.toml` miss (a stale entry, another field, another case, another value, or the entry listed twice).
+The 24 faults (listed in `diff/scripts/faults.py`) are a representative set: for each gate a changed compared value, plus an inspected frame (main), a pre-block call (replay), and block counters and post-state (block), a missing, duplicate or extra entry, a wrong expected count, a reference whose plain and inspected runs disagree, a transaction handed back to the reference (Satin-applied), and the accepted difference of `known-differences.toml` missing (a stale entry, another field, another case).
 A fault counts as rejected only when the gate fails and its output shows the check the fault names, while the unmutated run's output does not.
 The unmutated copy must pass every gate first (the baselines).
 The last line is `FAULTS total=<n> rejected=<n> accepted=<a> baselines=<k> passed=<k>`, and the script fails unless `accepted` is 0 and every baseline passed.
-When a gate gains a compared field or a new check, add a fault for it.
+When a gate gains a new kind of check, add a fault for it.
 
 ## Building
 

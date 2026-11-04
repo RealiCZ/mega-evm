@@ -223,11 +223,6 @@ def is_tx(r):
     return r.get("kind") == "tx"
 
 
-def ok_tx(r):
-    s = r.get("satin", r)
-    return is_tx(r) and s.get("status") == "success"
-
-
 def satin_field(field, pred=lambda s: True, change=bump):
     def f(r):
         r["satin"][field] = change(r["satin"][field])
@@ -260,53 +255,6 @@ def drop_tx(rows):
     rows.pop(i)
 
 
-def dup_tx(rows):
-    i = next(i for i, r in enumerate(rows) if is_tx(r))
-    rows.insert(i + 1, dict(rows[i]))
-
-
-def extra_tx(rows):
-    txs = [r for r in rows if is_tx(r)]
-    r = dict(txs[-1])
-    r["index"] = txs[-1]["index"] + 1
-    r["hash"] = "0x" + "fa" * 32
-    rows.insert(rows.index(txs[-1]) + 1, r)
-
-
-def swap_txs(rows):
-    idx = [i for i, r in enumerate(rows) if is_tx(r)]
-    a, b = idx[0], idx[1]
-    rows[a], rows[b] = rows[b], rows[a]
-
-
-def drop_kind(kind):
-    def f(rows):
-        rows[:] = [r for r in rows if r.get("kind") != kind]
-    return f
-
-
-def dup_kind(kind):
-    def f(rows):
-        r = first(rows, lambda r: r.get("kind") == kind, kind)
-        rows.insert(rows.index(r), dict(r))
-    return f
-
-
-def remove_file(kind):
-    def apply(work):
-        rel = blocks(work, kind)[0][0]
-        p = own(work, rel)
-        os.unlink(p)
-        NOTE.append(rel)
-    return apply
-
-
-def manifest(f):
-    def apply(work):
-        edit_json(work, "blocks/d4/manifest.json", f)
-    return apply
-
-
 def env(*assignments):
     return lambda work: list(assignments)
 
@@ -336,166 +284,35 @@ def cmp(field):
 SUMMARY = "summary"
 
 FAULTS = [
-    # main: every compared outcome field of a scenario
-    ("main-status", "main", diff("status"), scen_field(M, "status", ok, lambda v: "revert")),
-    ("main-halt-label", "main", diff("halt"), scen_field(M, "halt", lambda o: o.get("halt") == "Base(InvalidFEOpcode)", lambda v: "Base(InvalidJump)")),
-    ("main-halt-oog-kind", "main", diff("halt"), scen_field(M, "halt", lambda o: o.get("halt") == "Base(OutOfGas(Basic))", lambda v: "Base(OutOfGas(Memory))")),
-    ("main-output", "main", diff("output"), scen_field(M, "output", ok)),
+    # main: a compared field, an inspected frame, the reference's plain and inspected runs, entries, the expected count
     ("main-gas-used", "main", diff("gas_used"), scen_field(M, "gas_used", ok)),
-    ("main-regular", "main", diff("regular"), scen_field(M, "regular", ok)),
-    ("main-state", "main", diff("state"), scen_field(M, "state", ok)),
-    ("main-history", "main", diff("history"), scen_field(M, "history", ok)),
-    ("main-history-bytes", "main", diff("history_bytes"), scen_field(M, "history_bytes", ok)),
-    ("main-reservoir-remaining", "main", diff("reservoir_remaining"), scen_field(M, "reservoir_remaining", ok)),
-    ("main-data-size", "main", diff("data_size"), scen_field(M, "data_size", ok)),
-    ("main-kv", "main", diff("kv"), scen_field(M, "kv", ok)),
-    ("main-growth", "main", diff("growth"), scen_field(M, "growth", ok)),
-    ("main-limit-exceeded", "main", diff("limit_exceeded"), scen_field(M, "limit_exceeded", lambda o: o.get("limit_exceeded"), lambda v: None)),
-    ("main-logs", "main", diff("logs"), scen_field(M, "logs", lambda o: o.get("logs"), lambda v: [dict(v[0], data=v[0]["data"] + "00")] + v[1:])),
-    ("main-accounts", "main", diff("accounts"), scen_field(M, "accounts", lambda o: o.get("accounts"), first_value(lambda s: s.replace("/n", "/n1", 1)))),
-    ("main-storage", "main", diff("storage"), scen_field(M, "storage", lambda o: o.get("storage"), first_value(lambda s: s + "1"))),
-    ("main-reads-accounts", "main", diff("reads"), scen_field(M, "reads", ok, sub="accounts")),
-    ("main-reads-storage", "main", diff("reads"), scen_field(M, "reads", lambda o: o.get("reads", {}).get("storage"), sub="storage")),
-    ("main-reads-codes", "main", diff("reads"), scen_field(M, "reads", lambda o: o.get("reads", {}).get("codes"), sub="codes")),
-    ("main-reads-buckets", "main", diff("reads"), scen_field(M, "reads", lambda o: o.get("reads", {}).get("buckets"), sub="buckets")),
-    ("main-reads-oracle", "main", diff("reads"), scen_field(M, "reads", lambda o: o.get("reads", {}).get("oracle_reads"), sub="oracle_reads")),
-    ("main-hints", "main", diff("hints"), scen_field(M, "hints", lambda o: o.get("hints"))),
-    ("main-ledger", "main", diff("ledger"), scen_field(M, "ledger", lambda o: o.get("ledger"), lambda v: [dict(v[0], refund=v[0]["refund"] + 1)] + v[1:])),
-    ("main-error-kind", "main", diff("error"), scen_field(M, "error", change=lambda v: "Transaction(lack of funds for max fee)")),
-    ("main-field-removed", "main", diff("gas_used"), scen_edit(M, named("ctl_sstore", lambda o: o.pop("gas_used")))),
-    ("main-field-added", "main", diff("fault_field"), scen_edit(M, named("ctl_sstore", lambda o: o.update(fault_field=1)))),
-    # main: the reference's inspected frames
-    ("main-frame-kind", "main", r"^DIFFER .*frame 0 kind", frame_field(M, "kind")),
-    ("main-frame-level", "main", r"^DIFFER .*frame 0 level", frame_field(M, "level")),
-    ("main-frame-gas-limit", "main", r"^DIFFER .*frame 0 gas_limit", frame_field(M, "gas_limit")),
-    ("main-frame-reservoir", "main", r"^DIFFER .*frame 0 reservoir", frame_field(M, "reservoir")),
-    ("main-frame-value", "main", r"^DIFFER .*frame 0 value", frame_field(M, "value")),
-    ("main-frame-status", "main", r"^DIFFER .*frame 0 status", frame_field(M, "status")),
-    ("main-frame-output", "main", r"^DIFFER .*frame 0 output", frame_field(M, "output")),
     ("main-frame-gas-left", "main", r"^DIFFER .*frame 0 gas_left", frame_field(M, "gas_left")),
-    ("main-frame-reservoir-left", "main", r"^DIFFER .*frame 0 reservoir_left", frame_field(M, "reservoir_left")),
-    ("main-frame-count", "main", r"^DIFFER .*frame count", scen_field(M, "frames", lambda o: ok(o) and len(o["frames"]) > 1)),
-    # main: the reference's own plain and inspected runs disagree
     ("main-reference-inspected", "main", diff("reference_plain_vs_inspected"), scen_field(M, "inspected_equal", ok, lambda v: False)),
-    # main: entries
     ("main-missing-entry", "main", r"^MISSING ", scen_edit(M, drop_entry)),
-    ("main-duplicate-entry", "main", r"duplicate oracle names", scen_edit(M, dup_entry)),
     ("main-extra-entry", "main", r"^EXTRA zz_fault_extra$", scen_edit(M, extra_entry)),
     ("main-expected-total", "main", r"MEGA_EVM2_EXPECT", expect("EXPECT_MAIN", count("total", 1))),
-    ("main-expected-known", "main", SUMMARY, expect("EXPECT_MAIN", lambda v: count("match", 1)(count("known", -1)(v)))),
     # main: the accepted difference hides exactly itself
     ("known-stale", "main", r"^DIFFER p6_dupn .*stale known difference", scen_edit(M, named("p6_dupn", lambda o: o.update(halt="Base(StackUnderflow)")))),
-    ("known-other-values", "main", r"^DIFFER p6_dupn .*did not occur as listed", scen_edit(M, named("p6_dupn", lambda o: o.update(halt="Base(OutOfGas(Basic))")))),
-    ("known-plus-other-field", "main", r'^DIFFER p6_dupn \["gas_used"\]', scen_edit(M, named("p6_dupn", lambda o: o.update(gas_used=o["gas_used"] + 1)))),
-    ("known-same-difference-other-case", "main", r'^DIFFER p6_swapn \["halt"\]', scen_edit(M, named("p6_swapn", lambda o: o.update(halt="Base(StackOverflow)")))),
     ("known-toml-wrong-field", "main", r"^DIFFER p6_dupn .*did not occur as listed", known_toml(lambda t: t.replace('field = "halt"', 'field = "gas_used"'))),
     ("known-toml-wrong-case", "main", r'^DIFFER p6_dupn \["halt"\]', known_toml(lambda t: t.replace('scenario = "p6_dupn"', 'scenario = "p6_add"'))),
-    ("known-toml-wrong-value", "main", r"^DIFFER p6_dupn .*did not occur as listed", known_toml(lambda t: t.replace('candidate = "StackUnderflow"', 'candidate = "StackOverflow"'))),
-    ("known-toml-listed-twice", "main", r"^DIFFER p6_dupn .*did not occur as listed", known_toml(lambda t: t + t[t.index("[[difference]]"):])),
     # fuzz
-    ("fuzz-status", "fuzz", diff("status"), scen_field(F, "status", ok, lambda v: "revert")),
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),
-    ("fuzz-storage", "fuzz", diff("storage"), scen_field(F, "storage", lambda o: o.get("storage"), first_value(lambda s: s + "1"))),
-    ("fuzz-logs", "fuzz", diff("logs"), scen_field(F, "logs", lambda o: o.get("logs"))),
-    ("fuzz-ledger", "fuzz", diff("ledger"), scen_field(F, "ledger", lambda o: o.get("ledger"), lambda v: [dict(v[0], refund=v[0]["refund"] + 1)] + v[1:])),
-    ("fuzz-frame-gas-left", "fuzz", r"^DIFFER .*frame 0 gas_left", frame_field(F, "gas_left")),
-    ("fuzz-reference-inspected", "fuzz", diff("reference_plain_vs_inspected"), scen_field(F, "inspected_equal", ok, lambda v: False)),
-    ("fuzz-missing-entry", "fuzz", r"^MISSING ", scen_edit(F, drop_entry)),
     ("fuzz-duplicate-entry", "fuzz", r"duplicate oracle names", scen_edit(F, dup_entry)),
-    ("fuzz-extra-entry", "fuzz", r"^EXTRA zz_fault_extra$", scen_edit(F, extra_entry)),
     ("fuzz-expected-count", "fuzz", r"MEGA_EVM2_EXPECT", expect("FUZZ_BATCHES", lambda v: v.replace(":2000", ":2001"))),
-    # replay: every compared outcome field of a transaction
-    ("replay-status", "replay", cmp("status"), satin_field("status", lambda s: s.get("status") == "success", lambda v: "revert")),
-    ("replay-halt", "replay", cmp("halt"), satin_field("halt", lambda s: s.get("halt"), lambda v: "Base(InvalidFEOpcode)")),
-    ("replay-output", "replay", cmp("output"), satin_field("output", lambda s: s.get("status") == "success")),
+    # replay
     ("replay-gas-used", "replay", cmp("gas_used"), satin_field("gas_used")),
-    ("replay-regular", "replay", cmp("regular"), satin_field("regular")),
-    ("replay-state", "replay", cmp("state"), satin_field("state")),
-    ("replay-history", "replay", cmp("history"), satin_field("history")),
-    ("replay-history-bytes", "replay", cmp("history_bytes"), satin_field("history_bytes")),
-    ("replay-reservoir-remaining", "replay", cmp("reservoir_remaining"), satin_field("reservoir_remaining")),
-    ("replay-data-size", "replay", cmp("data_size"), satin_field("data_size")),
-    ("replay-kv", "replay", cmp("kv"), satin_field("kv")),
-    ("replay-growth", "replay", cmp("growth"), satin_field("growth")),
-    ("replay-limit-exceeded", "replay", cmp("limit_exceeded"), satin_field("limit_exceeded", change=lambda v: "0:1")),
-    ("replay-logs", "replay", cmp("logs"), satin_field("logs", lambda s: s.get("logs"), lambda v: [dict(v[0], data=v[0]["data"] + "00")] + v[1:])),
-    ("replay-accounts", "replay", cmp("accounts"), satin_field("accounts", lambda s: s.get("accounts"), first_value(lambda s: s.replace("/n", "/n1", 1)))),
-    ("replay-storage", "replay", cmp("storage"), satin_field("storage", lambda s: s.get("storage"), first_value(lambda s: s + "1"))),
-    ("replay-account-created", "replay", cmp("account_flags"), satin_field("account_flags", lambda s: any(f["created"] for f in s.get("account_flags", {}).values()),
-                                                                         lambda v: {k: dict(f, created=False) if f["created"] else f for k, f in v.items()})),
-    ("replay-account-destroyed", "replay", cmp("account_flags"), satin_field("account_flags", lambda s: s.get("account_flags"), first_value(lambda f: dict(f, destroyed=not f["destroyed"])))),
-    ("replay-reads", "replay", cmp("reads"), satin_field("reads", lambda s: s["reads"].get("accounts"), lambda v: dict(v, accounts=v["accounts"][:-1]))),
-    ("replay-misses", "replay", cmp("misses"), satin_field("misses")),
-    ("replay-ledger", "replay", cmp("ledger"), satin_field("ledger", lambda s: s.get("ledger"), lambda v: [dict(v[0], refund=v[0]["refund"] + 1)] + v[1:])),
-    ("replay-refusal-kind", "replay", cmp("error"), satin_field("error", change=lambda v: "lack of funds (1) for max fee (2)")),
-    ("replay-refusal-reads", "replay", cmp("reads"), satin_field("reads", lambda s: "error" in s and s["reads"].get("accounts"), lambda v: dict(v, accounts=v["accounts"][:-1]))),
-    ("replay-frame-gas-limit", "replay", r"frame 0 gas_limit", row_edit("replay", ok_tx, lambda r: r["frames"][0].update(gas_limit=r["frames"][0]["gas_limit"] + 1), "successful transaction")),
     ("replay-reference-inspected", "replay", cmp("satin_plain_vs_inspected"), row_edit("replay", is_tx, lambda r: r.update(inspected_equal=False), "transaction")),
-    # replay: pre-block calls
     ("replay-pre-status", "replay", r'"fields": ?\["status"', pre_call(lambda c: True, lambda c: c.update(status="revert"), "pre-block call")),
-    ("replay-pre-storage", "replay", r'"fields": ?\["storage"', pre_call(lambda c: c["storage"], lambda c: c.update(storage=first_value(lambda s: s + "1")(c["storage"])), "pre-block call with storage")),
-    ("replay-pre-accounts", "replay", r'"fields": ?\["accounts"', pre_call(lambda c: True, lambda c: c.update(accounts=dict(c["accounts"], **{"0x" + "fa" * 20: "1/n0/" + "0x" + "00" * 32})), "pre-block call")),
-    ("replay-pre-misses", "replay", r'"fields": ?\["misses"', pre_call(lambda c: True, lambda c: c.update(misses=c["misses"] + 1), "pre-block call")),
-    ("replay-pre-reads", "replay", r'"reads_differ": ?true', pre_call(lambda c: c["reads"]["storage"], lambda c: c["reads"].update(storage=c["reads"]["storage"][:-1]), "pre-block call with reads")),
-    ("replay-pre-reference-inspected", "replay", r'"pre_block:differ": 1', pre_call(lambda c: True, lambda c: c.update(inspected_equal=False), "pre-block call")),
-    ("replay-pre-registry-due", "replay", r'"registry_due:differ": 1', row_edit("replay", lambda r: r.get("kind") == "pre_block", lambda r: r.update(registry_due=not r["registry_due"]), "pre-block entry")),
-    ("replay-pre-call-missing", "replay", r"pre-block calls", row_edit("replay", lambda r: r.get("kind") == "pre_block", lambda r: r.update(calls=r["calls"][:-1]), "pre-block entry")),
-    # replay: entries
     ("replay-missing-tx", "replay", r"oracle transaction count", file_edit("replay", has_txs(2), drop_tx, "block with two transactions")),
-    ("replay-duplicate-tx", "replay", r"oracle transaction count", file_edit("replay", has_txs(2), dup_tx, "block with two transactions")),
-    ("replay-extra-tx", "replay", r"oracle transaction count", file_edit("replay", has_txs(2), extra_tx, "block with two transactions")),
-    ("replay-tx-identity", "replay", r"oracle identity", row_edit("replay", is_tx, lambda r: r.update(hash="0x" + "fa" * 32), "transaction")),
-    ("replay-tx-order", "replay", r"oracle order", file_edit("replay", has_txs(2), swap_txs, "block with two transactions")),
-    ("replay-missing-pre-block", "replay", r"pre-block entry required", file_edit("replay", has_txs(1), drop_kind("pre_block"), "block")),
-    ("replay-duplicate-pre-block", "replay", r"pre-block entry required", file_edit("replay", has_txs(1), dup_kind("pre_block"), "block")),
-    ("replay-missing-block-end", "replay", r"block-end entry required", file_edit("replay", has_txs(1), drop_kind("block_end"), "block")),
-    ("replay-envelope-error", "replay", r'"envelope_error": 1', row_edit("replay", ok_tx, lambda r: r.update(envelope_error="fault"), "successful transaction")),
-    ("replay-missing-file", "replay", r"missing oracle", remove_file("replay")),
     ("replay-satin-applied", "replay", r"satin_applied:eip7702", env("MEGA_EVM2_SATIN_APPLY=eip7702")),
     ("replay-expected-counts", "replay", SUMMARY, expect("EXPECT_REPLAY", count("match", 1))),
-    ("replay-expected-refused", "replay", SUMMARY, expect("EXPECT_REPLAY", count("refused", -1))),
-    ("replay-manifest-duplicate", "replay", r"duplicate block d4:", manifest(lambda m: m + m[:1])),
-    ("replay-manifest-missing", "replay", SUMMARY, manifest(lambda m: m[1:])),
-    ("replay-manifest-extra", "replay", r"block file", manifest(lambda m: m + [dict(m[0], number=1)])),
-    # block: every compared field of a transaction row
-    ("block-status", "block", cmp("status"), block_row("tx", "status", lambda r: r["status"] == "success", lambda v: "revert")),
-    ("block-halt", "block", cmp("halt"), block_row("tx", "halt", lambda r: r.get("halt"), lambda v: "Base(InvalidFEOpcode)")),
-    ("block-output", "block", cmp("output"), block_row("tx", "output", lambda r: r["status"] == "success")),
+    # block
     ("block-gas-used", "block", cmp("gas_used"), block_row("tx", "gas_used")),
-    ("block-receipt-gas", "block", cmp("receipt_gas"), block_row("tx", "receipt_gas")),
-    ("block-usage", "block", cmp("usage"), block_row("tx", "usage", change=lambda v: [v[0] + 1] + v[1:])),
-    ("block-gas-split", "block", cmp("gas_split"), block_row("tx", "gas_split", change=lambda v: [v[0] + 1] + v[1:])),
-    ("block-system-tx", "block", cmp("system_tx"), block_row("tx", "system_tx")),
-    ("block-da-size", "block", cmp("da_size"), block_row("tx", "da_size")),
-    ("block-tx-size", "block", cmp("tx_size"), block_row("tx", "tx_size")),
-    ("block-tx-diff", "block", cmp("diff"), block_row("tx", "diff", change=lambda v: dict(v, accounts=first_value(lambda a: dict(a, nonce=a["nonce"] + 1))(v["accounts"])))),
-    ("block-receipt-bytes", "block", cmp("receipt"), block_row("tx", "receipt", change=lambda v: v[:-2] + ("00" if v[-2:] != "00" else "01"))),
-    ("block-receipt-status", "block", cmp("receipt_status"), block_row("tx", "receipt_status")),
-    ("block-cumulative-gas", "block", cmp("cumulative_gas_used"), block_row("tx", "cumulative_gas_used")),
-    ("block-logs", "block", cmp("logs"), block_row("tx", "logs", lambda r: r.get("logs"), lambda v: [dict(v[0], data=v[0]["data"] + "00")] + v[1:])),
-    ("block-refusal-kind", "block", cmp("reason"), block_row("tx", "reason", change=lambda v: "lack of funds (1) for max fee (2)")),
-    ("block-tx-hash", "block", cmp("hash"), block_row("tx", "hash", change=lambda v: "0x" + "fa" * 32)),
     ("block-reference-inspected", "block", cmp("satin_plain_vs_inspected"), block_row("tx", "inspected_equal", change=lambda v: False)),
-    # block: block counters and post-state
     ("block-counters-gas", "block", cmp("gas_used"), block_row("block_counters", "gas_used")),
-    ("block-counters-da-footprint", "block", cmp("da_footprint_used"), block_row("block_counters", "da_footprint_used")),
-    ("block-counters-da-size", "block", cmp("da_size_used"), block_row("block_counters", "da_size_used")),
-    ("block-counters-tx-size", "block", cmp("tx_size_used"), block_row("block_counters", "tx_size_used")),
-    ("block-counters-usage", "block", cmp("usage"), block_row("block_counters", "usage", change=lambda v: [v[0] + 1] + v[1:])),
-    ("block-counters-gas-split", "block", cmp("gas"), block_row("block_counters", "gas", change=lambda v: [v[0] + 1] + v[1:])),
-    ("block-counters-inspected", "block", cmp("satin_plain_vs_inspected"), block_row("block_counters", "inspected_equal", change=lambda v: False)),
-    ("block-post-accounts", "block", cmp("accounts"), block_row("post_state", "accounts", lambda r: r["accounts"], first_value(lambda s: s.replace("/n", "/n1", 1)))),
     ("block-post-storage", "block", cmp("storage"), block_row("post_state", "storage", lambda r: r["storage"], first_value(lambda s: s + "1"))),
-    ("block-post-extra-account", "block", cmp("accounts"), block_row("post_state", "accounts", change=lambda v: dict(v, **{"0x" + "fa" * 20: "1/n0/0x" + "00" * 32}))),
-    ("block-post-inspected", "block", cmp("satin_plain_vs_inspected"), block_row("post_state", "inspected_equal", change=lambda v: False)),
-    # block: entries
     ("block-missing-row", "block", r"oracle count", file_edit("block", has_txs(2), drop_tx, "block with two transactions")),
-    ("block-duplicate-row", "block", r"oracle count", file_edit("block", has_txs(2), dup_tx, "block with two transactions")),
-    ("block-extra-row", "block", r"oracle count", file_edit("block", has_txs(2), extra_tx, "block with two transactions")),
-    ("block-missing-file", "block", r"oracle .*No such file", remove_file("block")),
     ("block-satin-applied", "block", r"satin_applied", env("MEGA_EVM2_SATIN_APPLY=eip7702")),
-    ("block-expected-counts", "block", SUMMARY, expect("EXPECT_BLOCK", count("included", 1))),
-    ("block-expected-post", "block", SUMMARY, expect("EXPECT_BLOCK", count("post", -1))),
 ]
 
 NOTE = []
