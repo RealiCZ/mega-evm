@@ -264,5 +264,18 @@ fn engine(c: &mut Criterion) {
     bench_block(c);
 }
 
-criterion_group!(benches, engine);
+/// Setup runs once per iteration (the state is committed), so a short, fixed measurement keeps a
+/// run to minutes: 30 samples over 2 seconds after a 1-second warm-up.
+fn config() -> Criterion {
+    Criterion::default()
+        .sample_size(30)
+        .warm_up_time(std::time::Duration::from_secs(1))
+        .measurement_time(std::time::Duration::from_secs(2))
+}
+
+criterion_group! {
+    name = benches;
+    config = config();
+    targets = engine
+}
 criterion_main!(benches);
