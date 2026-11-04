@@ -1,0 +1,7 @@
+# Generated files, collapsed in pull request diffs.
+# The lockfiles of the `next/` and `next/reference` workspaces.
+Cargo.lock linguist-generated=true
+# The in-repo gate sample: cut from the full corpus by `diff/scripts/make-sample.sh`, counted by
+# `diff/scripts/count_expected.py`. Its README is written by hand.
+diff/data/** linguist-generated=true
+diff/data/README.md -linguist-generated
