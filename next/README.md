@@ -21,6 +21,8 @@ So `next/` is its own workspace with its own `Cargo.lock`, outside the root one.
   `reference/`).
 - `reference` — its own workspace (separate lockfile); generates reference
   outputs from the Satin implementation under review.
+- `scripts` — the CI setup the workflow calls: `fetch-evm2-fork.sh` (checks the
+  pinned evm2 fork out at `evm2/`) and `install-zstd.sh`.
 
 ## Differential gates
 
