@@ -19,21 +19,24 @@
 #             archive and rewrites `data/expected.env` from the regenerated files. Review the
 #             resulting `git diff` of `data/`: it is the effect of the reference change.
 #
-# This script deletes nothing in the corpus and writes nothing into it. It writes only: a new
-# directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run succeeds; a failed run keeps
-# it, with its logs; `make-sample.sh`'s scratch files go there too); the archive path, over which
-# the new archive is renamed (rename(2)), so a link there is replaced and never written through;
-# cargo's directory `<target>/mega-evm2-reference`; and, in default mode, `next/diff/data`. It
-# creates <out-dir> and the target directory when missing. It removes its own directory, the
-# previous entry at the archive path, and, in default mode, what `make-sample.sh` rewrites under
-# `next/diff/data`; nothing else.
+# It writes only: a new directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run
+# succeeds; a failed run keeps it, with its logs; `make-sample.sh`'s scratch files go there too);
+# the archive path, over which the new archive is renamed (rename(2)), so a link there is replaced
+# and never written through; cargo's directory `<target>/mega-evm2-reference`; and, in default mode,
+# `next/diff/data`. It creates <out-dir> and the target directory when missing. It removes its own
+# directory, the previous entry at the archive path, and, in default mode, what `make-sample.sh`
+# rewrites under `next/diff/data`; nothing else. None of these paths may be the corpus or lie
+# inside it: the guard below refuses such inputs.
 #
-# What the corpus guard covers: guaranteed, no gate or reference script writes into anything
-# reachable from `MEGA_EVM2_CORPUS_DIR` through the output directory, the cargo target directory,
-# the Cargo home, or `next/diff/data`; the Cargo home is checked by its resolved path only, so links
-# planted inside the Cargo home itself are out of scope; out of scope: changes made by someone else
-# while a run is in progress, links inside a corpus archive's members, and other process
-# environment not listed.
+# What the corpus guard covers, and nothing more: an output directory, a cargo target directory, a
+# Cargo home or `next/diff/data` that is the corpus or lies inside it, and an archive path that is
+# or links into the corpus. It does not defend against links planted inside those directories, a
+# corpus placed inside one of those directories, other process environment, or changes made while a
+# run is in progress; the Cargo home is checked by its resolved path only, and links inside a corpus
+# archive's members are not looked at. The gate results that count are CI's, which runs in a fixed
+# layout with a freshly downloaded corpus; a local corpus can be re-downloaded from the storage
+# named by `MEGA_EVM2_CORPUS_URL`, and for a hard guarantee locally, make the corpus read-only
+# (`chmod -R a-w <corpus>`).
 #
 # Before anything is built or written (`refuse_corpus_writes.py`), it exits with status 2 when one
 # of these paths could reach the corpus: <out-dir> in the corpus (its `reference/`, a link to it, a

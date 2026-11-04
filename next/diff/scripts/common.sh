@@ -31,11 +31,13 @@ abs_dir() {
 # directory (where `mv` would move <from> into that directory, writing through the link).
 rename_exact() { python3 -I -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$1" "$2"; }
 
-# refuse_corpus_writes <corpus> <out> <cargo> [<data>]: exits 2 with the reason when a run of this
-# script could delete or write anything in the corpus. The corpus is everything reachable from
-# <corpus>, through its symlinks too. The Cargo home actually used (`CARGO_HOME`, or
+# refuse_corpus_writes <corpus> <out> <cargo> [<data>]: exits 2 with the reason when one of the
+# paths a run writes is the corpus or lies inside it. The corpus is everything
+# reachable from <corpus>, through its symlinks too. The Cargo home actually used (`CARGO_HOME`, or
 # `$HOME/.cargo` when unset) is checked by its resolved path only; links inside it are out of
-# scope.
+# scope. Beyond those paths the check promises nothing: links planted inside them, a corpus placed
+# inside one of them, other process environment, and changes made while a run is in progress are
+# not defended against.
 refuse_corpus_writes() {
   local args=("$1" "$2" "$3")
   [ $# -lt 4 ] || args+=("$4")

@@ -106,13 +106,14 @@ and packs `<out-dir>/reference-outputs.tar.zst` in the layout above, which `gate
   Only `micros` is ignored.
 - Without `--check` it also re-cuts this sample with `make-sample.sh` from the new archive and rewrites `expected.env` from the regenerated files.
 
-No gate or reference script deletes anything in the corpus or writes into it.
+A gate or reference script writes only its own paths, and refuses the inputs that would put one of them in the corpus.
 `regen-reference.sh` writes only a new directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run succeeds; a failed run keeps it, with its logs; `make-sample.sh`'s scratch files go there too), the archive path `<out-dir>/reference-outputs.tar.zst`, cargo's directory `<target>/mega-evm2-reference`, and, without `--check`, this directory.
 The new archive is renamed over the archive path, so a link there is replaced and never written through.
 
-**What the corpus guard covers.** Guaranteed: no gate or reference script writes into anything reachable from `MEGA_EVM2_CORPUS_DIR` through the output directory, the cargo target directory, the Cargo home, or `next/diff/data`.
-The Cargo home is checked by its resolved path only; links planted inside the Cargo home itself are out of scope.
-Out of scope: changes made by someone else while a run is in progress, links inside a corpus archive's members, and other process environment not listed.
+**What the corpus guard covers.** Each gate or reference script checks its paths early and refuses an output directory, cargo target directory, Cargo home or `next/diff/data` that is the corpus or lies inside it, and an archive path that is or links into the corpus.
+That is all: it does not defend against links planted inside those directories, a corpus placed inside one of those directories, other process environment, or changes made while a run is in progress; the Cargo home is checked by its resolved path only, and links inside a corpus archive's members are not looked at.
+The gate results that count are CI's, which runs in a fixed layout with a freshly downloaded corpus.
+A local corpus can be re-downloaded from the storage named by `MEGA_EVM2_CORPUS_URL`; for a hard guarantee locally, make the corpus read-only (`chmod -R a-w <corpus>`).
 
 Before it builds or writes anything, the script refuses, with exit status 2, every input for which one of these paths could reach the corpus:
 

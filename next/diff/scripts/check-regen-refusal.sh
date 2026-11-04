@@ -1,7 +1,7 @@
 #!/bin/bash
-# Checks that a run of `regen-reference.sh`, in `--check` and in default mode, deletes nothing in
-# the corpus and writes nothing into it, whatever paths it is given. Refused with exit status 2,
-# before anything is built or written:
+# Checks that a run of `regen-reference.sh`, in `--check` and in default mode, refuses every input
+# that would make it write in the corpus, whatever paths it is given.
+# Refused with exit status 2, before anything is built or written:
 #   - an output directory in the corpus: its `reference/` directory, a symlink to it, a directory
 #     below it (also spelled in other letter case, where the file system ignores case, and below
 #     a corpus whose name ends in a line break), the corpus itself;

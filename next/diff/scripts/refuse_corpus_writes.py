@@ -14,7 +14,9 @@ corpus that leads nowhere is refused, since the run could create its target. Car
 below <cargo dir>, so every path reachable there (through symlinks too, and a symlink that leads
 nowhere by where it leads) must stay out of the corpus. The Cargo home is checked by its resolved
 path only: the corpus walk already covers the directories a corpus symlink reaches, and links
-planted inside the Cargo home itself are out of scope.
+planted inside the Cargo home itself are out of scope. Beyond these paths the check promises
+nothing: links planted inside them, a corpus placed inside one of them, other process environment,
+and changes made while a run is in progress are not defended against.
 Paths are compared by device and inode, so a second name (a symlink, a hard link, other letter case
 on a case-insensitive file system) counts. A path that does not exist yet is judged by its deepest
 existing ancestor, since the run creates everything below that. An unreadable directory is refused
