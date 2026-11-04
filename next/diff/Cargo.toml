@@ -23,3 +23,10 @@ alloy-primitives = { workspace = true, features = ["std"] }
 # misc
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+
+[dev-dependencies]
+criterion = { package = "codspeed-criterion-compat", version = "=5.0.1", default-features = false }
+
+[[bench]]
+name = "engine"
+harness = false
