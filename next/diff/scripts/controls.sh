@@ -12,8 +12,7 @@
 #        that case. A run that panics before the gate's summary, fails on anything other than the
 #        gate's difference assertion, or passes, is a miss.
 # It also checks the manifest against the sources both ways: a switch without a table is
-# `unlisted`, a table whose switch is not in its source is `stale` (`[[control]]` against
-# `next/mega-evm2/src`, `[[harness]]` against `next/diff`).
+# `unlisted`, a table whose switch is not in its source is `stale`.
 #
 # Usage: controls.sh sample|full
 #   sample  the controls with `scope = "sample"`, on the in-repo sample (`next/diff/data`)
@@ -21,11 +20,9 @@
 #
 # Prints one line per control, and last:
 #   CONTROLS scope=<s> total=<n> caught=<n> missed=<m> baseline_failed=<b> unlisted=<u> stale=<t>
-# Exit status 0 only when missed, baseline_failed, unlisted and stale are all 0 and every gate
-# (main, fuzz, replay, block; both modes have cases of all four) ran at least one control, so a
-# run that proves nothing, or nothing about one gate, fails; a gate that ran none is reported as
-# `NO_CONTROL <gate>`. Like `gate.sh`, it refuses to start when a `MEGA_EVM2_*` variable other
-# than `MEGA_EVM2_CORPUS_DIR` is set.
+# Exit status 0 only when missed, baseline_failed, unlisted and stale are all 0 and every gate ran
+# at least one control (a gate that ran none is reported as `NO_CONTROL <gate>`). Like `gate.sh`,
+# it refuses to start when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set.
 set -euo pipefail
 
 mode=${1:-}

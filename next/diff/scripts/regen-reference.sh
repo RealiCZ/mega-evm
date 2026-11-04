@@ -10,11 +10,9 @@
 #   satin-oracle.json, oracles/<batch>.json, raw/satin/<set>/<n>.jsonl, raw/satin-block/<set>/<n>.jsonl
 #
 #   --check   Writes nothing into the repository. Compares the regenerated outputs, taken back out
-#             of the packed archive, with the same paths of
-#             the corpus's expected archive (`reference/reference-outputs.tar.zst` when present,
-#             else `reference/q11-oracles.tar.zst`, as `gate.sh` picks it; only `micros` is
-#             ignored), and
-#             checks the full counts against `data/expected.env`. Prints `REFERENCE full identical`.
+#             of the packed archive, with the corpus's expected archive (picked as `gate.sh`
+#             picks it; only `micros` is ignored) and the full counts with `data/expected.env`.
+#             Prints `REFERENCE full identical`.
 #   default   Also re-cuts the sample under `next/diff/data` with `make-sample.sh` from the new
 #             archive and rewrites `data/expected.env` from the regenerated files. Review the
 #             resulting `git diff` of `data/`: it is the effect of the reference change.

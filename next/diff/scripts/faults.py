@@ -20,7 +20,6 @@ import json, os, re, shutil, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 KNOWN = os.path.join(HERE, "..", "known-differences.toml")
 
-
 # --- copies on write ------------------------------------------------------------------------------
 
 def own(work, rel):
@@ -40,7 +39,6 @@ def own(work, rel):
                 shutil.copyfile(target, p)
     return p
 
-
 def edit_json(work, rel, f):
     p = own(work, rel)
     with open(p) as h:
@@ -48,7 +46,6 @@ def edit_json(work, rel, f):
     v = f(v) or v
     with open(p, "w") as h:
         json.dump(v, h)
-
 
 def edit_lines(work, rel, f):
     p = own(work, rel)
@@ -58,7 +55,6 @@ def edit_lines(work, rel, f):
     with open(p, "w") as h:
         for r in rows:
             h.write(json.dumps(r) + "\n")
-
 
 def edit_text(work, rel, f):
     p = own(work, rel)
@@ -70,13 +66,11 @@ def edit_text(work, rel, f):
     with open(p, "w") as h:
         h.write(t2)
 
-
 def first(items, pred, what):
     for x in items:
         if pred(x):
             return x
     raise SystemExit("faults.py: no %s in the sample" % what)
-
 
 def blocks(work, kind):
     """(rel path, rows) of every reference file of `kind` (replay or block), in name order."""
@@ -88,25 +82,11 @@ def blocks(work, kind):
                 out.append((rel, [json.loads(l) for l in h if l.strip()]))
     return out
 
-
 def bump(v):
-    """A different value of the same shape."""
-    if isinstance(v, bool):
-        return not v
-    if isinstance(v, int):
+    """A different value of the same shape (the fields faulted with it are integers)."""
+    if isinstance(v, int) and not isinstance(v, bool):
         return v + 1
-    if isinstance(v, str):
-        if v.startswith("0x"):
-            return v + "00" if len(v) % 2 == 0 else v + "1"
-        return v + "x"
-    if isinstance(v, list):
-        return v[:-1] if v else [0]
-    if isinstance(v, dict):
-        return dict(v, __fault__=1) if not v else {k: bump(x) if i == 0 else x for i, (k, x) in enumerate(v.items())}
-    if v is None:
-        return "fault"
     raise SystemExit("faults.py: cannot change %r" % (v,))
-
 
 # --- the synthetic gates (main and fuzz) ---------------------------------------------------------
 
@@ -123,7 +103,6 @@ def scen_field(rel, field, pred=lambda o: True, change=bump, sub=None):
         edit_json(work, rel, f)
     return apply
 
-
 def frame_field(rel, key):
     """Changes `key` of the first frame of the first successful multi-frame scenario."""
     def apply(work):
@@ -135,30 +114,25 @@ def frame_field(rel, key):
         edit_json(work, rel, f)
     return apply
 
-
 def scen_edit(rel, f_entries):
     def apply(work):
         edit_json(work, rel, f_entries)
     return apply
 
-
 def drop_entry(entries):
     o = entries.pop(len(entries) // 2)
     NOTE.append(o["name"])
-
 
 def dup_entry(entries):
     o = entries[len(entries) // 2]
     entries.append(dict(o))
     NOTE.append(o["name"])
 
-
 def extra_entry(entries):
     o = dict(entries[0])
     o["name"] = "zz_fault_extra"
     entries.append(o)
     NOTE.append(o["name"])
-
 
 def named(name, f):
     """Changes the scenario `name` with `f`."""
@@ -167,7 +141,6 @@ def named(name, f):
         f(o)
         NOTE.append(name)
     return g
-
 
 def known_toml(f):
     """Runs the main gate with an edited copy of `known-differences.toml`."""
@@ -178,16 +151,13 @@ def known_toml(f):
         return ["MEGA_EVM2_KNOWN_DIFFERENCES=" + dst]
     return apply
 
-
 def expect(var, f):
     def apply(work):
         edit_text(work, "expect.env", lambda t: re.sub(r'^(%s=")([^"]*)"' % var, lambda m: m.group(1) + f(m.group(2)) + '"', t, flags=re.M))
     return apply
 
-
 def count(word, delta):
     return lambda v: re.sub(r"\b%s=(\d+)" % word, lambda m: "%s=%d" % (word, int(m.group(1)) + delta), v, count=1)
-
 
 # --- the block gates (replay and block) -----------------------------------------------------------
 
@@ -206,7 +176,6 @@ def row_edit(kind, pred, f, what):
         raise SystemExit("faults.py: no %s in the sample" % what)
     return apply
 
-
 def file_edit(kind, pred_rows, f, what):
     """Applies `f(rows)` to the first `kind` reference file whose rows match `pred_rows`."""
     def apply(work):
@@ -218,16 +187,13 @@ def file_edit(kind, pred_rows, f, what):
         raise SystemExit("faults.py: no %s in the sample" % what)
     return apply
 
-
 def is_tx(r):
     return r.get("kind") == "tx"
-
 
 def satin_field(field, pred=lambda s: True, change=bump):
     def f(r):
         r["satin"][field] = change(r["satin"][field])
     return row_edit("replay", lambda r: is_tx(r) and field in r["satin"] and pred(r["satin"]), f, "replay transaction with %s" % field)
-
 
 def first_value(change):
     """Changes the first value of a non-empty object."""
@@ -236,43 +202,35 @@ def first_value(change):
         return dict(d, **{k: change(d[k])})
     return g
 
-
 def pre_call(pred, f, what):
     def g(r):
         c = first(r["calls"], pred, what)
         f(c)
     return row_edit("replay", lambda r: r.get("kind") == "pre_block" and any(pred(c) for c in r["calls"]), g, what)
 
-
 def block_row(kind, field, pred=lambda r: True, change=bump):
     def f(r):
         r[field] = change(r[field])
     return row_edit("block", lambda r: r.get("kind") == kind and field in r and pred(r), f, "block %s row with %s" % (kind, field))
 
-
 def drop_tx(rows):
     i = next(i for i, r in enumerate(rows) if is_tx(r))
     rows.pop(i)
 
-
 def env(*assignments):
     return lambda work: list(assignments)
 
-
 def has_txs(n):
     return lambda rows: sum(1 for r in rows if is_tx(r)) >= n
-
 
 # --- the list -------------------------------------------------------------------------------------
 
 M, F = "main.json", "fuzz/mode4.json"
 ok = lambda o: o.get("status") == "success"
 
-
 def diff(field):
     """Evidence: a synthetic DIFFER line that names `field`."""
     return r'^DIFFER [^ ]+ \[.*"%s"' % field
-
 
 def cmp(field):
     """Evidence: a replay or block comparison row whose differing fields include `field`."""
@@ -316,7 +274,6 @@ FAULTS = [
 ]
 
 NOTE = []
-
 
 def main():
     if sys.argv[1:] == ["list"]:
