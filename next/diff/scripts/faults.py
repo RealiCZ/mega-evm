@@ -245,6 +245,7 @@ FAULTS = [
     # main: a compared field, an inspected frame, the reference's plain and inspected runs, entries, the expected count
     ("main-gas-used", "main", diff("gas_used"), scen_field(M, "gas_used", ok)),
     ("main-frame-gas-left", "main", r"^DIFFER .*frame 0 gas_left", frame_field(M, "gas_left")),
+    ("main-frame-count", "main", r"^DIFFER .*frame count", scen_field(M, "frames", lambda o: ok(o) and len(o["frames"]) > 1, lambda v: v[:-1])),
     ("main-reference-inspected", "main", diff("reference_plain_vs_inspected"), scen_field(M, "inspected_equal", ok, lambda v: False)),
     ("main-missing-entry", "main", r"^MISSING ", scen_edit(M, drop_entry)),
     ("main-extra-entry", "main", r"^EXTRA zz_fault_extra$", scen_edit(M, extra_entry)),
@@ -261,6 +262,9 @@ FAULTS = [
     ("replay-gas-used", "replay", cmp("gas_used"), satin_field("gas_used")),
     ("replay-reference-inspected", "replay", cmp("satin_plain_vs_inspected"), row_edit("replay", is_tx, lambda r: r.update(inspected_equal=False), "transaction")),
     ("replay-pre-status", "replay", r'"fields": ?\["status"', pre_call(lambda c: True, lambda c: c.update(status="revert"), "pre-block call")),
+    ("replay-pre-reads", "replay", r'"reads_differ": ?true', pre_call(lambda c: c["reads"]["storage"], lambda c: c["reads"].update(storage=c["reads"]["storage"][:-1]), "pre-block call with reads")),
+    ("replay-pre-reference-inspected", "replay", r'"pre_block:differ": 1', pre_call(lambda c: True, lambda c: c.update(inspected_equal=False), "pre-block call")),
+    ("replay-pre-registry-due", "replay", r'"registry_due:differ": 1', row_edit("replay", lambda r: r.get("kind") == "pre_block", lambda r: r.update(registry_due=not r["registry_due"]), "pre-block entry")),
     ("replay-missing-tx", "replay", r"oracle transaction count", file_edit("replay", has_txs(2), drop_tx, "block with two transactions")),
     ("replay-satin-applied", "replay", r"satin_applied:eip7702", env("MEGA_EVM2_SATIN_APPLY=eip7702")),
     ("replay-expected-counts", "replay", SUMMARY, expect("EXPECT_REPLAY", count("match", 1))),
