@@ -31,7 +31,7 @@ refuse_overrides
 target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 work=$target/mega-evm2-diff/$mode
-inputs=$(fresh_dir "$work/gate-inputs")
+inputs=$work/gate-inputs
 gate_inputs "$mode" "$inputs"
 logs=$(fresh_dir "$work/gate-logs")
 

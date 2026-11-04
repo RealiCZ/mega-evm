@@ -32,11 +32,13 @@ source "$here/scripts/gate-lib.sh"
 refuse_overrides
 target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
-base=$target/mega-evm2-diff/sample
+root=$target/mega-evm2-diff/faults
+# This script's inputs, fresh: `gate_inputs` empties the directory it fills.
+base=$root/inputs
 gate_inputs sample "$base"
-# This script's directory, cleared at the start: a passing run removes it, a failing one keeps it
-# for the lines' `see`.
-work=$(fresh_dir "$base/faults")
+# The run's directory, cleared at the start: a passing run removes it, a failing one keeps it for
+# the lines' `see`.
+work=$(fresh_dir "$root/run")
 
 cd "$next"
 if ! cargo test --release --locked -p mega-evm2-diff --no-run > "$work/build.log" 2>&1; then

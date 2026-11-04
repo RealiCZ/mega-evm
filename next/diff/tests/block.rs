@@ -3,8 +3,9 @@
 //! All deliberate normalizations/exclusions are in `src/gate.rs`.
 //!
 //! Environment: `MEGA_EVM2_BLOCK_DIR` (recorded blocks), `MEGA_EVM2_REPLAY_REF` (per-transaction
-//! reference lines), `MEGA_EVM2_BLOCK_REF` (block-level reference lines), the count expectations of
-//! `src/gate.rs`; `MEGA_EVM2_OUT` additionally writes every comparison.
+//! reference lines), `MEGA_EVM2_BLOCK_REF` (block-level reference lines), the optional
+//! `MEGA_EVM2_EXPECT` count check of `src/gate.rs`; `MEGA_EVM2_OUT` additionally writes every
+//! comparison.
 //! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line.
 use alloy_primitives::B256;
 use evm2::evm::AccountInfo;

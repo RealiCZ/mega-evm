@@ -9,7 +9,6 @@
 //! Account lifecycle flags cover changed accounts, not journal-internal touched-only entries.
 //! Block net state compares changed account info and slots, not internal bundle/wipe encodings.
 //! Every other emitted semantic field is compared; missing fields and unknown kinds fail closed.
-#![allow(dead_code)]
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 

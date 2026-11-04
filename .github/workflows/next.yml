@@ -11,7 +11,8 @@ name: next
 #             sample gate, its negative controls and the gate fault injection).
 # reference — daily, and pulls or pushes that touch what the reference check
 #             reads: next/reference/**, next/diff/data/**, next/diff/shared/**,
-#             next/diff/scripts/**, next/rust-toolchain.toml, or this file.
+#             next/diff/scripts/**, next/scripts/**, next/rust-toolchain.toml, or
+#             this file.
 #             Runs next/diff/scripts/check-reference.sh sample.
 # full      — daily and workflow_dispatch. Downloads MEGA_EVM2_CORPUS_URL
 #             (repository variable, else secret of the same name) and runs
@@ -104,7 +105,7 @@ jobs:
             exit 0
           fi
           if git diff --name-only FETCH_HEAD HEAD -- 'next/reference/**' 'next/diff/data/**' 'next/diff/shared/**' \
-            'next/diff/scripts/**' next/rust-toolchain.toml .github/workflows/next.yml | grep -q .; then
+            'next/diff/scripts/**' 'next/scripts/**' next/rust-toolchain.toml .github/workflows/next.yml | grep -q .; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -126,7 +127,7 @@ jobs:
             exit 0
           fi
           if git diff --name-only FETCH_HEAD HEAD -- 'next/reference/**' 'next/diff/data/**' 'next/diff/shared/**' \
-            'next/diff/scripts/**' next/rust-toolchain.toml .github/workflows/next.yml | grep -q .; then
+            'next/diff/scripts/**' 'next/scripts/**' next/rust-toolchain.toml .github/workflows/next.yml | grep -q .; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -135,7 +136,7 @@ jobs:
       - name: Skip the reference check
         if: github.event_name != 'schedule' && steps.pr.outputs.run != 'true' && steps.push.outputs.run != 'true'
         run: |
-          echo "NOTICE: this diff does not touch next/reference, next/diff/data, next/diff/shared, next/diff/scripts, next/rust-toolchain.toml, or this workflow. Skipping the reference check."
+          echo "NOTICE: this diff does not touch next/reference, next/diff/data, next/diff/shared, next/diff/scripts, next/scripts, next/rust-toolchain.toml, or this workflow. Skipping the reference check."
 
       - name: Install the next/ toolchain
         if: github.event_name == 'schedule' || steps.pr.outputs.run == 'true' || steps.push.outputs.run == 'true'

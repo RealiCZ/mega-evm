@@ -51,12 +51,12 @@ gate_inputs() {
   ) > "$work/expect.env"
 }
 
-# gate_extract sample|full <work> [<archive>]: extracts the inputs into <work> (the blocks too
-# for the sample; the full corpus's blocks are a link).
+# gate_extract sample|full <work> [<archive>]: extracts the inputs into the empty directory <work>
+# (the blocks too for the sample; the full corpus's blocks are a link).
 gate_extract() {
   local mode=$1 work=$2 archive=${3:-}
+  mkdir -p "$work"
   if [ "$mode" = sample ]; then
-    rm -rf "$work/blocks" "$work/replay" "$work/block" "$work/fuzz" "$work/main.json"
     mkdir -p "$work/fuzz"
     gate_unz "$gate_lib_diff/data/synthetic/main.json.zst" "$work/main.json"
     gate_unz "$gate_lib_diff/data/synthetic/fuzz-mode4.json.zst" "$work/fuzz/mode4.json"
@@ -74,7 +74,6 @@ gate_extract() {
       done
     done
   else
-    rm -rf "$work/extract" "$work/replay" "$work/block" "$work/fuzz" "$work/main.json"
     mkdir -p "$work/extract" "$work/fuzz"
     tar --zstd -xf "$archive" -C "$work/extract" satin-oracle.json oracles raw/satin raw/satin-block
     mv "$work/extract/satin-oracle.json" "$work/main.json"
