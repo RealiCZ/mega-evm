@@ -17,6 +17,10 @@ next=$(cd "$here/.." && pwd)
 source "$here/scripts/common.sh"
 refuse_overrides
 target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
+if [ -n "${MEGA_EVM2_CORPUS_DIR:-}" ]; then
+  guard_corpus=$(cd -P "$MEGA_EVM2_CORPUS_DIR" && pwd -P)
+  refuse_corpus_writes "$guard_corpus" "$target/mega-evm2-diff/reference-sample" "$target/mega-evm2-reference"
+fi
 # This run's directory (removed when the outputs are identical).
 work=$(run_dir "$target/mega-evm2-diff/reference-sample" check)
 export CARGO_TARGET_DIR=$target/mega-evm2-reference

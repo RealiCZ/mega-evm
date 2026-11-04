@@ -106,14 +106,20 @@ and packs `<out-dir>/reference-outputs.tar.zst` in the layout above, which `gate
   Only `micros` is ignored.
 - Without `--check` it also re-cuts this sample with `make-sample.sh` from the new archive and rewrites `expected.env` from the regenerated files.
 
-A run deletes nothing in the corpus and writes nothing into it.
-It writes only a new directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run succeeds; a failed run keeps it, with its logs; `make-sample.sh`'s scratch files go there too), the archive path `<out-dir>/reference-outputs.tar.zst`, cargo's directory `<target>/mega-evm2-reference`, and, without `--check`, this directory.
+No gate or reference script deletes anything in the corpus or writes into it.
+`regen-reference.sh` writes only a new directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run succeeds; a failed run keeps it, with its logs; `make-sample.sh`'s scratch files go there too), the archive path `<out-dir>/reference-outputs.tar.zst`, cargo's directory `<target>/mega-evm2-reference`, and, without `--check`, this directory.
 The new archive is renamed over the archive path, so a link there is replaced and never written through.
+
+**What the corpus guard covers.** Guaranteed: no gate or reference script writes into anything reachable from `MEGA_EVM2_CORPUS_DIR` through the output directory, the cargo target directory, the Cargo home, or `next/diff/data`.
+The Cargo home is checked by its resolved path only; links planted inside the Cargo home itself are out of scope.
+Out of scope: changes made by someone else while a run is in progress, links inside a corpus archive's members, and other process environment not listed.
+
 Before it builds or writes anything, the script refuses, with exit status 2, every input for which one of these paths could reach the corpus:
 
 - `<out-dir>` in the corpus: the corpus's `reference/` directory, a link to it, any directory inside the corpus, or the corpus itself;
 - an archive path that resolves into the corpus (a symlink to a corpus file, directory or missing path, or a hard link to a corpus file), or that is a directory or a link to one;
 - a cargo directory (`<target>/mega-evm2-reference`) in the corpus, holding it, or holding a link into it (a symlink to a corpus path, or a hard link to a corpus file): cargo writes anywhere below it;
+- the Cargo home actually used (`CARGO_HOME`, or `$HOME/.cargo` when unset) in the corpus or in a directory a corpus symlink reaches: cargo writes its cache there;
 - without `--check`, a corpus that overlaps this directory.
 
 Paths are compared exactly (a name may end in a line break) after resolving symlinks, by device and inode, so another name of the corpus (a symlink, other letter case on a case-insensitive file system) counts.

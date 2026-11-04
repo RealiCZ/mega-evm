@@ -90,6 +90,9 @@ exit 0
 EOF
 chmod +x "$tmp/bin/cargo"
 export CARGO_STARTED=$tmp/cargo-started
+# The Cargo home of the runs, empty and outside the corpus, so the guard walks only a small tree.
+mkdir -p "$tmp/cargo-home"
+export CARGO_HOME=$tmp/cargo-home
 
 # The corpus and cargo target directory of the next runs, and their modes.
 corpus=$tmp/corpus
@@ -136,6 +139,17 @@ reached() {
     [ -s "$CARGO_STARTED" ] || fail "$what: refused or failed before the build: $log"
     [ "$(state "$corpus")" = "$before" ] || fail "$what: the corpus changed: $log"
   done
+}
+
+# run_script <script> [args...]: runs a gate or reference script on $corpus with $target as its
+# cargo target directory and the stand-in cargo; sets `status` and `log`.
+run_script() {
+  local script=$1
+  shift
+  status=0
+  rm -f "$CARGO_STARTED"
+  log=$(PATH="$tmp/bin:$PATH" MEGA_EVM2_CORPUS_DIR=$corpus CARGO_TARGET_DIR=$target \
+    bash "$here/scripts/$script" "$@" 2>&1) || status=$?
 }
 
 make_corpus "$corpus"
@@ -204,6 +218,35 @@ ln "$corpus/real-blocks/keep.json" "$target/mega-evm2-reference/tmp/keep.json"
 refused 'the corpus (' "$tmp/elsewhere"
 target=$tmp/target
 
+# The Cargo home actually used: a directory inside the corpus and a corpus symlink to an outside
+# Cargo home. Both modes refuse before the stand-in cargo starts, and leave the corpus, the outside
+# home and the target unchanged.
+corpus=$tmp/cargo-home-corpus
+make_corpus "$corpus"
+mkdir -p "$corpus/cargo-home"
+CARGO_HOME=$corpus/cargo-home refused 'CARGO_HOME' "$tmp/elsewhere"
+corpus=$tmp/cargo-home-link-corpus
+make_corpus "$corpus"
+mkdir -p "$tmp/cargo-home-outside"
+ln -s "$tmp/cargo-home-outside" "$corpus/cargo-home"
+CARGO_HOME=$corpus/cargo-home refused 'CARGO_HOME' "$tmp/elsewhere" "$tmp/cargo-home-outside"
+export CARGO_HOME=$tmp/cargo-home
+
+# A directory in the corpus that cannot be read: refused with a one-line message naming it, not a
+# traceback. The permission is restored afterwards so cleanup works.
+corpus=$tmp/unreadable-corpus
+make_corpus "$corpus"
+mkdir -p "$corpus/real-blocks/locked"
+before=$(state "$corpus")
+chmod 000 "$corpus/real-blocks/locked"
+regen --check "$tmp/elsewhere"
+chmod 755 "$corpus/real-blocks/locked"
+[ "$status" = 2 ] || fail "unreadable: exit status $status, not the refusal's 2: $log"
+grep -q 'cannot read' <<< "$log" || fail "unreadable: the refusal does not name the unreadable path: $log"
+grep -q 'Traceback' <<< "$log" && fail "unreadable: Python traceback: $log"
+[ ! -e "$CARGO_STARTED" ] || fail "unreadable: cargo started before the refusal"
+[ "$(state "$corpus")" = "$before" ] || fail "unreadable: the corpus changed"
+
 # A corpus directory whose name ends in a line break, which `$(...)` would drop, next to a corpus of
 # the name without it: the output directory below the first is still in the corpus.
 make_corpus "$tmp/newline"
@@ -257,6 +300,45 @@ corpus=$tmp/cycle
 make_corpus "$corpus"
 ln -s .. "$corpus/real-blocks/up"
 reached "$tmp/elsewhere"
+
+# A planted link in the cargo target directory of the gate and reference scripts: each refuses
+# before writing; the corpus and target are unchanged and the stand-in cargo not started.
+for script in gate.sh controls.sh; do
+  corpus=$tmp/script-$script-corpus
+  make_corpus "$corpus"
+  target=$tmp/script-$script-target
+  mkdir -p "$target"
+  ln -s "$corpus" "$target/mega-evm2-diff"
+  before=$(for p in "$corpus" "$target"; do state "$p"; done)
+  run_script "$script" full
+  [ "$status" = 2 ] || fail "$script full: exit status $status, not the refusal's 2: $log"
+  grep -q 'the corpus (' <<< "$log" || fail "$script full: the refusal does not name the corpus: $log"
+  [ ! -e "$CARGO_STARTED" ] || fail "$script full: cargo started before the refusal"
+  [ "$(for p in "$corpus" "$target"; do state "$p"; done)" = "$before" ] || fail "$script full: the corpus or target changed"
+done
+corpus=$tmp/script-check-corpus
+make_corpus "$corpus"
+target=$tmp/script-check-target
+mkdir -p "$target/mega-evm2-diff"
+ln -s "$corpus" "$target/mega-evm2-diff/reference-sample"
+before=$(for p in "$corpus" "$target"; do state "$p"; done)
+run_script check-reference.sh sample
+[ "$status" = 2 ] || fail "check-reference.sh sample: exit status $status, not the refusal's 2: $log"
+grep -q 'the corpus (' <<< "$log" || fail "check-reference.sh sample: the refusal does not name the corpus: $log"
+[ ! -e "$CARGO_STARTED" ] || fail "check-reference.sh sample: cargo started before the refusal"
+[ "$(for p in "$corpus" "$target"; do state "$p"; done)" = "$before" ] || fail "check-reference.sh sample: the corpus or target changed"
+corpus=$tmp/script-make-corpus
+make_corpus "$corpus"
+target=$tmp/script-make-target
+mkdir -p "$target"
+ln -s "$corpus" "$target/mega-evm2-diff"
+before=$(for p in "$corpus" "$target"; do state "$p"; done)
+run_script make-sample.sh
+[ "$status" = 2 ] || fail "make-sample.sh: exit status $status, not the refusal's 2: $log"
+grep -q 'the corpus (' <<< "$log" || fail "make-sample.sh: the refusal does not name the corpus: $log"
+[ ! -e "$CARGO_STARTED" ] || fail "make-sample.sh: cargo started before the refusal"
+[ "$(for p in "$corpus" "$target"; do state "$p"; done)" = "$before" ] || fail "make-sample.sh: the corpus or target changed"
+target=$tmp/target
 
 # The archive is renamed over its path: a symlink to the corpus's `reference/` that the stand-in
 # cargo puts there during the build is replaced, not written through. `--check` only: a default
