@@ -802,6 +802,32 @@ pub fn all() -> Vec<Scenario> {
         .stop()
         .build();
     v.push(q("q60_deepest_self_call", vec![acct(A, pure)], ABOVE_CAP, Limits::default()));
+
+    // q61/q62: a detained creator runs CREATE A, whose code-deposit state spill exceeds the
+    // creation frame's gas (so admission never runs), then CREATE B, whose deposit crosses the
+    // transaction's data-size budget (admission refused). B must not get back gas that only A
+    // drew. q62 is the control without CREATE A.
+    let two_creates = |first: bool| {
+        let mut c = read();
+        if first {
+            c = c.create(&init_returning(1000), 0).op(op::POP);
+        }
+        c.create(&init_returning(100), 0).op(op::POP).stop().build()
+    };
+    let mut s = q(
+        "q61_det_failed_deposit_then_refused_deposit",
+        vec![acct(A, two_creates(true))],
+        3_000_000,
+        Limits { data: Some(400), block_env_cap: Some(400_000), ..Limits::default() },
+    );
+    s.salt = vec![(A.create(0), None, 2)];
+    v.push(s);
+    v.push(q(
+        "q62_det_refused_deposit_alone",
+        vec![acct(A, two_creates(false))],
+        3_000_000,
+        Limits { data: Some(400), block_env_cap: Some(400_000), ..Limits::default() },
+    ));
     v
 }
 

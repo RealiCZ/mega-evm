@@ -444,6 +444,12 @@ pub fn before_code_deposit(
     code: &Bytes,
     gas: &mut Gas,
 ) -> core::result::Result<(), evm2::HostError> {
+    // A loan taken here is settled by `admit_code_deposit`; one whose creation failed before
+    // admission ran (the state spill ran out of gas) would otherwise stay and be handed to the
+    // next creation's refusal, so the previous creation's loan never outlives this point.
+    if !crate::off("deposit_loan_reset") {
+        evm.ext_mut().deposit_loan = 0;
+    }
     if !detains(evm.ext()) || evm.ext().detention.frames.last().is_none_or(|f| f.withheld == 0) {
         return Ok(());
     }

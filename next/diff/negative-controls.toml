@@ -149,6 +149,13 @@ scope = "full"
 why = "When a code deposit's data-size draw is refused, the withheld gas lent to its history charge goes back to the frame. Full corpus only: no sample case refuses such a draw."
 
 [[control]]
+switch = "deposit_loan_reset"
+gate = "main"
+scenario = "q61_det_failed_deposit_then_refused_deposit"
+scope = "sample"
+why = "A code deposit's loan from withheld gas is cleared when the next deposit starts. A creation whose state spill ran out of gas never reaches admission, so its loan would otherwise be handed back to a later creation whose data-size draw is refused (a creator's gas_left of 2,542,160 against the reference's 403,211)."
+
+[[control]]
 switch = "deposit_oof"
 gate = "main"
 scenario = "fz087"
