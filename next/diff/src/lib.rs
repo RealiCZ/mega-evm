@@ -6,7 +6,5 @@
 
 pub mod controls;
 pub mod driver;
-pub mod replay;
-
-#[path = "../shared/gate.rs"]
 pub mod gate;
+pub mod replay;

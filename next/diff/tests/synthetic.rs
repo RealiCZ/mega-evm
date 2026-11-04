@@ -1,6 +1,6 @@
 //! Synthetic differential gate: the shared scenarios run on the Satin engine, plain and
 //! inspected, against the reference outputs. Normalization and exclusions live in
-//! `shared/gate.rs`; the accepted differences in `known-differences.toml`.
+//! `src/gate.rs`; the accepted differences in `known-differences.toml`.
 //!
 //! Environment: `MEGA_EVM2_ORACLE` (the reference output file), `MEGA_EVM2_GATE_NAME` (the name in
 //! the summary line, default `main`), `MEGA_EVM2_EXPECT` (the expected scenario count), and the

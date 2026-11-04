@@ -21,7 +21,7 @@ pub const X2: Address = Address::new([0x72; 20]);
 pub const X3: Address = Address::new([0x73; 20]);
 pub const BENEFICIARY: Address = Address::ZERO;
 
-/// Keyless deployment transactions (`tests/q8_gen.rs`): name, signed RLP, signer.
+/// Keyless deployment transactions: name, signed RLP, signer.
 pub const KEYLESS_TXS: &[(&str, &str, &str)] = &[
     (
         "ok",

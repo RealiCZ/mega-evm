@@ -24,8 +24,8 @@ pub const BELOW_CAP: u64 = 1_000_000;
 /// Satin's `KeylessDeploy` (`keylessDeploy(bytes,uint256)`).
 pub const KEYLESS: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x03]);
-/// A pre-EIP-155 creation signed with key 0x42..42 (tests/keyless_gen.rs): gas price 100 gwei,
-/// gas limit 200,000, init code storing ORIGIN@1, GASPRICE@2, CALLER@3 and returning one byte.
+/// A signed pre-EIP-155 creation, keyed by 0x42..42: gas price 100 gwei, gas limit 200,000, init
+/// code storing ORIGIN@1, GASPRICE@2, CALLER@3 and returning one byte.
 pub const KEYLESS_SIGNED_TX: &str = "f8628085174876e80083030d40808091326001553a6002553360035560016000f31ca02327bc65dfaefd3c65ae4f03ed8045b517d7a99e2b80026e1703dfc1131baf39a00750cc742e3f22b826b0f71e060d1181bf0e0d29d292f6f93e91803001cdb5d8";
 pub const KEYLESS_SIGNER: Address = Address::new([
     0x17, 0xc5, 0x18, 0x51, 0x67, 0x40, 0x1e, 0xd0, 0x0c, 0xf5, 0xf5, 0xb2, 0xfc, 0x97, 0xd9, 0xbb,
@@ -846,20 +846,4 @@ pub fn all() -> Vec<Scenario> {
 /// `remainingComputeGas()`'s selector.
 pub fn remaining_compute_gas_selector() -> [u8; 4] {
     alloy_primitives::keccak256("remainingComputeGas()")[..4].try_into().unwrap()
-}
-
-/// The state slots the comparison reads after a scenario.
-pub fn watched_slots() -> Vec<(Address, u64)> {
-    let mut v = Vec::new();
-    for a in [A, B, C, D, keyless_deployed()] {
-        for k in [1u64, 2, 3, 4, 5, 0x10, 0x11, 0x20, 0x21, 0x22] {
-            v.push((a, k));
-        }
-    }
-    v
-}
-
-/// The balances the comparison reads after a scenario.
-pub fn watched_balances() -> Vec<Address> {
-    vec![A, B, C, D, EMPTY, IDENTITY, LIMIT_CONTROL, KEYLESS_SIGNER, keyless_deployed()]
 }

@@ -5,7 +5,7 @@
 //! transaction and pre-block call.
 //!
 //! Environment: `MEGA_EVM2_BLOCK_DIR` (recorded blocks), `MEGA_EVM2_REPLAY_REF`, the count
-//! expectations of `shared/gate.rs`; `MEGA_EVM2_OUT` additionally writes every comparison.
+//! expectations of `src/gate.rs`; `MEGA_EVM2_OUT` additionally writes every comparison.
 //! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line.
 
 use alloy_primitives::{Address, B256, Bytes, U256, address, keccak256};

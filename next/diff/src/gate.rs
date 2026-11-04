@@ -102,6 +102,8 @@ pub fn classify(
     if remaining.is_empty() { Verdict::Known } else { Verdict::Differ(remaining) }
 }
 
+/// The counts of a gate's summary line, when `MEGA_EVM2_EXPECT` names them (the summary line
+/// comparison in `gate-lib.sh` covers the rest).
 pub fn expected(key: &str, actual: u64) {
     if let Ok(s) = std::env::var(key) {
         assert_eq!(actual, s.parse::<u64>().expect("numeric expected count"), "{key}");
@@ -113,23 +115,11 @@ pub fn finish(totals: &BTreeMap<String, u64>) {
         .iter()
         .filter(|(k, n)| {
             **n > 0 &&
-                (k.contains("differ") ||
-                    k.contains("missing") ||
-                    k.contains("envelope_error"))
+                (k.contains("differ") || k.contains("missing") || k.contains("envelope_error"))
         })
         .collect();
     assert!(bad.is_empty(), "differential gate: {bad:?}");
     expected("MEGA_EVM2_EXPECT", *totals.get("match").unwrap_or(&0));
-    expected("MEGA_EVM2_EXPECT_PRE", *totals.get("pre_block:match").unwrap_or(&0));
-    expected(
-        "MEGA_EVM2_EXPECT_BLOCKS",
-        *totals.get("block_counters:match").or(totals.get("blocks")).unwrap_or(&0),
-    );
-    expected("MEGA_EVM2_EXPECT_POST", *totals.get("post_state:match").unwrap_or(&0));
-    expected(
-        "MEGA_EVM2_EXPECT_REFUSED",
-        totals.iter().filter(|(k, _)| k.starts_with("refused_both")).map(|(_, n)| n).sum(),
-    );
 }
 
 fn sum(totals: &BTreeMap<String, u64>, pick: impl Fn(&str) -> bool) -> u64 {

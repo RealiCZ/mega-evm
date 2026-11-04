@@ -133,7 +133,7 @@ pub struct BlockDb {
     pub accounts: HashMap<Address, Acc>,
     pub codes: HashMap<B256, Bytes>,
     pub block_hashes: BTreeMap<u64, B256>,
-    /// Recording of every read (on in the correctness runs, off in the measured ones).
+    /// Recording of every read (the gates run with it on).
     pub record: bool,
     pub reads: Reads,
     /// Every miss, in order (`what`), and the per-run count.
@@ -252,7 +252,7 @@ impl BlockDb {
     }
 }
 
-/// Loads `<dir>/<n>.json` (written by `tools/convert.py`).
+/// Loads `<dir>/<n>.json`, a block of the corpus's `real-blocks` (see `data/README.md`).
 pub fn load_block(path: &str, set: &str) -> Block {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("block file"))
         .expect("block json");

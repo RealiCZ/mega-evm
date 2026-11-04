@@ -1,10 +1,10 @@
 //! Block executor gate: every recorded block through the Satin engine's `BlockExecutor`, plain and
 //! inspected, against the reference's block-level output. Each side commits its own state.
-//! All deliberate normalizations/exclusions are in `shared/gate.rs`.
+//! All deliberate normalizations/exclusions are in `src/gate.rs`.
 //!
 //! Environment: `MEGA_EVM2_BLOCK_DIR` (recorded blocks), `MEGA_EVM2_REPLAY_REF` (per-transaction
 //! reference lines), `MEGA_EVM2_BLOCK_REF` (block-level reference lines), the count expectations of
-//! `shared/gate.rs`; `MEGA_EVM2_OUT` additionally writes every comparison.
+//! `src/gate.rs`; `MEGA_EVM2_OUT` additionally writes every comparison.
 //! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line.
 use alloy_primitives::B256;
 use evm2::evm::AccountInfo;
@@ -84,7 +84,7 @@ fn run_block(set: &str, path: &str, st: &[Value], inspected: bool) -> Vec<Value>
     let mut evm = replay::new_evm(
         &b.header,
         b.chain_id,
-        Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())), pause: None },
+        Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) },
     );
     if inspected {
         evm.set_inspector(Frames::default());

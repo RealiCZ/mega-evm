@@ -458,7 +458,16 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
         ("reads", read_set),
         ("frames", json!(frames)),
         ("priced", json!(ext.detention.priced.iter().map(|p| json!(p)).collect::<Vec<_>>())),
-        ("hints", json!(ext.mechanisms.hints.iter().map(|(f, t, d)| json!([format!("{f}"), format!("{t}"), hex(d)])).collect::<Vec<_>>())),
+        (
+            "hints",
+            json!(
+                ext.mechanisms
+                    .hints
+                    .iter()
+                    .map(|(f, t, d)| json!([format!("{f}"), format!("{t}"), hex(d)]))
+                    .collect::<Vec<_>>()
+            ),
+        ),
     ] {
         out.insert(k.into(), v);
     }

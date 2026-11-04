@@ -28,15 +28,11 @@ use std::{cell::RefCell, collections::HashMap, convert::Infallible, rc::Rc};
 pub const DEFAULT_LIMITS: [u64; 3] = [13_107_200, 500_000, 1_000];
 pub const DEFAULT_DETENTION_CAP: u64 = 20_000_000;
 
-/// Hooks for the measured build: collection is paused inside every database accessor.
-pub type PauseFn = fn() -> Option<Box<dyn std::any::Any>>;
-
 /// The block state as an evm2 `Database`. Bytecode is kept per hash, analysed once (as a node's
 /// code cache keeps it), so neither the jump-table analysis nor the hashing is in a run.
 pub struct Evm2Db {
     pub db: Rc<RefCell<BlockDb>>,
     pub code_cache: Rc<RefCell<HashMap<B256, Bytecode>>>,
-    pub pause: Option<PauseFn>,
 }
 
 impl core::fmt::Debug for Evm2Db {
@@ -62,7 +58,6 @@ impl Evm2Db {
 impl Database for Evm2Db {
     type Error = Infallible;
     fn get_account(&mut self, address: &Address) -> Result<Option<AccountInfo>, Infallible> {
-        let _p = self.pause.and_then(|f| f());
         let a = self.db.borrow_mut().account(*address);
         Ok(a.map(|(balance, nonce, code_hash, code)| {
             let mut info = AccountInfo::default().with_balance(balance);
@@ -75,16 +70,13 @@ impl Database for Evm2Db {
         }))
     }
     fn get_code_by_hash(&mut self, code_hash: &B256) -> Result<Bytecode, Infallible> {
-        let _p = self.pause.and_then(|f| f());
         let code = self.db.borrow_mut().code(*code_hash);
         Ok(self.bytecode(*code_hash, code))
     }
     fn get_storage(&mut self, address: &Address, key: &Word) -> Result<Word, Infallible> {
-        let _p = self.pause.and_then(|f| f());
         Ok(self.db.borrow_mut().storage(*address, *key))
     }
     fn get_block_hash(&mut self, number: &Word) -> Result<B256, Infallible> {
-        let _p = self.pause.and_then(|f| f());
         Ok(self.db.borrow_mut().block_hash(number.to::<u64>()))
     }
 }
@@ -167,11 +159,7 @@ pub fn run_tx(
     inspected: bool,
 ) -> (Value, Vec<Value>) {
     db.borrow_mut().begin_run();
-    let mut evm = new_evm(
-        h,
-        chain_id,
-        Evm2Db { db: db.clone(), code_cache: code_cache.clone(), pause: None },
-    );
+    let mut evm = new_evm(h, chain_id, Evm2Db { db: db.clone(), code_cache: code_cache.clone() });
     if inspected {
         evm.set_inspector(Frames::default());
     }
@@ -215,11 +203,9 @@ pub fn run_tx(
             (format!("{}", c.address), json!({"created":c.created,"destroyed":c.selfdestructed}))
         })
         .collect();
-    for (k, v) in [
-        ("reads", reads),
-        ("misses", json!(d.run_misses)),
-        ("account_flags", Value::Object(flags)),
-    ] {
+    for (k, v) in
+        [("reads", reads), ("misses", json!(d.run_misses)), ("account_flags", Value::Object(flags))]
+    {
         out.insert(k.into(), v);
     }
     (Value::Object(out), frames)
@@ -237,11 +223,7 @@ pub fn run_system_call(
     inspected: bool,
 ) -> Value {
     db.borrow_mut().begin_run();
-    let mut evm = new_evm(
-        h,
-        chain_id,
-        Evm2Db { db: db.clone(), code_cache: code_cache.clone(), pause: None },
-    );
+    let mut evm = new_evm(h, chain_id, Evm2Db { db: db.clone(), code_cache: code_cache.clone() });
     if inspected {
         evm.set_inspector(Frames::default());
     }
