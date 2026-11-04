@@ -10,7 +10,7 @@ use alloy_primitives::B256;
 use evm2::evm::AccountInfo;
 use mega_evm2::block::{BlockExecutor, encode_receipt};
 use mega_evm2_diff::{
-    driver::Frames,
+    driver::{self, Frames},
     gate,
     replay::{self, Evm2Db, blockdb},
 };
@@ -107,18 +107,9 @@ fn run_block(set: &str, path: &str, st: &[Value], inspected: bool) -> Vec<Value>
             }
             Ok(out) => {
                 let r = &out.result;
-                row["status"] = json!(if r.ext.failed_deposit {
-                    "halt".to_string()
-                } else {
-                    mega_evm2_diff::driver::status_of(r.stop)
-                });
-                row["halt"] = if r.ext.failed_deposit {
-                    json!("FailedDeposit")
-                } else if r.stop.is_halt() {
-                    json!(format!("{:?}", r.stop))
-                } else {
-                    Value::Null
-                };
+                let (status, halt) = driver::status_halt(r);
+                row["status"] = status;
+                row["halt"] = halt;
                 row["output"] = json!(blockdb::hex(&r.output));
                 row["gas_used"] = json!(r.tx_gas_used());
                 row["receipt_gas"] = json!(out.gas_used);

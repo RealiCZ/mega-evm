@@ -7,7 +7,7 @@ pub mod scenarios;
 use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
 use evm2::{
-    Evm, ExecutionConfig,
+    Evm, ExecutionConfig, TxResult,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Database, InMemoryDB},
@@ -17,12 +17,8 @@ use evm2::{
 use mega_evm2::{MegaSpec, MegaTypes, ledger::*};
 use op_evm2::{OpTxEnvelope, TxDeposit};
 use scenarios::Scenario;
-use serde_json::{Value, json};
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
-    rc::Rc,
-};
+use serde_json::{Map, Value, json};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
 pub const DEFAULT_LIMITS: [u64; 3] = [13_107_200, 500_000, 1_000];
 pub const DEFAULT_DETENTION_CAP: u64 = 20_000_000;
@@ -43,6 +39,123 @@ pub fn status_of(stop: InstrStop) -> String {
     } else {
         "halt".into()
     }
+}
+
+/// The `status` and `halt` fields of an outcome. op-revm reports every failed deposit as
+/// `Halt(FailedDeposit)`.
+pub fn status_halt(r: &TxResult<MegaTypes>) -> (Value, Value) {
+    let status = if r.ext.failed_deposit { json!("halt") } else { json!(status_of(r.stop)) };
+    let halt = if r.ext.failed_deposit {
+        json!("FailedDeposit")
+    } else if r.stop.is_halt() {
+        json!(format!("{:?}", r.stop))
+    } else {
+        Value::Null
+    };
+    (status, halt)
+}
+
+/// A changed account of an executed transaction: its state before and after, its lifecycle flags
+/// and the slots it changed (key, current value).
+pub struct Change {
+    pub address: Address,
+    pub original: Option<AccountInfo>,
+    pub current: Option<AccountInfo>,
+    pub touched: bool,
+    pub selfdestructed: bool,
+    pub created: bool,
+    pub slots: Vec<(U256, U256)>,
+}
+
+/// The account changes of an executed transaction, taken before it is committed.
+pub fn collect_changes(executed: &evm2::evm::ExecutedTx<'_, '_, MegaTypes>) -> Vec<Change> {
+    executed
+        .account_changes()
+        .map(|c| Change {
+            address: c.address,
+            original: c.original.cloned(),
+            current: c.current.cloned(),
+            touched: c.touched,
+            selfdestructed: c.selfdestructed,
+            created: c.created,
+            slots: c.storage.changed_slots().map(|(k, s)| (*k, s.current)).collect(),
+        })
+        .collect()
+}
+
+/// The `accounts` and `storage` fields: every touched account whose balance, nonce or code hash
+/// changed (destroyed ones rendered as zero, as the reference does), and every changed slot of an
+/// account that was not destroyed.
+pub fn changed_json(changes: &[Change]) -> (Map<String, Value>, Map<String, Value>) {
+    let mut accounts = Map::new();
+    let mut storage = Map::new();
+    for c in changes {
+        let orig = c.original.clone().unwrap_or_default();
+        let cur = c.current.clone().unwrap_or_default();
+        let changed = (orig.balance, orig.nonce, orig.code_hash) !=
+            (cur.balance, cur.nonce, cur.code_hash) ||
+            c.selfdestructed;
+        if c.touched && changed {
+            let (b, n, h) = if c.selfdestructed || c.current.is_none() {
+                (U256::ZERO, 0, B256::ZERO)
+            } else {
+                (cur.balance, cur.nonce, cur.code_hash)
+            };
+            accounts.insert(format!("{}", c.address), json!(format!("{b}/n{n}/{h}")));
+        }
+        if !c.selfdestructed {
+            for (k, v) in &c.slots {
+                storage.insert(format!("{}:{k:#x}", c.address), json!(format!("{v:#x}")));
+            }
+        }
+    }
+    (accounts, storage)
+}
+
+/// The fields a synthetic run and a replay run report identically, in the reference's JSON shape.
+pub fn render_outcome(
+    r: &TxResult<MegaTypes>,
+    ext: &Lite,
+    changed: (Map<String, Value>, Map<String, Value>),
+) -> Map<String, Value> {
+    let usage = ext.usage(r.status);
+    let (history, history_bytes) = ext.history(r.status);
+    let limit = match ext.top_stop {
+        Some((k, l))
+            if !r.status && r.output.as_ref() == limit_exceeded_output(k, l).as_slice() =>
+        {
+            json!(format!("{k}:{l}"))
+        }
+        _ => Value::Null,
+    };
+    let total_state = r.state_gas_spent;
+    let state = total_state.saturating_sub(history);
+    let regular = r.total_gas_spent.saturating_sub(total_state);
+    let (accounts, storage) = changed;
+    let (status, halt) = status_halt(r);
+    let mut o = Map::new();
+    for (k, v) in [
+        ("status", status),
+        ("halt", halt),
+        ("output", json!(hex(&r.output))),
+        ("gas_used", json!(r.tx_gas_used())),
+        ("regular", json!(regular)),
+        ("state", json!(state)),
+        ("history", json!(history)),
+        ("history_bytes", json!(history_bytes)),
+        ("reservoir_remaining", json!(ext.reservoir_left)),
+        ("data_size", json!(usage[0])),
+        ("kv", json!(usage[1])),
+        ("growth", json!(usage[2])),
+        ("limit_exceeded", limit),
+        ("logs", json!(r.logs.iter().map(|l| json!({"address": format!("{}", l.address), "topics": l.topics().iter().map(|t| format!("{t}")).collect::<Vec<_>>(), "data": hex(&l.data.data)})).collect::<Vec<_>>())),
+        ("accounts", Value::Object(accounts)),
+        ("storage", Value::Object(storage)),
+        ("ledger", json!(ext.settlements.iter().map(|l| json!({"depth": l.depth, "frame": {"remaining": l.frame_remaining, "net": l.frame_net}, "caller": {"remaining": l.caller_remaining, "net": l.caller_net}, "refund": l.refund})).collect::<Vec<_>>())),
+    ] {
+        o.insert(k.into(), v);
+    }
+    o
 }
 
 /// What the database served (Satin's `RecordingDatabase` keys).
@@ -314,37 +427,13 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
         evm.set_inspector(Frames::default());
     }
     let tx = tx(s);
-    let mut accounts = serde_json::Map::new();
-    let mut storage = serde_json::Map::new();
-    let r = {
+    let (r, changes) = {
         let executed = match evm.transact(&tx) {
             Ok(e) => e,
             Err(e) => return json!({"name": s.name, "group": s.group, "error": format!("{e:?}")}),
         };
-        for c in executed.account_changes() {
-            let orig = c.original.cloned().unwrap_or_default();
-            let cur = c.current.cloned().unwrap_or_default();
-            let changed = (orig.balance, orig.nonce, orig.code_hash) !=
-                (cur.balance, cur.nonce, cur.code_hash) ||
-                c.selfdestructed;
-            if c.touched && changed {
-                let (b, n, h) = if c.selfdestructed || c.current.is_none() {
-                    (U256::ZERO, 0, B256::ZERO)
-                } else {
-                    (cur.balance, cur.nonce, cur.code_hash)
-                };
-                accounts.insert(format!("{}", c.address), json!(format!("{b}/n{n}/{h}")));
-            }
-            if !c.selfdestructed {
-                for (k, slot) in c.storage.changed_slots() {
-                    storage.insert(
-                        format!("{}:{k:#x}", c.address),
-                        json!(format!("{:#x}", slot.current)),
-                    );
-                }
-            }
-        }
-        executed.commit()
+        let changes = collect_changes(&executed);
+        (executed.commit(), changes)
     };
     let frames = if inspected {
         evm.clear_inspector_as::<Frames>().map(|f| f.frames.clone()).unwrap_or_default()
@@ -352,24 +441,7 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
         Vec::new()
     };
     let ext: &Lite = evm.ext();
-    let usage = ext.usage(r.status);
-    let (history, history_bytes) = ext.history(r.status);
-    let limit = match ext.top_stop {
-        Some((k, l))
-            if !r.status && r.output.as_ref() == limit_exceeded_output(k, l).as_slice() =>
-        {
-            json!(format!("{k}:{l}"))
-        }
-        _ => Value::Null,
-    };
-    let total_state = r.state_gas_spent;
-    let state = total_state.saturating_sub(history);
-    let regular = r.total_gas_spent.saturating_sub(total_state);
-    let logs: Vec<Value> = r
-        .logs
-        .iter()
-        .map(|l| json!({"address": format!("{}", l.address), "topics": l.topics().iter().map(|t| format!("{t}")).collect::<Vec<_>>(), "data": hex(&l.data.data)}))
-        .collect();
+    let mut out = render_outcome(&r, ext, changed_json(&changes));
     let rd = reads.borrow();
     let read_set = json!({
         "accounts": rd.accounts.iter().map(|a| format!("{a}")).collect::<Vec<_>>(),
@@ -379,36 +451,16 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
         "buckets": ext.bucket_reads.iter().collect::<Vec<_>>(),
         "oracle_reads": ext.oracle_reads,
     });
-    let ledger: Vec<Value> = ext
-        .settlements
-        .iter()
-        .map(|l| json!({ "depth": l.depth, "frame": {"remaining": l.frame_remaining, "net": l.frame_net}, "caller": {"remaining": l.caller_remaining, "net": l.caller_net}, "refund": l.refund }))
-        .collect();
-    let _ = BTreeMap::<u8, u8>::new();
-    json!({
-        "name": s.name,
-        "group": s.group,
-        // op-revm reports every failed deposit as `Halt(FailedDeposit)`.
-        "status": if r.ext.failed_deposit { "halt".to_string() } else { status_of(r.stop) },
-        "halt": if r.ext.failed_deposit { json!("FailedDeposit") } else if r.stop.is_halt() { json!(format!("{:?}", r.stop)) } else { Value::Null },
-        "output": hex(&r.output),
-        "gas_used": r.tx_gas_used(),
-        "regular": regular,
-        "state": state,
-        "history": history,
-        "history_bytes": history_bytes,
-        "reservoir_remaining": ext.reservoir_left,
-        "data_size": usage[0],
-        "kv": usage[1],
-        "growth": usage[2],
-        "limit_exceeded": limit,
-        "logs": logs,
-        "accounts": accounts,
-        "storage": storage,
-        "reads": read_set,
-        "ledger": ledger,
-        "frames": frames,
-        "priced": ext.detention.priced.iter().map(|p| json!(p)).collect::<Vec<_>>(),
-        "hints": ext.mechanisms.hints.iter().map(|(f, t, d)| json!([format!("{f}"), format!("{t}"), hex(d)])).collect::<Vec<_>>(),
-    })
+    drop(rd);
+    for (k, v) in [
+        ("name", json!(s.name)),
+        ("group", json!(s.group)),
+        ("reads", read_set),
+        ("frames", json!(frames)),
+        ("priced", json!(ext.detention.priced.iter().map(|p| json!(p)).collect::<Vec<_>>())),
+        ("hints", json!(ext.mechanisms.hints.iter().map(|(f, t, d)| json!([format!("{f}"), format!("{t}"), hex(d)])).collect::<Vec<_>>())),
+    ] {
+        out.insert(k.into(), v);
+    }
+    Value::Object(out)
 }

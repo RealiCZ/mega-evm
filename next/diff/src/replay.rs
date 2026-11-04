@@ -8,11 +8,11 @@
 #[path = "../shared/blockdb.rs"]
 pub mod blockdb;
 
-use crate::driver::Frames;
+use crate::driver::{Frames, changed_json, collect_changes, render_outcome};
 use alloy_consensus::transaction::Recovered;
 use alloy_eips::Decodable2718;
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
-use blockdb::{BlockDb, EMPTY_CODE_HASH, Header, addr, b256, bytes, hex, u64v, u256};
+use blockdb::{BlockDb, EMPTY_CODE_HASH, Header, addr, b256, bytes, u64v, u256};
 use evm2::{
     Evm, ExecutionConfig,
     bytecode::Bytecode,
@@ -157,52 +157,6 @@ pub fn decode(raw: &Bytes, t: &Value) -> Result<Recovered<OpTxEnvelope>, String>
     Ok(Recovered::new_unchecked(env, sender))
 }
 
-fn changed_json(executed_changes: &[Change]) -> (Map<String, Value>, Map<String, Value>) {
-    let mut accounts = Map::new();
-    let mut storage = Map::new();
-    for (a, orig, cur, touched, selfdestructed, _created, slots) in executed_changes {
-        let orig = orig.clone().unwrap_or_default();
-        let curv = cur.clone().unwrap_or_default();
-        let changed = (orig.balance, orig.nonce, orig.code_hash) !=
-            (curv.balance, curv.nonce, curv.code_hash) ||
-            *selfdestructed;
-        if *touched && changed {
-            let (b, n, h) = if *selfdestructed || cur.is_none() {
-                (U256::ZERO, 0, B256::ZERO)
-            } else {
-                (curv.balance, curv.nonce, curv.code_hash)
-            };
-            accounts.insert(format!("{a}"), json!(format!("{b}/n{n}/{h}")));
-        }
-        if !selfdestructed {
-            for (k, v) in slots {
-                storage.insert(format!("{a}:{k:#x}"), json!(format!("{v:#x}")));
-            }
-        }
-    }
-    (accounts, storage)
-}
-
-type Change =
-    (Address, Option<AccountInfo>, Option<AccountInfo>, bool, bool, bool, Vec<(U256, U256)>);
-
-fn collect_changes(executed: &evm2::evm::ExecutedTx<'_, '_, MegaTypes>) -> Vec<Change> {
-    executed
-        .account_changes()
-        .map(|c| {
-            (
-                c.address,
-                c.original.cloned(),
-                c.current.cloned(),
-                c.touched,
-                c.selfdestructed,
-                c.created,
-                c.storage.changed_slots().map(|(k, s)| (*k, s.current)).collect(),
-            )
-        })
-        .collect()
-}
-
 /// Runs one transaction on a fresh `Evm` and renders it as the Satin replay does.
 pub fn run_tx(
     h: &Header,
@@ -241,25 +195,8 @@ pub fn run_tx(
         Vec::new()
     };
     let ext: &Lite = evm.ext();
-    let usage = ext.usage(r.status);
-    let (history, history_bytes) = ext.history(r.status);
-    let limit = match ext.top_stop {
-        Some((k, l))
-            if !r.status && r.output.as_ref() == limit_exceeded_output(k, l).as_slice() =>
-        {
-            json!(format!("{k}:{l}"))
-        }
-        _ => Value::Null,
-    };
-    let total_state = r.state_gas_spent;
-    let state = total_state.saturating_sub(history);
-    let regular = r.total_gas_spent.saturating_sub(total_state);
-    let logs: Vec<Value> = r
-        .logs
-        .iter()
-        .map(|l| json!({"address": format!("{}", l.address), "topics": l.topics().iter().map(|t| format!("{t}")).collect::<Vec<_>>(), "data": hex(&l.data.data)}))
-        .collect();
     let (accounts, storage) = changed_json(&changes);
+    let mut out = render_outcome(&r, ext, (accounts.clone(), storage));
     let d = db.borrow();
     let mut reads = d.reads.to_json();
     let ro = reads.as_object_mut().unwrap();
@@ -267,42 +204,25 @@ pub fn run_tx(
     ro.insert("oracle_reads".into(), json!(ext.oracle_reads));
     let flags: Map<String, Value> = changes
         .iter()
-        .filter(|(a, _, _, touched, destroyed, created, slots)| {
-            *touched &&
-                (*destroyed ||
-                    *created ||
-                    accounts.contains_key(&format!("{a}")) ||
-                    !slots.is_empty())
+        .filter(|c| {
+            c.touched &&
+                (c.selfdestructed ||
+                    c.created ||
+                    accounts.contains_key(&format!("{}", c.address)) ||
+                    !c.slots.is_empty())
         })
-        .map(|(a, _, _, _, destroyed, created, _)| {
-            (format!("{a}"), json!({"created":created,"destroyed":destroyed}))
+        .map(|c| {
+            (format!("{}", c.address), json!({"created":c.created,"destroyed":c.selfdestructed}))
         })
         .collect();
-    let ledger: Vec<Value> = ext.settlements.iter().map(|l| json!({"depth":l.depth,"frame":{"remaining":l.frame_remaining,"net":l.frame_net},"caller":{"remaining":l.caller_remaining,"net":l.caller_net},"refund":l.refund})).collect();
-    let out = json!({
-        // op-revm reports every failed deposit as `Halt(FailedDeposit)`.
-        "status": if r.ext.failed_deposit { "halt".to_string() } else { crate::driver::status_of(r.stop) },
-        "halt": if r.ext.failed_deposit { json!("FailedDeposit") } else if r.stop.is_halt() { json!(format!("{:?}", r.stop)) } else { Value::Null },
-        "output": hex(&r.output),
-        "gas_used": r.tx_gas_used(),
-        "regular": regular,
-        "state": state,
-        "history": history,
-        "history_bytes": history_bytes,
-        "reservoir_remaining": ext.reservoir_left,
-        "data_size": usage[0],
-        "kv": usage[1],
-        "growth": usage[2],
-        "limit_exceeded": limit,
-        "logs": logs,
-        "accounts": accounts,
-        "storage": storage,
-        "reads": reads,
-        "misses": d.run_misses,
-        "account_flags": flags,
-        "ledger": ledger,
-    });
-    (out, frames)
+    for (k, v) in [
+        ("reads", reads),
+        ("misses", json!(d.run_misses)),
+        ("account_flags", Value::Object(flags)),
+    ] {
+        out.insert(k.into(), v);
+    }
+    (Value::Object(out), frames)
 }
 
 /// The pre-block system calls (EIP-2935, EIP-4788, and the registry's due change), each on a
