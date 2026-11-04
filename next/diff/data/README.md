@@ -106,30 +106,15 @@ and packs `<out-dir>/reference-outputs.tar.zst` in the layout above, which `gate
   Only `micros` is ignored.
 - Without `--check` it also re-cuts this sample with `make-sample.sh` from the new archive and rewrites `expected.env` from the regenerated files.
 
-A gate or reference script writes only its own paths, and refuses the inputs that would put one of them in the corpus.
-`regen-reference.sh` writes only a new directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run succeeds; a failed run keeps it, with its logs; `make-sample.sh`'s scratch files go there too), the archive path `<out-dir>/reference-outputs.tar.zst`, cargo's directory `<target>/mega-evm2-reference`, and, without `--check`, this directory.
+`regen-reference.sh` writes only a new directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run succeeds; a failed run keeps it, with its logs), the archive path `<out-dir>/reference-outputs.tar.zst`, cargo's directory `<target>/mega-evm2-reference`, and, without `--check`, this directory.
 The new archive is renamed over the archive path, so a link there is replaced and never written through.
 
-**What the corpus guard covers.** Each gate or reference script checks its paths early and refuses an output directory, cargo target directory, Cargo home or `next/diff/data` that is the corpus or lies inside it, and an archive path that is or links into the corpus.
-That is all: it does not defend against links planted inside those directories, a corpus placed inside one of those directories, other process environment, or changes made while a run is in progress; the Cargo home is checked by its resolved path only, and links inside a corpus archive's members are not looked at.
-The gate results that count are CI's, which runs in a fixed layout with a freshly downloaded corpus.
-A local corpus can be re-downloaded from the storage named by `MEGA_EVM2_CORPUS_URL`; for a hard guarantee locally, make the corpus read-only (`chmod -R a-w <corpus>`).
-
-Before it builds or writes anything, the script refuses, with exit status 2, every input for which one of these paths could reach the corpus:
-
-- `<out-dir>` in the corpus: the corpus's `reference/` directory, a link to it, any directory inside the corpus, or the corpus itself;
-- an archive path that resolves into the corpus (a symlink to a corpus file, directory or missing path, or a hard link to a corpus file), or that is a directory or a link to one;
-- a cargo directory (`<target>/mega-evm2-reference`) in the corpus, holding it, or holding a link into it (a symlink to a corpus path, or a hard link to a corpus file): cargo writes anywhere below it;
-- the Cargo home actually used (`CARGO_HOME`, or `$HOME/.cargo` when unset) in the corpus or in a directory a corpus symlink reaches: cargo writes its cache there;
-- without `--check`, a corpus that overlaps this directory.
-
-Paths are compared exactly (a name may end in a line break) after resolving symlinks, by device and inode, so another name of the corpus (a symlink, other letter case on a case-insensitive file system) counts.
-The corpus is everything reachable from `MEGA_EVM2_CORPUS_DIR`, through its symlinks too: a corpus made of links to another one protects that one as well.
-A symlink in the corpus that leads nowhere is refused, since the run could create its target.
-A corpus elsewhere inside `<out-dir>`, at `<out-dir>/stage` for instance, is left alone: no path the run writes reaches it.
-Replace the corpus archive by hand once the regenerated one is reviewed: a `--check` against an archive the run itself had replaced would compare the new outputs with themselves.
-`--check` takes the expected outputs out of the corpus archive before it generates anything.
-`scripts/check-regen-refusal.sh`, run by CI, checks each of these inputs on scratch corpora, in both modes.
+**What the script refuses.** Before it builds or writes anything, `regen-reference.sh` exits with status 2 when `<out-dir>` is the corpus or lies inside it (a symlink to it counts), or when the archive path is a corpus archive or a link into the corpus.
+A `--check` pointed at `<corpus>/reference` would replace the expected archive and then compare the new outputs with themselves.
+Nothing else is guarded: the gate scripts only read the corpus, and the results that count are CI's, which downloads a fresh corpus.
+A local corpus can be re-downloaded from the storage named by `MEGA_EVM2_CORPUS_URL`, or made read-only with `chmod -R a-w <corpus>`.
+`--check` takes the expected outputs out of the corpus archive before it generates anything; replace the corpus archive by hand once the regenerated one is reviewed.
+`scripts/check-regen-refusal.sh`, run by CI, checks the refusals on a scratch corpus, in both modes.
 
 **Bumping the reference pin** (the `mega-evm` revision in `next/reference/Cargo.toml`) requires running `regen-reference.sh <out-dir>` and reviewing the resulting `git diff` of this directory:
 every changed file is a behavior change of the reference, and must be explained by the change that moved the pin.

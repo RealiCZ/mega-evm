@@ -20,37 +20,18 @@
 #             resulting `git diff` of `data/`: it is the effect of the reference change.
 #
 # It writes only: a new directory of its own, `<out-dir>/stage.XXXXXX` (removed when the run
-# succeeds; a failed run keeps it, with its logs; `make-sample.sh`'s scratch files go there too);
-# the archive path, over which the new archive is renamed (rename(2)), so a link there is replaced
-# and never written through; cargo's directory `<target>/mega-evm2-reference`; and, in default mode,
-# `next/diff/data`. It creates <out-dir> and the target directory when missing. It removes its own
-# directory, the previous entry at the archive path, and, in default mode, what `make-sample.sh`
-# rewrites under `next/diff/data`; nothing else. None of these paths may be the corpus or lie
-# inside it: the guard below refuses such inputs.
+# succeeds; a failed run keeps it, with its logs), the archive path, over which the new archive is
+# renamed (rename(2)), so a link there is replaced and never written through; cargo's directory
+# `<target>/mega-evm2-reference`; and, in default mode, `next/diff/data`.
 #
-# What the corpus guard covers, and nothing more: an output directory, a cargo target directory, a
-# Cargo home or `next/diff/data` that is the corpus or lies inside it, and an archive path that is
-# or links into the corpus. It does not defend against links planted inside those directories, a
-# corpus placed inside one of those directories, other process environment, or changes made while a
-# run is in progress; the Cargo home is checked by its resolved path only, and links inside a corpus
-# archive's members are not looked at. The gate results that count are CI's, which runs in a fixed
-# layout with a freshly downloaded corpus; a local corpus can be re-downloaded from the storage
-# named by `MEGA_EVM2_CORPUS_URL`, and for a hard guarantee locally, make the corpus read-only
-# (`chmod -R a-w <corpus>`).
-#
-# Before anything is built or written (`refuse_corpus_writes.py`), it exits with status 2 when one
-# of these paths could reach the corpus: <out-dir> in the corpus (its `reference/`, a link to it, a
-# directory below it, the corpus itself); an archive path that resolves into the corpus (a symlink
-# to a corpus file, directory or missing path, or a hard link to a corpus file) or is a directory
-# or a link to one; a cargo directory in the corpus, holding it, or holding a link into it (cargo
-# writes anywhere below it); the Cargo home actually used (`CARGO_HOME`, or `$HOME/.cargo` when
-# unset) in the corpus or in a directory a corpus symlink reaches; in default mode, a corpus that
-# overlaps `next/diff/data`. The corpus is everything reachable from `$MEGA_EVM2_CORPUS_DIR`,
-# through its symlinks too; a symlink in it that leads nowhere is refused. A corpus elsewhere inside
-# <out-dir> is not touched. Replace the
-# corpus archive by hand once the regenerated one is reviewed: a `--check` against an archive the
-# run itself had replaced would compare the new outputs with themselves. `--check` takes the
-# expected outputs out of the corpus archive before it generates anything.
+# Before anything is built or written it exits with status 2 when <out-dir> is the corpus or lies
+# inside it (a symlink to it counts), or when the archive path is a corpus archive or a link into
+# the corpus. Without that, `--check` pointed at `<corpus>/reference` would replace the expected
+# archive and then compare the new outputs with themselves. `--check` takes the expected outputs
+# out of the corpus archive before it generates anything. Nothing else is guarded: the gate scripts
+# only read the corpus, and the results that count are CI's, which downloads a fresh corpus. A
+# local corpus can be re-downloaded from the storage named by `MEGA_EVM2_CORPUS_URL`, or made
+# read-only with `chmod -R a-w <corpus>`.
 #
 # The build fetches the pinned revisions of mega-evm and its forks from GitHub and the run takes
 # tens of minutes.
@@ -70,34 +51,45 @@ next=$(cd "$here/.." && pwd)
 source "$here/scripts/common.sh"
 refuse_overrides
 
-# resolve <var> <path>: sets <var> to <path> with every symlink resolved (components that do not
-# exist yet are kept). Exact: a line break at the end of a name stays, where `$(...)` drops it.
-resolve() {
-  local r
-  r=$(python3 -I -c 'import os, sys; sys.stdout.write(os.path.realpath(sys.argv[1]) + "/")' "$2")
-  printf -v "$1" '%s' "${r%/}"
-}
-
-# Decided before anything is built or written, on the paths the run then uses (resolved, so a
-# directory it creates is exactly the one checked): none of them can reach the corpus, and the
-# archive `--check` compares with is the one `gate.sh full` reads (a regenerated archive wins over
-# the original one).
-corpus='' out='' target=''
-resolve corpus "$MEGA_EVM2_CORPUS_DIR"
-[ -d "$corpus" ] || { echo "regen-reference.sh: MEGA_EVM2_CORPUS_DIR is not a directory: $MEGA_EVM2_CORPUS_DIR" >&2; exit 2; }
-resolve out "$1"
-resolve target "${CARGO_TARGET_DIR:-$next/target}"
-archive=$out/reference-outputs.tar.zst
-data=
-[ "$check" = 1 ] || data=$here/data
-python3 -I "$here/scripts/refuse_corpus_writes.py" "$corpus" "$out" "$target/mega-evm2-reference" ${data:+"$data"}
+corpus=$(cd -P "$MEGA_EVM2_CORPUS_DIR" 2> /dev/null && pwd -P) ||
+  { echo "regen-reference.sh: MEGA_EVM2_CORPUS_DIR is not a directory: $MEGA_EVM2_CORPUS_DIR" >&2; exit 2; }
 expected_archive=$corpus/reference/reference-outputs.tar.zst
 [ -f "$expected_archive" ] || expected_archive=$corpus/reference/q11-oracles.tar.zst
 if [ "$check" = 1 ] && [ ! -f "$expected_archive" ]; then
   echo "regen-reference.sh: no expected archive: $corpus/reference has neither reference-outputs.tar.zst nor q11-oracles.tar.zst" >&2
   exit 2
 fi
-mkdir -p "$out" "$target"
+
+# The output directory must not be the corpus or inside it, and the archive path must not be a
+# corpus archive or a link into the corpus; decided before anything is built or written.
+python3 -I - "$corpus" "$1" << 'EOF' || exit 2
+import os, sys
+
+corpus = os.path.realpath(sys.argv[1])
+out = os.path.realpath(sys.argv[2])
+archive = os.path.join(out, "reference-outputs.tar.zst")
+
+
+def inside(path):
+    return path == corpus or path.startswith(corpus + os.sep)
+
+
+def refuse(what):
+    sys.exit("regen-reference.sh: %s is in the corpus (%s); the run would overwrite it. Write elsewhere." % (what, corpus))
+
+
+if inside(out):
+    refuse("the output directory " + out)
+if inside(os.path.realpath(archive)):
+    refuse("the archive path " + archive)
+for name in ("reference-outputs.tar.zst", "q11-oracles.tar.zst"):
+    c = os.path.join(corpus, "reference", name)
+    if os.path.exists(archive) and os.path.exists(c) and os.path.samefile(archive, c):
+        refuse("the archive path " + archive)
+EOF
+out=$(abs_dir "$1")
+target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
+archive=$out/reference-outputs.tar.zst
 # This run's own directory: new, so removing it removes nothing else, and in <out-dir>, so the
 # archive is renamed from it within one file system. A failed run keeps it, with the logs.
 run=$(mktemp -d "$out/stage.XXXXXX")

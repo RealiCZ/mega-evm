@@ -16,8 +16,6 @@ target=$(abs_dir "${CARGO_TARGET_DIR:-$here/../target}")
 work=$target/mega-evm2-diff/make-sample
 data=$here/data
 
-refuse_corpus_writes "$corpus" "$work" "$work/.cargo" "$data"
-
 BLOCKS="
 d4:2045117 d4:3224158 d4:7487457 d4:8064067 d4:10108963 d4:12747297 d4:14924732
 d4:18138664 d4:19010529 d4:22016777 d4:27670576 d4:27985540 d4:28102900 d4:28107033

@@ -2,8 +2,6 @@
 # Sourced by gate.sh, controls.sh, faults.sh, check-reference.sh, regen-reference.sh and
 # make-sample.sh.
 
-_common_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-#
 # The six fuzz batches of the full gate, as name:mode:first..=last:count. `gate.sh full` runs the
 # engine on them and `regen-reference.sh` generates their reference outputs, so both read this list.
 FULL_FUZZ_BATCHES=(
@@ -30,19 +28,6 @@ abs_dir() {
 # rename_exact <from> <to>: rename(2), which replaces <to> itself even when it is a link to a
 # directory (where `mv` would move <from> into that directory, writing through the link).
 rename_exact() { python3 -I -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$1" "$2"; }
-
-# refuse_corpus_writes <corpus> <out> <cargo> [<data>]: exits 2 with the reason when one of the
-# paths a run writes is the corpus or lies inside it. The corpus is everything
-# reachable from <corpus>, through its symlinks too. The Cargo home actually used (`CARGO_HOME`, or
-# `$HOME/.cargo` when unset) is checked by its resolved path only; links inside it are out of
-# scope. Beyond those paths the check promises nothing: links planted inside them, a corpus placed
-# inside one of them, other process environment, and changes made while a run is in progress are
-# not defended against.
-refuse_corpus_writes() {
-  local args=("$1" "$2" "$3")
-  [ $# -lt 4 ] || args+=("$4")
-  python3 -I "$_common_dir/refuse_corpus_writes.py" "${args[@]}"
-}
 
 # run_dir <dir> <name>: creates and prints a new directory `<dir>/runs/<name>.XXXXXX` for one run's
 # logs and scratch files, so runs that share <dir> (two scripts on one cargo target) keep their

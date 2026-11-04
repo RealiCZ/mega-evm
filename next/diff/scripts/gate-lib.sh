@@ -39,14 +39,6 @@ source "$gate_lib_diff/scripts/stamp.sh"
 # on its file descriptors 8 and 9.
 gate_inputs() {
   local mode=$1 work=$2 stamp corpus archive batches blocks=""
-  if [ "$mode" = full ]; then
-    : "${MEGA_EVM2_CORPUS_DIR:?set MEGA_EVM2_CORPUS_DIR to the full corpus}"
-    local guard_corpus
-    guard_corpus=$(cd -P "$MEGA_EVM2_CORPUS_DIR" && pwd -P)
-    # The work directory and its parent are written by this run; the cargo directory below it
-    # (not the whole target, which holds the intended `blocks` link to the corpus) is checked.
-    refuse_corpus_writes "$guard_corpus" "$work" "$work/.cargo"
-  fi
   mkdir -p "$work"
   exec 8>> "$work/.inputs.lock" 9>> "$work/.readers.lock"
   gate_flock 8 ex "gate inputs: waiting for another run to prepare $work"
