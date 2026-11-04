@@ -82,6 +82,11 @@ Local builds use a path dependency on a checkout of our thin evm2 fork next to t
 cd next && cargo check --workspace
 ```
 
+## Benchmarks
+
+`cargo bench -p mega-evm2-diff --bench engine` times a few fixed workloads, plain and inspected (the workloads are listed in `diff/benches/engine.rs`); it needs `zstd` for the recorded block.
+Add `-- --save-baseline <name>` to save a run and `-- --baseline <name>` to compare a later run with it, with the same `CARGO_TARGET_DIR` and on the same machine.
+
 ## CI
 
 `.github/workflows/next.yml` checks this workspace.
