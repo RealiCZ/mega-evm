@@ -15,7 +15,7 @@
 # other than `MEGA_EVM2_CORPUS_DIR` is set (see `common.sh`). Inputs and the gate
 # runs are in `gate-lib.sh`. Test output goes to logs in a directory of this script,
 # `<target>/mega-evm2-diff/<mode>/gate-logs`, cleared at the start of a run; the tail of a failing
-# gate's log is printed. Do not run two gate scripts on the same cargo target at the same time.
+# gate's log is printed.
 set -euo pipefail
 
 mode=${1:-}
@@ -31,13 +31,14 @@ refuse_overrides
 target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 work=$target/mega-evm2-diff/$mode
-gate_inputs "$mode" "$work"
+inputs=$(fresh_dir "$work/gate-inputs")
+gate_inputs "$mode" "$inputs"
 logs=$(fresh_dir "$work/gate-logs")
 
 fail=0
 summaries=()
 for gate in main fuzz replay block; do
-  line=$(gate_run "$work" "$logs" "$gate") || fail=1
+  line=$(gate_run "$inputs" "$logs" "$gate") || fail=1
   summaries+=("${line:-GATE $gate FAILED}")
 done
 

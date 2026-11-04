@@ -38,10 +38,11 @@ refuse_overrides
 target=$(abs_dir "${CARGO_TARGET_DIR:-$next/target}")
 export CARGO_TARGET_DIR=$target
 work=$target/mega-evm2-diff/$mode
-gate_inputs "$mode" "$work"
+inputs=$(fresh_dir "$work/controls-inputs")
+gate_inputs "$mode" "$inputs"
 logs=$(fresh_dir "$work/controls-logs")
 # shellcheck disable=SC1091
-source "$work/expect.env"
+source "$inputs/expect.env"
 
 # Build once: the gate tests and the manifest lister.
 cd "$next"
@@ -123,7 +124,7 @@ while read -r kind switch gate _ case; do
   case "$gate" in
     main)
       scenario=$case
-      gate_env "$work" main
+      gate_env "$inputs" main
       select=(MEGA_EVM2_ONLY="$scenario" MEGA_EVM2_EXPECT=1)
       ;;
     fuzz)
@@ -134,12 +135,12 @@ while read -r kind switch gate _ case; do
         echo "BASELINE_FAILED $switch $gate $case: no fuzz batch of the $mode run holds mode $fmode seed $seed"
         continue
       fi
-      gate_env "$work" fuzz "$batch"
+      gate_env "$inputs" fuzz "$batch"
       select=(MEGA_EVM2_FUZZ="$seed..=$seed" MEGA_EVM2_ONLY="$scenario" MEGA_EVM2_EXPECT=1)
       ;;
     replay | block)
       test=$gate
-      gate_env "$work" "$gate"
+      gate_env "$inputs" "$gate"
       select=(MEGA_EVM2_BLOCKS="$case")
       ;;
   esac

@@ -14,25 +14,20 @@
 #     FUZZ_BATCHES   the fuzz batches, space-separated `name:mode:first..=last:count`
 #     EXPECT_REPLAY  the counts of the replay summary before `differ=0`
 #     EXPECT_BLOCK   the counts of the block summary before `differ=0`
-#   <script>-logs/                          one run's logs, cleared at the start of the run
 #
-# Two gate scripts must not run on the same cargo target at the same time.
+# Every script extracts its inputs into its own work directory, fresh on every run, and keeps its
+# logs in a sibling directory cleared at the start of the run.
 
 gate_lib_diff=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 gate_lib_next=$(cd "$gate_lib_diff/.." && pwd)
-# shellcheck source=stamp.sh
-source "$gate_lib_diff/scripts/stamp.sh"
 
-# gate_inputs sample|full <work>: fills <work> with the inputs of the sample (`next/diff/data`)
-# or of the full corpus ($MEGA_EVM2_CORPUS_DIR) and writes <work>/expect.env. The extracted files
-# are reused while the sample (or the corpus archive) and this file are unchanged.
+# gate_inputs sample|full <work>: extracts the inputs of the sample (`next/diff/data`) or of the
+# full corpus ($MEGA_EVM2_CORPUS_DIR) into <work> and writes <work>/expect.env. <work> is emptied
+# first, so an interrupted extraction or a stale input never survives into a run.
 gate_inputs() {
-  local mode=$1 work=$2 stamp corpus archive batches blocks=""
-  mkdir -p "$work"
+  local mode=$1 work=$2 corpus archive batches blocks=""
+  fresh_dir "$work" > /dev/null
   if [ "$mode" = sample ]; then
-    bash "$gate_lib_diff/scripts/check-stamp.sh" > /dev/null
-    # Every file of the sample, and this file (it defines the extracted layout).
-    stamp=$(stamp_dir "$gate_lib_diff/data")-$(stamp_file "$gate_lib_diff/scripts/gate-lib.sh")
     batches="mode4:4:1..=2000:2000"
   else
     : "${MEGA_EVM2_CORPUS_DIR:?set MEGA_EVM2_CORPUS_DIR to the full corpus}"
@@ -40,18 +35,12 @@ gate_inputs() {
     # A regenerated archive (`regen-reference.sh`) wins over the original one.
     archive=$corpus/reference/reference-outputs.tar.zst
     [ -f "$archive" ] || archive=$corpus/reference/q11-oracles.tar.zst
-    stamp=$(stamp_file "$archive")-$(stamp_file "$gate_lib_diff/scripts/gate-lib.sh")
     # The corpus directory may move between runs of the same archive: the link follows it.
     blocks=$corpus/real-blocks
     batches="${FULL_FUZZ_BATCHES[*]}"
   fi
-  if [ "$(cat "$work/.stamp" 2> /dev/null)" != "$stamp" ]; then
-    # No stamp while the files are incomplete: an interrupted extraction is redone.
-    rm -f "$work/.stamp"
-    gate_extract "$mode" "$work" "${archive:-}"
-    echo "$stamp" > "$work/.stamp"
-  fi
-  [ -z "$blocks" ] || { rm -rf "$work/blocks"; ln -s "$blocks" "$work/blocks"; }
+  gate_extract "$mode" "$work" "${archive:-}"
+  [ -z "$blocks" ] || ln -s "$blocks" "$work/blocks"
   (
     # shellcheck disable=SC1091
     source "$gate_lib_diff/data/expected.env"

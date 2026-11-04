@@ -2,7 +2,7 @@
 # Fault injection: shows that the differential gates reject wrong reference data.
 #
 # Runs on a copy of the sample's gate inputs (the files of `next/diff/data`, extracted as
-# `gate.sh sample` extracts them); the repository and the shared extracted inputs are never
+# `gate.sh sample` extracts them); the repository and the extracted inputs are never
 # written. Every fault of `faults.py` changes one thing (a value of a compared field, a missing,
 # duplicate or extra entry, a wrong expected count, a reference whose plain and inspected runs
 # disagree, a known difference that no longer matches, ...); the

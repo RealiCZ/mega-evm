@@ -30,7 +30,7 @@ engine replay and block executor on recorded blocks) against the reference outpu
 `sample` uses the in-repo data under `diff/data` (see `diff/data/README.md`); `full` reads the
 full corpus from `MEGA_EVM2_CORPUS_DIR`.
 The only accepted difference is listed in `diff/known-differences.toml`.
-Do not run two gate scripts on the same cargo target at the same time: they share the extracted inputs under `<target>/mega-evm2-diff/`.
+Every gate script extracts its inputs fresh into its own directory under `<target>/mega-evm2-diff/` at the start of a run, so different scripts can run at the same time and no run reuses an earlier extraction.
 `diff/scripts/check-reference.sh sample` regenerates the sample's reference outputs with
 `reference/` and checks they equal the stored ones.
 `diff/scripts/regen-reference.sh [--check] <out-dir>` does it for the full corpus and, without `--check`, rewrites the sample and `diff/data/expected.env`; moving the reference pin requires running it (see `diff/data/README.md`).
