@@ -169,25 +169,32 @@ scope = "sample"
 why = "A code deposit's state spill draws the frame's withheld gas first, through the fork's gas reserve (ReserveDraw::StateSpill(CodeDepositState)), and so does the deposited code's history at admission; off, both are charged to the spendable gas only."
 
 [[control]]
-switch = "extcodecopy_reach"
-gate = "main"
-scenario = "a20_extcodecopy_beneficiary_memory_unpayable_halts"
-scope = "sample"
-why = "EXTCODECOPY of the block beneficiary in a frame whose access is off is refused only when evm2's body would reach its load (the copy and the memory expansion paid, decided on a copy of the gas), then on the gas after the static gas (a19_extcodecopy_beneficiary_refused_on_static_gas); off, it is refused before the body, so an EXTCODECOPY that halts on its memory expansion (or, a21, its copy) reverts instead."
-
-[[control]]
-switch = "beneficiary_call_reach"
-gate = "main"
-scenario = "a22_call_beneficiary_memory_unpayable_halts"
-scope = "sample"
-why = "A call of the block beneficiary itself in a frame whose access is off is refused only when it gets as far as the load, after the memory expansion of its ranges and the value-transfer charge (a23_call_beneficiary_value_unpayable_halts), and before the skip-cold check (a24_call_beneficiary_cold_unpayable); off, it is refused before either charge, so a call that halts on them reverts instead."
-
-[[control]]
 switch = "blockhash_underflow"
 gate = "main"
 scenario = "a25_blockhash_empty_stack_underflows"
 scope = "sample"
 why = "BLOCKHASH pops its operand before the Host answers, so in a frame whose access is off an empty stack halts on the underflow and refuses nothing; off, the refusal runs before the opcode's own stack check and the frame reverts."
+
+[[control]]
+switch = "refuse_at_load"
+gate = "main"
+scenario = "a22_call_beneficiary_memory_unpayable_halts"
+scope = "sample"
+why = "In a frame whose access is off, the block beneficiary's account is refused where evm2's instruction loads it (the fork's account-load hook), after every charge the instruction makes before that load (a call's memory expansion and value transfer, EXTCODECOPY's copy and memory expansion); off, it is refused before the instruction's body, so a call that halts on its memory expansion reverts instead."
+
+[[control]]
+switch = "refusal_gas"
+gate = "main"
+scenario = "a19_extcodecopy_beneficiary_refused_on_static_gas"
+scope = "sample"
+why = "A refused load reverts the frame on the gas it had after the instruction's static gas, none of the dynamic gas charged before the load being owed; off, on the gas left at the load, so an EXTCODECOPY refused after its copy and memory charges uses more gas."
+
+[[control]]
+switch = "delegate_refusal"
+gate = "main"
+scenario = "t05_call_follows_delegation_refused"
+scope = "sample"
+why = "In a frame with volatile access off, a call of an account whose EIP-7702 delegate is the beneficiary is refused at the delegate's load (after the target's load and the delegation guard); off, it proceeds."
 
 [[control]]
 switch = "forward"
@@ -324,13 +331,6 @@ gate = "main"
 scenario = "d9_precompile_price_crosses"
 scope = "sample"
 why = "A precompile call is held to the detention cap and the limits with its price before it runs; off, it runs unheld."
-
-[[control]]
-switch = "refuse_delegate"
-gate = "main"
-scenario = "t05_call_follows_delegation_refused"
-scope = "sample"
-why = "In a frame with volatile access off, a CALL of an account whose EIP-7702 delegate is the beneficiary is refused at the delegate's load; off, it proceeds."
 
 [[control]]
 switch = "registry_read"

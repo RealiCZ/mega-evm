@@ -43,6 +43,9 @@ pub struct MechanismState {
     pub keyless_frame: bool,
     /// A deposit whose body is over the data-size limit (a failed deposit).
     pub body_refused: bool,
+    /// The running opcode's load of the block beneficiary was refused
+    /// (`MegaTypes::before_account_load`), waiting for the opcode's wrapper to revert the frame.
+    pub load_refused: bool,
 }
 
 impl MechanismState {

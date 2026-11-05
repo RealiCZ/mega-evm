@@ -1,8 +1,7 @@
 //! In a frame whose volatile-data access `MegaAccessControl` switched off, a CALL of an account
-//! whose EIP-7702 delegate is the block beneficiary is refused, but only if the CALL gets as far
-//! as loading its target. That check prices the CALL's memory expansion, whose quadratic term does
-//! not fit in a `u64` for a range ending near 2^40 bytes: such a CALL halts on the memory limit
-//! before any load.
+//! whose EIP-7702 delegate is the block beneficiary is refused at the delegate's load, which comes
+//! after the CALL's memory expansion: a CALL whose return range ends near 2^40 bytes (a memory
+//! cost whose quadratic term does not fit in a `u64`) halts on the memory limit before any load.
 
 use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, Bytes, Signature, TxKind, U256, keccak256};
