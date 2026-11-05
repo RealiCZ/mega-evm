@@ -6,17 +6,19 @@
 | ------------- | --------------------------------------------------------------------------------------- |
 | Repository    | [`RealiCZ/evm2`](https://github.com/RealiCZ/evm2) (`EVM2_FORK_REPO` in `evm2-fork.env`) |
 | Branch        | `cz/feat/thin-fork-v2`                                                                  |
-| Pinned commit | `7154ee0ac900e35b9ba52886450c2b0d4c3cc471` (`EVM2_FORK_REV`)                            |
-| Upstream base | `c47757e13860cb2e9f688101020b3feaa5a86760`                                              |
-| Base date     | 2026-11-01 14:23:38 +0100                                                               |
-| Base subject  | `ci(fuzzer): pin nightly to 2026-10-31 (#981)` (DaniPopes)                              |
-| Diff vs base  | 26 files changed, 1,584 insertions, 83 deletions                                        |
+| Pinned commit | `068b6c92b87c5f73d3cec9495803e97aad221e84` (`EVM2_FORK_REV`)                            |
+| Upstream base | `85395c5440bef1f685142e79c66051014f46f9b5`                                              |
+| Base date     | 2026-11-04 14:35:36 +0100                                                               |
+| Base subject  | ``refactor: move function-local `use`s to module scope (#1017)`` (joshieDo)             |
+| Diff vs base  | 26 files changed, 1,620 insertions, 83 deletions                                        |
 
-The base is `git merge-base origin/main 7154ee0a` in the evm2 checkout.
+The base is not upstream's head: it is the evm2 revision that reth's pull request #28276 moves reth to, so that the node and the engine can share one evm2.
+It is `git merge-base origin/main 068b6c92` in the evm2 checkout.
 The diff line is `git diff --shortstat` of that base against the pin.
 Commit dates below are `git log` committer dates.
 The branch rebuilds the earlier `cz/feat/thin-fork` (pin `91576d1e`, 11 commits) as 8 commits; that branch is left as it was, so earlier pins still resolve.
-A second rebuild of this branch (previous head `05b612fb`) replaced the pre-state-charge closures and the code-deposit funding hook with the gas-reserve seam (`6f2392b2`).
+A second rebuild of this branch (previous head `05b612fb`) replaced the pre-state-charge closures and the code-deposit funding hook with the gas-reserve seam.
+A third moved the 8 commits from `c47757e1` onto this base (previous head `7154ee0a`); its notes are under "Rebasing the fork".
 What the rebuilds dropped is listed under "Dropped in the rebuild".
 
 Two merged upstream changes are already in that base, so they are not patches on this fork.
@@ -25,13 +27,13 @@ Two merged upstream changes are already in that base, so they are not patches on
 The base contains both merge commits.
 The feasibility study measured the system-call bug as 12,121 gas reported against 110,041 expected.
 
-Checked against `origin/main` on 2026-11-03 (`bba13787`): none of the APIs added below are on upstream main.
-`origin/main` is eight commits ahead of the base, and those commits do not add them.
+Checked against `origin/main` on 2026-11-05 (`a026a5a3`): none of the APIs added below are on upstream main.
+`origin/main` is three commits ahead of the base, and those commits do not add them.
 
-## `4e93a68a` select consensus and observation message hooks statically
+## `baff629d` select consensus and observation message hooks statically
 
-Commit date 2026-11-04 16:05:14 +0800.
-9 files changed, 467 insertions, 31 deletions.
+Commit date 2026-11-05 10:49:45 +0800.
+9 files changed, 489 insertions, 31 deletions.
 
 Files: `crates/evm2/src/evm/message_hooks.rs`, `crates/evm2/src/evm/mod.rs`, `crates/evm2/src/evm/config.rs`, `crates/evm2/src/evm/registry.rs`, `crates/evm2/src/lib.rs`, `crates/evm2/src/test_utils.rs`, `crates/evm2/tests/message_hooks.rs`, `crates/evm2/examples/custom_evm/config.rs`, `crates/jit/runtime/src/evm2_evm.rs`.
 
@@ -40,6 +42,7 @@ Files: `crates/evm2/src/evm/message_hooks.rs`, `crates/evm2/src/evm/mod.rs`, `cr
 The `MessageHooks` trait runs on every message, on the plain path and the inspected path.
 Consensus methods: `before` (may answer the message), `started` (after the checkpoint, value transfer, and creation setup), `frame_built`, `before_commit` (may rewrite the stop before commit or rollback), `after`.
 Observers: `enter`, `unsettled`, `exit`.
+A message that halts without executing (`Evm::execute_halted_message`, the first frame of a transaction whose runtime gas phase ran out of gas) reaches none of them, on either path (`halted_messages_run_no_hooks_on_either_path`).
 `admit_code_deposit` is added by a later commit.
 The JIT host tests set `MessageHooks = ()`.
 
@@ -55,8 +58,8 @@ History gas is evm2 state gas plus a signed per-frame record.
 The feasibility study measured that this observer subset, the call helpers, code-deposit admission, and original account info are what that history needs.
 
 `MegaTypes::MessageHooks` is `StartHooks` (`mega-evm2/src/lib.rs:102`).
-The impl is `mega-evm2/src/lib.rs:974`.
-It uses `enter` (`mega-evm2/src/lib.rs:975`), `before` (`mega-evm2/src/lib.rs:981`, including `keyless.rs:80` and `intercept.rs:73`), `started` (`mega-evm2/src/lib.rs:1034`), `frame_built` (`mega-evm2/src/lib.rs:1061`, `detention.rs:314`), and `before_commit` (`mega-evm2/src/lib.rs:1065`, `detention.rs:330`).
+The impl is `mega-evm2/src/lib.rs:988`.
+It uses `enter` (`mega-evm2/src/lib.rs:989`), `before` (`mega-evm2/src/lib.rs:995`, including `keyless.rs:80` and `intercept.rs:73`), `started` (`mega-evm2/src/lib.rs:1048`), `frame_built` (`mega-evm2/src/lib.rs:1075`, `detention.rs:319`), and `before_commit` (`mega-evm2/src/lib.rs:1079`, `detention.rs:335`).
 `op-evm2` sets the associated type to `()` (`op-evm2/src/evm.rs:53`).
 
 Upstream: none filed.
@@ -65,9 +68,9 @@ The feasibility study measured these hooks below the call helpers that have alre
 The same study measured a dynamic hook at 13–17% wall-clock on a loop of empty calls, which is why the fork uses a static associated type.
 Drop when upstream offers a static per-message hook that runs for every message, including answers with no interpreter frame, before the commit decision.
 
-## `1eaea522` price state charges by account and storage location
+## `3997b9c8` price state charges by account and storage location
 
-Commit date 2026-11-04 17:48:43 +0800.
+Commit date 2026-11-05 10:49:45 +0800.
 8 files changed, 196 insertions, 33 deletions.
 
 Files: `crates/evm2/src/evm/config.rs`, `crates/evm2/src/evm/mod.rs`, `crates/evm2/src/ethereum/mod.rs`, `crates/evm2/src/ethereum/eip7702.rs`, `crates/evm2/src/interpreter/instructions/host.rs`, `crates/evm2/src/interpreter/instructions/system.rs`, `crates/evm2/src/version/gas_params.rs`, `crates/evm2/src/version/mod.rs`.
@@ -98,9 +101,9 @@ A search for `state_gas_price` on 2026-11-03 returned no issues or pull requests
 The hook sits on every state-gas charge site, so the caller shape has to be agreed before a patch is written.
 Drop when upstream can price a state charge by account and storage location.
 
-## `8ed12bc4` expose a code deposit admission hook
+## `75a6557d` expose a code deposit admission hook
 
-Commit date 2026-11-04 17:49:42 +0800.
+Commit date 2026-11-05 10:49:45 +0800.
 3 files changed, 83 insertions, 9 deletions.
 
 Files: `crates/evm2/src/evm/message_hooks.rs`, `crates/evm2/src/evm/mod.rs`, `crates/evm2/tests/message_hooks.rs`.
@@ -115,18 +118,18 @@ Satin's code-deposit admission has to refuse after the charges and still restore
 The feasibility study measured 3 of 3 scenarios matching when admission receives `gas_before`.
 Refusing in `before_commit` was 180 gas off.
 The feasibility study charges the history of the deposited bytes in `admit_code_deposit`.
-The deposit's state spill draws withheld gas through the gas reserve (`6f2392b2`); the admission settles that draw (`DepositLoan`, `mega-evm2/src/ledger.rs:185`), because `gas_before` does not hold it.
+The deposit's state spill draws withheld gas through the gas reserve (`e6c12f06`); the admission settles that draw (`DepositLoan`, `mega-evm2/src/ledger.rs:185`), because `gas_before` does not hold it.
 
-`StartHooks::admit_code_deposit` is `mega-evm2/src/lib.rs:1112`.
+`StartHooks::admit_code_deposit` is `mega-evm2/src/lib.rs:1126`.
 
 Upstream: none filed.
 Searches for `admit_code_deposit` on 2026-11-03 returned no issues or pull requests.
 Drop when upstream offers an admission hook that can restore the pre-charge gas on revert.
 
-## `c013ffb4` retain failed debit before normalization on every interpreter path
+## `568e0cf8` retain failed debit before normalization on every interpreter path
 
-Commit date 2026-11-04 17:49:42 +0800.
-4 files changed, 98 insertions, 3 deletions.
+Commit date 2026-11-05 10:49:45 +0800.
+4 files changed, 104 insertions, 3 deletions.
 
 Files: `crates/evm2/src/interpreter/gas.rs`, `crates/evm2/src/interpreter/dispatch/table/packed.rs`, `crates/evm2/src/interpreter/dispatch/tco.rs`, `crates/evm2/tests/message_hooks.rs`.
 
@@ -137,7 +140,7 @@ It is one debit, not the whole opcode cost.
 Successful charges leave the record in place.
 Child records are not merged.
 `try_spend` and `try_spend_state` failures do not record.
-Skipped cold loads and the SSTORE sentry do not record a failed charge, because they never debit; `6f2392b2` adds a typed record for such halts.
+Skipped cold loads and the SSTORE sentry do not record a failed charge, because they never debit; `e6c12f06` adds a typed record for such halts.
 
 Satin classifies an out-of-gas halt by that record: a charge the spendable plus withheld gas could pay is a compute stop, and any other halt burns.
 The inspected path zeroes `remaining`, so the amount the frame held is gone unless the record survived.
@@ -147,18 +150,18 @@ The base already contains [#752](https://github.com/alloy-rs/evm2/pull/752) (`da
 This commit adds a consensus record on the tracker after that change.
 That consensus record is a separate ask from the inspector step-cost change in #752.
 
-`before_commit` classifies a crossing by `failed_charge` (`mega-evm2/src/detention.rs:361`) and reads what a halting frame had from `halt_remaining` (`mega-evm2/src/detention.rs:380`).
+`before_commit` classifies a crossing by `failed_charge` (`mega-evm2/src/detention.rs:366`) and reads what a halting frame had from `halt_remaining` (`mega-evm2/src/detention.rs:385`).
 A start charge the caller cannot pay records a no-debit halt after handing the forward back (`mega-evm2/src/lib.rs:650`).
-Precompiles outside the engine's quote table are priced by reading the record off a tracker with no gas (`mega-evm2/src/detention.rs:507`).
+Precompiles outside the engine's quote table are priced by reading the record off a tracker with no gas (`mega-evm2/src/detention.rs:512`).
 
 Upstream: none filed for this record.
 A search for `failed_charge` on 2026-11-03 returned #564, #577, #752, and #837, all closed inspector or tracing changes.
 Drop when upstream keeps the failed execution-gas debit, on both interpreter paths, after `remaining` is normalized.
 
-## `6f2392b2` let a type family hold a frame's gas in reserve
+## `e6c12f06` let a type family hold a frame's gas in reserve
 
-Commit date 2026-11-05 10:10:44 +0800.
-10 files changed, 671 insertions, 25 deletions (about 450 of the insertions are tests).
+Commit date 2026-11-05 10:50:08 +0800.
+10 files changed, 679 insertions, 25 deletions (about 460 of the insertions are tests).
 
 Files: `crates/evm2/src/interpreter/instructions/reserve.rs` (new), `crates/evm2/src/evm/config.rs`, `crates/evm2/src/evm/mod.rs`, `crates/evm2/src/interpreter/gas.rs`, `crates/evm2/src/interpreter/runtime.rs`, `crates/evm2/src/interpreter/instructions/{control,env,host,mod,system}.rs`.
 
@@ -172,7 +175,8 @@ Budget readers: GAS, the skip-cold checks of the account opcodes, SLOAD, SSTORE,
 Draws: the forward of CALL and CREATE, and every state spill (SSTORE, a value call's new account, CREATE, SELFDESTRUCT's new beneficiary, the code deposit).
 The code-deposit charge is a regular charge and does not see the reserve.
 `GasTracker::record_no_debit_halt(remaining)` records a halt that made no debit; `GasTracker::halt_remaining()` returns what a halting frame had, from that record or the failed charge.
-The inspected path writes the no-debit record before it zeroes an out-of-gas frame that has none, so both paths keep that gas readable.
+The inspected path writes the no-debit record, when the frame has none, before it zeroes `remaining` at an out-of-gas instruction the inspector steps, so both paths keep that gas readable.
+An instruction the inspector does not step runs a plain handler and is neither zeroed nor recorded.
 The seam is interpreter-only: the JIT builtins read `remaining` alone and do not consult it.
 
 Satin's detention withholds part of a frame's regular gas outside `remaining`.
@@ -188,9 +192,9 @@ Upstream: none filed.
 A search for a reserve or withheld-gas API on 2026-11-04 found no second adopter.
 Drop when upstream lets a type family keep execution gas outside `remaining` that budget decisions see and non-execution deductions draw first, with a halt record that survives the inspected path.
 
-## `86784a1c` expose transaction-original account information
+## `af07574b` expose transaction-original account information
 
-Commit date 2026-11-05 10:10:44 +0800.
+Commit date 2026-11-05 10:50:08 +0800.
 1 file changed, 16 insertions.
 
 File: `crates/evm2/src/evm/state/account.rs`.
@@ -215,9 +219,9 @@ Upstream: none filed.
 Searches for `AccountHandle` on 2026-11-03 did not return a pull request that exposes `original`.
 Drop when `AccountHandle::original` is public.
 
-## `83efc724` optionally read uncached storage of accounts the database reports absent
+## `758e51da` optionally read uncached storage of accounts the database reports absent
 
-Commit date 2026-11-05 10:10:44 +0800.
+Commit date 2026-11-05 10:50:08 +0800.
 2 files changed, 25 insertions, 3 deletions.
 
 Files: `crates/evm2/src/evm/db/cache.rs`, `crates/evm2/src/evm/state/mod.rs`.
@@ -239,9 +243,9 @@ Upstream: none filed.
 A search for `read_absent` on 2026-11-03 returned no issues or pull requests.
 Drop when upstream reads uncached storage of a database-absent account the way revm does, or offers this switch.
 
-## `7154ee0a` make the EIP-8037 total transaction gas cap configurable
+## `068b6c92` make the EIP-8037 total transaction gas cap configurable
 
-Commit date 2026-11-05 10:10:44 +0800.
+Commit date 2026-11-05 10:50:08 +0800.
 2 files changed, 51 insertions, 2 deletions.
 
 Files: `crates/evm2/src/version/mod.rs`, `crates/evm2/src/ethereum/mod.rs`.
@@ -268,17 +272,17 @@ Drop when upstream lets a chain set or disable the EIP-8037 total transaction ga
   The engine answers `MegaLimitControl` and `MegaAccessControl` from `MessageHooks::before`, which runs before dispatch, so the provider path it served was unreachable; scheme guard and selector are `is_intercepted` (`mega-evm2/src/intercept.rs:29`).
   The provider is evm2's `Precompiles` over the Satin map (`mega-evm2/src/lib.rs:263`), and `op-evm2`'s `PrecompileProvider::execute` takes `&mut self` again, as upstream.
 - `7352d38f`, input-only precompile gas quotes (+50/−4).
-  The engine prices the seven fixed-formula entries from its own table (`precompile_price`, `mega-evm2/src/detention.rs:414`) and probes every other entry on a tracker with no gas (`mega-evm2/src/detention.rs:497`).
+  The engine prices the seven fixed-formula entries from its own table (`precompile_price`, `mega-evm2/src/detention.rs:419`) and probes every other entry on a tracker with no gas (`mega-evm2/src/detention.rs:502`).
 - `45817aad`, formatting and call-site glue (+40/−38), folded into the commits it repaired; the parts that only served `e0a93cf0` went with it.
 - `1ed2b823`, the pre-state-charge closures `call_with_state_charge` and `create_with_state_charge` (+154/−3), in the second rebuild.
-  The state spills they funded draw the gas reserve inside evm2's bodies, so the engine calls `call_with` and `create_with` (`mega-evm2/src/lib.rs:735`, `mega-evm2/src/lib.rs:862`).
+  The state spills they funded draw the gas reserve inside evm2's bodies, so the engine calls `call_with` and `create_with` (`mega-evm2/src/lib.rs:749`, `mega-evm2/src/lib.rs:876`).
 - The funding half of the code-deposit hooks, `MessageHooks::before_code_deposit`, in the second rebuild.
   The deposit's state spill draws the gas reserve.
   The engine's precheck of the deposit's regular charge went with it: Satin's schedule has no per-byte deposit cost, so that charge is the hash alone, which evm2 debits once and records when it fails (`test_code_deposit_regular_charge_is_the_hash_alone`, `mega-evm2/src/detention.rs`).
 
 ## Rebasing the fork
 
-Fetch `origin` (alloy-rs/evm2) and rebase `cz/feat/thin-fork-v2` onto the new `origin/main`.
+Fetch `origin` (alloy-rs/evm2) and rebase `cz/feat/thin-fork-v2` onto the revision chosen as the base (the one the node pins, not necessarily `origin/main`'s head).
 
 Textual conflicts are the easy part.
 The feasibility study measured the binding cost as a semantic audit of new `remaining()` readers, plus the JIT.
@@ -288,6 +292,19 @@ The same measurement saw a new `try_spend_state` reader merge with no textual co
 After a rebase, read every new `remaining()`, `spend_state`, and `try_spend_state` site under `crates/evm2/src/interpreter/instructions` and `crates/evm2/src/evm/mod.rs`, and route budget decisions and state spills through the helpers in `crates/evm2/src/interpreter/instructions/reserve.rs`.
 The JIT builtins carry their own readers and do not consult the reserve; the engine runs the interpreter only.
 The no-debit halt record sits at the inspected out-of-gas zeroing point (`inspect_step_end` in `crates/evm2/src/interpreter/runtime.rs`); upstream work on that function has to keep it.
+
+What the move from `c47757e1` to `85395c54` (36 upstream commits) needed, beyond textual conflicts in `ethereum/eip7702.rs`, `ethereum/mod.rs`, `interpreter/instructions/system.rs` and `interpreter/runtime.rs`:
+
+- [#873](https://github.com/alloy-rs/evm2/pull/873) replaced the `doc(hidden)` `Instruction::DYNAMIC_GAS` with `FLAGS`, and an instruction that runs a child message must be `#[instruction(hooked)]`, or an inspected run panics at the first message.
+  The engine's CALL and CREATE family and its keyless dispatcher are hooked; `Volatile` keeps its wrapped opcode's flags plus `DYNAMIC_GAS`.
+- Since #873 an inspector chooses the opcodes it steps, and `NoopInspector` steps none: its frames run the plain loop and never reach the zeroing point.
+  The fork's tests of the inspected path use an inspector that steps every opcode, as the gates' frame recorder does.
+- [#956](https://github.com/alloy-rs/evm2/pull/956) moved the step cost into the inspectors; gas a `call_with` or `create_with` before-hook spends now counts toward a tracer's step cost.
+- [#871](https://github.com/alloy-rs/evm2/pull/871) reports the first frame of a transaction whose runtime gas phase runs out of gas to the inspector (`execute_halted_message`); `prepare_initial_frame` returns that halted frame instead of `None`.
+  Message hooks do not run for it on either path.
+  The reference opens no such frame; the cases the gates reach are listed in `diff/known-differences.toml`.
+  The engine's mirrored EIP-7702 path (`mega-evm2/src/eip7702.rs`) still settles a runtime-phase out-of-gas without a frame, unlike upstream's `eip7702::execute_prepared` (`halted_initial_frame` then `execute_initial_frame`); this is a known follow-up, not a gate entry.
+- [#949](https://github.com/alloy-rs/evm2/pull/949) and [#1006](https://github.com/alloy-rs/evm2/pull/1006) added no budget reader or state spill: the count stayed at 10 budget-reader sites (6 `BudgetUse` kinds; the CALL and CREATE forward bases are two sites), 5 state-spill sites and 2 forward draws.
 
 The message-hook associated type has to be set on every `EvmTypesHost` impl, including the JIT host tests in `crates/jit/runtime/src/evm2_evm.rs`.
 Build the JIT crate after the rebase, or the interpreter can be fine while the runtime tests are not.
@@ -318,30 +335,30 @@ Smallest diff first.
 Sizes are the commit stat against its parent.
 Nothing here was opened or posted.
 
-1. Transaction-original account info (`86784a1c`, +16).
+1. Transaction-original account info (`af07574b`, +16).
    One accessor on a cold path.
    Write records and start-of-transaction refunds compare an account with its info at the transaction boundary.
    A snapshot at first observation is exact only when that observation precedes every change.
-2. Read-absent storage (`83efc724`, +25/−3).
+2. Read-absent storage (`758e51da`, +25/−3).
    The flag defaults off, so existing chains keep today's answer of zero and no backing read.
    A strict-replay witness needs the read, because revm performs it.
    A search for `read_absent` on 2026-11-03 returned no issues or pull requests.
-3. Configurable total gas cap (`7154ee0a`, +51/−2).
+3. Configurable total gas cap (`068b6c92`, +51/−2).
    The default stays `2^32 - 1`, written into both base version tables.
    A chain that only wants the Amsterdam cap is unchanged (inferred from that default).
-4. Code-deposit admission (`8ed12bc4`, +83/−9).
+4. Code-deposit admission (`75a6557d`, +83/−9).
    One creation site, off the interpreter loop.
    A revert has to restore the pre-charge gas.
    The feasibility study measured that refusing in `before_commit` was 180 gas off, because `before_commit` does not see the pre-charge snapshot.
-5. Failed-charge record (`c013ffb4`, +98/−3) with the gas reserve's typed no-debit record (`6f2392b2`).
+5. Failed-charge record (`568e0cf8`, +104/−3) with the gas reserve's typed no-debit record (`e6c12f06`).
    #752 already reports the inspector out-of-gas step cost, and that change is in the base.
    File this as a consensus record that survives normalization, or the inspector discussion will be taken to cover it.
-6. State-gas price (`1eaea522`, +196/−33).
+6. State-gas price (`3997b9c8`, +196/−33).
    Any chain that prices state by location can use it.
    The call, create, SSTORE, and EIP-7702 charge sites all call it, so the caller shape should be agreed before a patch is written.
-7. Gas reserve (`6f2392b2`, +671/−25, most of it tests).
+7. Gas reserve (`e6c12f06`, +679/−25, most of it tests).
    A design issue first: budget readers and non-execution deductions are interpreter sites, so the JIT builtins would need the same helpers before the API is complete.
-8. Static message hooks (`4e93a68a`, +467/−31).
+8. Static message hooks (`baff629d`, +489/−31).
    Largest patch, and it runs on every message.
    The feasibility study measured these hooks below the call helpers that have already merged.
    The same study measured a dynamic hook at 13–17% wall-clock on empty calls, which is why the proposal is a static associated type.
