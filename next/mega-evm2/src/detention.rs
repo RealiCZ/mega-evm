@@ -233,7 +233,12 @@ impl<I: Instruction<MegaTypes>, const A: u8> Instruction<MegaTypes> for Volatile
     ) -> Result {
         // `MegaAccessControl` switched access off at or above this frame: the read is refused
         // and the frame reverts on the gas it had after the opcode's static gas.
-        if crate::satin_ext::refused_here(state) {
+        // BLOCKHASH pops its operand before the Host answers: on an empty stack it halts on the
+        // underflow, and nothing is refused.
+        let pops_first = A == crate::satin_ext::access::BLOCK_HASH &&
+            stack.peek(0).is_none() &&
+            !crate::off("blockhash_underflow");
+        if !pops_first && crate::satin_ext::refused_here(state) {
             let (gas, state) = unsafe { split_gas_state(state) };
             return crate::ledger::revert_with(gas, state, &crate::satin_ext::disabled_revert(A));
         }

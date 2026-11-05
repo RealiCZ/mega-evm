@@ -13,7 +13,7 @@ FULL_FUZZ_BATCHES=(
 # known difference. This is the one place that states them. Adding a scenario means changing it
 # here (and the data under `next/diff/data`, see `data/README.md`); `gate-lib.sh`,
 # `check-reference.sh` and `regen-reference.sh` read it.
-MAIN_EXPECT="total=718 match=717 known=1"
+MAIN_EXPECT="total=731 match=730 known=1"
 # The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
 MAIN_TOTAL=${MAIN_EXPECT#total=}
 MAIN_TOTAL=${MAIN_TOTAL%% *}

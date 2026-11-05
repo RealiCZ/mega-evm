@@ -661,6 +661,7 @@ fn reaches_target_load(
     gas: &Gas,
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     kind: MessageKind,
+    skip_cold: bool,
 ) -> bool {
     let has_value = matches!(kind, MessageKind::Call | MessageKind::CallCode);
     let base = if has_value { 3 } else { 2 };
@@ -691,10 +692,17 @@ fn reaches_target_load(
     } else {
         0
     };
-    let total = ins::gas_budget(gas, state, BudgetUse::ColdAccount);
     let charge = memory.saturating_add(value);
-    charge <= gas.remaining() &&
-        total.saturating_sub(charge) >= state.gas_params().cold_account_additional_cost()
+    if charge > gas.remaining() {
+        return false;
+    }
+    // The Host refuses a direct target before its skip-cold check, so only a delegate's load
+    // (reached through the target's) depends on the frame being able to pay a cold access.
+    if !skip_cold {
+        return true;
+    }
+    let total = ins::gas_budget(gas, state, BudgetUse::ColdAccount);
+    total.saturating_sub(charge) >= state.gas_params().cold_account_additional_cost()
 }
 
 fn mega_call_impl(
@@ -712,7 +720,7 @@ fn mega_call_impl(
         // ... or of an account whose EIP-7702 delegate is the beneficiary (the delegate's load).
         let delegate = if target == beneficiary ||
             crate::off("refuse_delegate") ||
-            !reaches_target_load(&stack, gas, state, kind)
+            !reaches_target_load(&stack, gas, state, kind, true)
         {
             None
         } else {
@@ -724,7 +732,13 @@ fn mega_call_impl(
                 .and_then(|mut a| a.load_code().ok())
                 .and_then(|c| c.eip7702_address())
         };
-        if target == beneficiary || delegate == Some(beneficiary) {
+        // A direct target is refused only when the call gets as far as the load, after the
+        // memory expansion and the value-transfer charge it halts on first.
+        if (target == beneficiary &&
+            (crate::off("beneficiary_call_reach") ||
+                reaches_target_load(&stack, gas, state, kind, false))) ||
+            delegate == Some(beneficiary)
+        {
             return revert_with(
                 gas,
                 state,

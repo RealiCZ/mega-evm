@@ -176,6 +176,20 @@ scope = "sample"
 why = "EXTCODECOPY of the block beneficiary in a frame whose access is off is refused only when evm2's body would reach its load (the copy and the memory expansion paid, decided on a copy of the gas), then on the gas after the static gas (a19_extcodecopy_beneficiary_refused_on_static_gas); off, it is refused before the body, so an EXTCODECOPY that halts on its memory expansion (or, a21, its copy) reverts instead."
 
 [[control]]
+switch = "beneficiary_call_reach"
+gate = "main"
+scenario = "a22_call_beneficiary_memory_unpayable_halts"
+scope = "sample"
+why = "A call of the block beneficiary itself in a frame whose access is off is refused only when it gets as far as the load, after the memory expansion of its ranges and the value-transfer charge (a23_call_beneficiary_value_unpayable_halts), and before the skip-cold check (a24_call_beneficiary_cold_unpayable); off, it is refused before either charge, so a call that halts on them reverts instead."
+
+[[control]]
+switch = "blockhash_underflow"
+gate = "main"
+scenario = "a25_blockhash_empty_stack_underflows"
+scope = "sample"
+why = "BLOCKHASH pops its operand before the Host answers, so in a frame whose access is off an empty stack halts on the underflow and refuses nothing; off, the refusal runs before the opcode's own stack check and the frame reverts."
+
+[[control]]
 switch = "forward"
 gate = "main"
 scenario = "i9_limit_call_detained"

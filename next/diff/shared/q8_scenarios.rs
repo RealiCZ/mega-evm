@@ -823,6 +823,74 @@ fn q8_more() -> Vec<Scenario> {
             .build();
         v.push(q8(name, vec![acct(A, a)], BELOW_CAP, Limits::default()));
     }
+    // a22-a27: a call of the beneficiary itself in a frame whose access is off. Satin's Host
+    // refuses the load of the target, after the call's pops, the static check, the memory
+    // expansion of its ranges and the value-transfer charge, and before the skip-cold check; a
+    // call that fails earlier halts on that charge. `cold_burn` runs the frame's gas below a cold
+    // access (2,500) or below the value-transfer charge (8,000) first.
+    let call_kinds = [
+        ("call", op::CALL),
+        ("callcode", op::CALLCODE),
+        ("delegatecall", op::DELEGATECALL),
+        ("staticcall", op::STATICCALL),
+    ];
+    let beneficiary_call = |kind: u8, out_off: u64, value: u64, burn_below: Option<u64>| {
+        let mut a = ac(Asm::new());
+        if let Some(below) = burn_below {
+            // JUMPDEST; GAS; PUSH2 below; LT; PUSH2 start; JUMPI: spin while GAS > below.
+            let start = a.clone().build().len() as u64;
+            a = a.op(op::JUMPDEST).op(op::GAS).push(below).op(op::LT).push(start).op(op::JUMPI);
+        }
+        a = a.push(32).push(out_off).push(0).push(0);
+        if kind == op::CALL || kind == op::CALLCODE {
+            a = a.push(value);
+        }
+        a.push_addr(BENEFICIARY).push(0).op(kind).stop().build()
+    };
+    for (kname, kind) in call_kinds {
+        for (tag, out_off) in [("refused", 0u64), ("memory_unpayable_halts", 1 << 24)] {
+            let name: &'static str =
+                Box::leak(format!("a22_{kname}_beneficiary_{tag}").into_boxed_str());
+            let a = beneficiary_call(kind, out_off, 0, None);
+            v.push(q8(name, vec![acct(A, a)], BELOW_CAP, Limits::default()));
+        }
+    }
+    // The value-transfer charge (9,000) unpayable: the call halts on it, before the load.
+    let a = beneficiary_call(op::CALL, 0, 1, Some(8_000));
+    v.push(q8(
+        "a23_call_beneficiary_value_unpayable_halts",
+        vec![acct(A, a)],
+        BELOW_CAP,
+        Limits::default(),
+    ));
+    // The same with the value-transfer charge payable: refused all the same, the load comes first.
+    let a = beneficiary_call(op::CALL, 0, 1, Some(40_000));
+    v.push(q8(
+        "a23b_call_beneficiary_value_payable_refused",
+        vec![acct(A, a)],
+        BELOW_CAP,
+        Limits::default(),
+    ));
+    // A cold access unpayable (the frame holds less than 2,600): the Host refuses before its
+    // skip-cold check.
+    let a = beneficiary_call(op::CALL, 0, 0, Some(2_500));
+    v.push(q8(
+        "a24_call_beneficiary_cold_unpayable",
+        vec![acct(A, a)],
+        BELOW_CAP,
+        Limits::default(),
+    ));
+    // a25-a26: BLOCKHASH in a frame whose access is off. revm pops its operand before the Host
+    // answers, so an empty stack halts with a stack underflow; with an operand the read is refused.
+    let a = ac(Asm::new()).op(op::BLOCKHASH).stop().build();
+    v.push(q8(
+        "a25_blockhash_empty_stack_underflows",
+        vec![acct(A, a)],
+        BELOW_CAP,
+        Limits::default(),
+    ));
+    let a = ac(Asm::new()).push(0).op(op::BLOCKHASH).stop().build();
+    v.push(q8("a26_blockhash_refused", vec![acct(A, a)], BELOW_CAP, Limits::default()));
     // k25: the keyless signer is the block beneficiary: the call reads it (detained).
     for (name, cap) in
         [("k25_signer_is_beneficiary", 60_000u64), ("k25b_signer_is_beneficiary_tight", 2_000)]

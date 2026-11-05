@@ -8,7 +8,7 @@
 
 | Path                              | Content                                                                                          |
 | --------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `synthetic/main.json.zst`         | Reference outputs of the 718 shared scenarios (hand-written ones plus 400 default fuzz seeds)    |
+| `synthetic/main.json.zst`         | Reference outputs of the 731 shared scenarios (hand-written ones plus 400 default fuzz seeds)    |
 | `synthetic/fuzz-mode4.json.zst`   | Reference outputs of fuzz mode 4, seeds 1..=2000 (`fqh0001`..`fqh2000`)                          |
 | `real-blocks/<set>/<n>.json.zst`  | Recorded block `n` of corpus `set` (`d4` or `p9`): header, transactions, receipts, sparse state  |
 | `real-blocks/<set>/manifest.json` | The sample's blocks of that set, in the full corpus's manifest format                            |
@@ -18,7 +18,7 @@
 
 Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q8`, `cap`) and fuzz batch names (`fq`, `fqbig`, `fqh`, `fqhbig`, `big`, `harsh`) are stable data identifiers: the reference outputs and `known-differences.toml` are keyed on them, so they keep their names.
 
-Expected counts of the sample: 718 main scenarios (717 match, 1 known difference), 2,000 fuzz scenarios;
+Expected counts of the sample: 731 main scenarios (730 match, 1 known difference), 2,000 fuzz scenarios;
 20 blocks with 499 matching transactions, 40 pre-block calls and 52 refusals in the engine replay;
 479 included and 72 refused transactions in the block executor.
 
@@ -80,7 +80,7 @@ real-blocks/
 reference/
   reference-outputs.tar.zst         reference outputs, extracted by `gate.sh full` (made by `regen-reference.sh`;
                                     when absent the original `q11-oracles.tar.zst` is read instead):
-    satin-oracle.json               synthetic main (718 scenarios)
+    satin-oracle.json               synthetic main (731 scenarios)
     oracles/{fq,fqbig,fqh,fqhbig,big,harsh}.json
                                     the six fuzz batches, 25,000 scenarios in total
     raw/satin/<set>/<n>.jsonl       engine replay reference
