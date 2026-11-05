@@ -804,6 +804,25 @@ fn q8_more() -> Vec<Scenario> {
     );
     s.beneficiary = B;
     v.push(s);
+    // a19-a21: EXTCODECOPY of the beneficiary in a frame whose access is off. It charges its copy
+    // and memory expansion before its load: when it can pay them, the load is refused and the
+    // frame reverts on the gas it had after the static gas (a19); when it cannot, it halts on the
+    // charge before any load (a20 on the memory expansion, a21 on the copy).
+    for (name, mem_offset, len) in [
+        ("a19_extcodecopy_beneficiary_refused_on_static_gas", 0u64, 1_024u64),
+        ("a20_extcodecopy_beneficiary_memory_unpayable_halts", 1 << 24, 32),
+        ("a21_extcodecopy_beneficiary_copy_unpayable_halts", 0, 1 << 27),
+    ] {
+        let a = ac(Asm::new())
+            .push(len)
+            .push(0)
+            .push(mem_offset)
+            .push_addr(BENEFICIARY)
+            .op(0x3c)
+            .stop()
+            .build();
+        v.push(q8(name, vec![acct(A, a)], BELOW_CAP, Limits::default()));
+    }
     // k25: the keyless signer is the block beneficiary: the call reads it (detained).
     for (name, cap) in
         [("k25_signer_is_beneficiary", 60_000u64), ("k25b_signer_is_beneficiary_tight", 2_000)]

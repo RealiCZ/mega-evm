@@ -316,20 +316,42 @@ pub fn mega_sload(cx: _) -> Result {
     stack.push(answer.unwrap_or(load.value))
 }
 
-/// A load of the block beneficiary's account in a frame whose volatile access is off: refused.
-fn refuse_beneficiary(
-    gas: &mut Gas,
+/// Whether an account opcode whose load comes first gets to that load: it does (its stack was
+/// checked).
+fn loads_first(_: &StackMut<'_>, _: &Gas, _: &mut InterpreterState<'_, '_, MegaTypes>) -> bool {
+    true
+}
+
+/// Whether EXTCODECOPY gets as far as loading its account: evm2's body, as revm's, charges the
+/// copy and the memory expansion first, and a frame that cannot pay them fails before any load.
+/// Decided on a copy of the gas with evm2's own prices; nothing is charged or resized.
+fn extcodecopy_reaches_load(
+    stack: &StackMut<'_>,
+    gas: &Gas,
     state: &mut InterpreterState<'_, '_, MegaTypes>,
-    addr: Address,
-) -> Result {
-    if addr == state.host().block().beneficiary && crate::satin_ext::refused_here(state) {
-        revert_with(
-            gas,
-            state,
-            &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
-        )?;
+) -> bool {
+    if off("extcodecopy_reach") {
+        return true;
     }
-    Ok(())
+    let (Some(offset), Some(len)) = (stack.peek(1), stack.peek(3)) else { return false };
+    let Ok(len) = len.to_usize() else { return false };
+    let mut probe = *gas;
+    if probe.spend(state.gas_params().extcodecopy_cost(len)).is_err() {
+        return false;
+    }
+    if len == 0 {
+        return true;
+    }
+    let Ok(offset) = offset.to_usize() else { return false };
+    let words = offset.saturating_add(len).div_ceil(32);
+    if words <= probe.memory().words_num {
+        return true;
+    }
+    if words.checked_mul(32).is_none() || state.memory().limit_reached(words) {
+        return false;
+    }
+    let cost = state.gas_params().memory_cost(words);
+    probe.memory_mut().set_words_num(words, cost).is_some_and(|delta| probe.spend(delta).is_ok())
 }
 
 /// Commits a read of the beneficiary's account once the opcode completed (`read_volatile`).
@@ -342,12 +364,26 @@ fn beneficiary_read(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaType
 
 /// An account opcode: evm2's body (its skip-cold check sees the withheld gas through the gas
 /// reserve), with the beneficiary's refusal before it and its volatile read after it.
+///
+/// A load of the block beneficiary's account in a frame whose volatile access is off is refused
+/// (Satin `read_volatile`): if the body gets as far as the load (`$reaches`), the frame reverts on
+/// the gas it had after the opcode's static gas, none of the dynamic gas charged before the load
+/// being owed for a read that did not happen; a body that fails before its load fails as it does.
 macro_rules! account_opcode {
-    ($name:ident, $base:ident) => {
+    ($name:ident, $base:ident, $reaches:ident) => {
         #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
         pub fn $name(cx: _) -> Result {
             let a = stack.peek(0).ok_or(InstrStop::StackUnderflow)?.to_address();
-            refuse_beneficiary(cx.gas, cx.state, a)?;
+            if a == cx.state.host().block().beneficiary &&
+                crate::satin_ext::refused_here(cx.state) &&
+                $reaches(&stack, cx.gas, cx.state)
+            {
+                return revert_with(
+                    cx.gas,
+                    cx.state,
+                    &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
+                );
+            }
             ins::$base::<MegaTypes>::execute(cx.pc, stack, cx.state)?;
             let (gas, state) = unsafe { evm2::interpreter::private::split_gas_state(cx.state) };
             beneficiary_read(gas, state, a);
@@ -355,10 +391,10 @@ macro_rules! account_opcode {
         }
     };
 }
-account_opcode!(mega_balance, balance);
-account_opcode!(mega_extcodesize, extcodesize);
-account_opcode!(mega_extcodehash, extcodehash);
-account_opcode!(mega_extcodecopy, extcodecopy);
+account_opcode!(mega_balance, balance, loads_first);
+account_opcode!(mega_extcodesize, extcodesize, loads_first);
+account_opcode!(mega_extcodehash, extcodehash, loads_first);
+account_opcode!(mega_extcodecopy, extcodecopy, extcodecopy_reaches_load);
 
 #[instruction(EvmTypes = MegaTypes, dynamic_gas)]
 pub fn mega_selfbalance(cx: _) -> Result<out> {
