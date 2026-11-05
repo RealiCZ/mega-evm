@@ -19,6 +19,8 @@ import json, os, re, shutil, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KNOWN = os.path.join(HERE, "..", "known-differences.toml")
+sys.path.insert(0, HERE)
+from known_toml import tables as known_tables  # noqa: E402
 
 # --- copies on write ------------------------------------------------------------------------------
 
@@ -143,7 +145,7 @@ def named(name, f):
     return g
 
 def known_toml(f):
-    """Runs the main gate with an edited copy of `known-differences.toml`."""
+    """Runs the gate with an edited copy of `known-differences.toml`."""
     def apply(work):
         dst = os.path.join(work, "known-differences.toml")
         shutil.copyfile(KNOWN, dst)
@@ -213,6 +215,49 @@ def block_row(kind, field, pred=lambda r: True, change=bump):
         r[field] = change(r[field])
     return row_edit("block", lambda r: r.get("kind") == kind and field in r and pred(r), f, "block %s row with %s" % (kind, field))
 
+def sample_replay_known(work):
+    """The first `[[replay_difference]]` entry whose block is in the sample, and its file there."""
+    for e in known_tables(KNOWN, "replay_difference"):
+        rel = "replay/%s/%d.jsonl" % (e["set"], e["block"])
+        if os.path.exists(os.path.join(work, rel)):
+            return e, rel
+    raise SystemExit("faults.py: no listed replay transaction in the sample")
+
+def stale_replay_known(work):
+    """Gives the first listed replay transaction of the sample the frames the engine reports: the
+    difference its `[[replay_difference]]` entry accepts no longer occurs."""
+    e, rel = sample_replay_known(work)
+    def f(rows):
+        r = first(rows, lambda r: is_tx(r) and r["index"] == e["index"], "listed transaction")
+        r["frames"] = json.loads(e["candidate"])
+    edit_lines(work, rel, f)
+    NOTE.append("%s#%d" % (rel, e["index"]))
+
+def replay_known_entry(edit):
+    """Runs the replay gate with a copy of `known-differences.toml` whose first entry of a sample
+    block is changed by `edit(entry, entry_text)`, which returns the new text of that table."""
+    def apply(work):
+        e, rel = sample_replay_known(work)
+        NOTE.append("%s#%d" % (rel, e["index"]))
+        def f(t):
+            parts = t.split("[[replay_difference]]")
+            for i, part in enumerate(parts[1:], 1):
+                if ("\nblock = %d\n" % e["block"]) in part and ("\nindex = %d\n" % e["index"]) in part:
+                    parts[i] = edit(e, part)
+                    return "[[replay_difference]]".join(parts)
+            raise SystemExit("faults.py: entry %s:%d:%d not found" % (e["set"], e["block"], e["index"]))
+        return known_toml(f)(work)
+    return apply
+
+def other_hash(e, part):
+    h = e["hash"]
+    return part.replace(h, h[:-1] + ("0" if h[-1] != "0" else "1"))
+
+def other_frame_gas(e, part):
+    frames = json.loads(e["candidate"])
+    gas = frames[0]["gas_limit"]
+    return part.replace('"gas_limit": %d' % gas, '"gas_limit": %d' % (gas + 1))
+
 def drop_tx(rows):
     i = next(i for i, r in enumerate(rows) if is_tx(r))
     rows.pop(i)
@@ -264,6 +309,10 @@ FAULTS = [
     ("replay-pre-registry-due", "replay", r'"registry_due:differ": 1', row_edit("replay", lambda r: r.get("kind") == "pre_block", lambda r: r.update(registry_due=not r["registry_due"]), "pre-block entry")),
     ("replay-missing-tx", "replay", r"oracle transaction count", file_edit("replay", has_txs(2), drop_tx, "block with two transactions")),
     ("replay-expected-counts", "replay", SUMMARY, expect("EXPECT_REPLAY", count("match", 1))),
+    # replay: an accepted difference that no longer occurs, occurs otherwise, or names another transaction
+    ("replay-known-stale", "replay", r"stale known difference: [a-z0-9]+:[0-9]+:[0-9]+ no longer differs", stale_replay_known),
+    ("replay-known-other-frame", "replay", r"known difference [a-z0-9]+:[0-9]+:[0-9]+\.frames did not occur as listed", replay_known_entry(other_frame_gas)),
+    ("replay-known-other-hash", "replay", r"known replay difference [a-z0-9]+:[0-9]+:[0-9]+: hash", replay_known_entry(other_hash)),
     # block
     ("block-gas-used", "block", cmp("gas_used"), block_row("tx", "gas_used")),
     ("block-reference-inspected", "block", cmp("satin_plain_vs_inspected"), block_row("tx", "inspected_equal", change=lambda v: False)),

@@ -68,7 +68,8 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
             diffs.push(d);
         }
         let group = groups.entry(s.group).or_default();
-        let verdict = gate::classify(&known, s.name, diffs, o, &plain);
+        let verdict =
+            gate::classify(&known, s.name, diffs, o, &plain, (&o["frames"], &insp["frames"]));
         match &verdict {
             Verdict::Match => {
                 matched += 1;

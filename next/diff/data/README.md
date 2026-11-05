@@ -14,12 +14,12 @@
 | `real-blocks/<set>/manifest.json` | The sample's blocks of that set, in the full corpus's manifest format                            |
 | `replay/<set>/<n>.jsonl.zst`      | Reference output of the engine replay gate: one line per pre-block call and per transaction      |
 | `block/<set>/<n>.jsonl.zst`       | Reference output of the block executor gate: per transaction, then block counters and post-state |
-| `expected.env`                    | Summary counts `gate.sh sample` expects, counted from the reference files                        |
+| `expected.env`                    | Summary counts `gate.sh sample` expects, counted from the reference files and the accepted list  |
 
 Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q8`, `cap`) and fuzz batch names (`fq`, `fqbig`, `fqh`, `fqhbig`, `big`, `harsh`) are stable data identifiers: the reference outputs and `known-differences.toml` are keyed on them, so they keep their names.
 
-Expected counts of the sample: 731 main scenarios (730 match, 1 known difference), 2,000 fuzz scenarios;
-20 blocks with 499 matching transactions, 40 pre-block calls and 52 refusals in the engine replay;
+Expected counts of the sample: 731 main scenarios (728 match, 3 known differences), 2,000 fuzz scenarios;
+20 blocks with 498 matching transactions, 1 known difference, 40 pre-block calls and 52 refusals in the engine replay;
 479 included and 72 refused transactions in the block executor.
 
 `MAIN_EXPECT` in `scripts/common.sh` is the one place the scripts state the main count.

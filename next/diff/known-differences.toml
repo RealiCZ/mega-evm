@@ -1,6 +1,11 @@
 # Differences between the reference (the Satin implementation under review) and the Satin engine
-# on evm2 that the synthetic gate accepts. The gate passes only if its differences are exactly
-# these: an unlisted difference fails, and so does a listed entry that no longer differs.
+# on evm2 that the gates accept: `[[difference]]` for the synthetic gate (by scenario),
+# `[[replay_difference]]` for the engine replay gate (by set, block and transaction index, checked
+# against the transaction hash). A gate passes only if its differences are exactly these: an
+# unlisted difference fails, and so does a listed entry that differs otherwise or no longer differs.
+#
+# A `frames` entry lists the inspector's frames on both sides as JSON, each frame cut to the keys
+# the frame comparison reads (a halted frame: kind, level, gas_limit, reservoir, value, status).
 
 # revm labels a DUP whose operand is deeper than the stack as `StackOverflow`: its
 # `dup` returns false for both underflow and overflow, and `dupn_enabled` maps every false to
@@ -14,3 +19,48 @@ scenario = "p6_dupn"
 field = "halt"
 reference = "StackOverflow"
 candidate = "StackUnderflow"
+
+# The four transactions whose runtime gas phase cannot pay a SALT-priced state charge (a value
+# call's new account, a creation's account) on the sample and the full corpus.
+
+[[difference]]
+scenario = "p6_salt_first_value_call_m8"
+field = "frames"
+reference = '[]'
+candidate = '[{"kind": "Call", "level": 0, "gas_limit": 948200, "reservoir": 0, "value": "1", "status": "halt"}]'
+class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
+why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"
+
+[[difference]]
+scenario = "p6_salt_code_deposit_m8"
+field = "frames"
+reference = '[]'
+candidate = '[{"kind": "Create", "level": 0, "gas_limit": 944782, "reservoir": 0, "value": "0", "status": "halt"}]'
+class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
+why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"
+
+[[replay_difference]]
+set = "d4"
+block = 8064067
+index = 11
+hash = "0x3481ff33ebf63a5367091a13ffe2b7a740aa7283145f829e445591a7b38cbc7a"
+field = "frames"
+reference = '[]'
+candidate = '[{"kind": "Call", "level": 0, "gas_limit": 128200, "reservoir": 0, "value": "54860000000000", "status": "halt"}]'
+class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
+why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"
+
+[[replay_difference]]
+set = "d4"
+block = 6780842
+index = 14807
+hash = "0xcb88346b618d53ac396e342f582674780469116bd460ca199055efb366c23dba"
+field = "frames"
+reference = '[]'
+candidate = '[{"kind": "Call", "level": 0, "gas_limit": 8200, "reservoir": 0, "value": "37000000000000", "status": "halt"}]'
+class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
+why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"

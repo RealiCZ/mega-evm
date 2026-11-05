@@ -11,7 +11,7 @@
 
 use alloy_primitives::{Address, B256, Bytes, U256, address, keccak256};
 use mega_evm2_diff::{
-    gate,
+    gate::{self, Verdict},
     replay::{self, blockdb},
 };
 use serde_json::{Value, json};
@@ -33,6 +33,7 @@ fn differ(a: &Value, b: &Value) -> Vec<String> {
 fn test_replay_matches_reference_plain_and_inspected() {
     let satin_dir = std::env::var("MEGA_EVM2_REPLAY_REF").expect("MEGA_EVM2_REPLAY_REF");
     let cmp_dir = std::env::var("MEGA_EVM2_OUT").ok();
+    let known = gate::known_replay_differences();
     let mut totals: BTreeMap<String, u64> = BTreeMap::new();
     let mut field_counts: BTreeMap<String, u64> = BTreeMap::new();
     let mut processed = Vec::new();
@@ -80,6 +81,10 @@ fn test_replay_matches_reference_plain_and_inspected() {
             None => Box::new(std::io::sink()),
         };
         let mut block_counts: BTreeMap<String, u64> = BTreeMap::new();
+        // The accepted differences of this block, each of which must be evaluated.
+        let block_known: Vec<&gate::KnownReplay> =
+            known.iter().filter(|k| k.set == set && k.block == n).collect();
+        let mut evaluated = Vec::new();
         for line in &lines {
             match line["kind"].as_str() {
                 Some("pre_block") => {
@@ -189,13 +194,17 @@ fn test_replay_matches_reference_plain_and_inspected() {
                         let (inspected, frames) =
                             replay::run_tx(&header, chain_id, &db, &code_cache, &tx, true);
                         let satin = &line["satin"];
+                        let frames = json!(frames);
                         let mut d = differ(satin, &plain);
-                        if satin.get("error").is_none() &&
+                        let frames_differ = if satin.get("error").is_none() &&
                             inspected.get("error").is_none() &&
-                            let Some(f) = gate::frames_diff(&line["frames"], &json!(frames))
+                            let Some(f) = gate::frames_diff(&line["frames"], &frames)
                         {
                             d.push(f);
-                        }
+                            true
+                        } else {
+                            false
+                        };
                         let insp = gate::same_engine_differences(&plain, &inspected);
                         let satin_insp = line["inspected_equal"].as_bool() != Some(true);
                         for f in &d {
@@ -210,7 +219,33 @@ fn test_replay_matches_reference_plain_and_inspected() {
                             o.insert("satin_inspected_differs".into(), json!(true));
                             d.push("satin_plain_vs_inspected".into());
                         }
-                        verdict = if satin.get("error").is_some() && d.is_empty() {
+                        let key = gate::replay_key(&set, n, index);
+                        let listed: Vec<gate::Known> = block_known
+                            .iter()
+                            .filter(|k| k.index == index)
+                            .map(|k| {
+                                assert_eq!(k.hash, hash, "known replay difference {key}: hash");
+                                k.known.clone()
+                            })
+                            .collect();
+                        if !listed.is_empty() {
+                            evaluated.push(index);
+                        }
+                        let accepted = gate::classify(
+                            &listed,
+                            &key,
+                            d,
+                            satin,
+                            &plain,
+                            (&line["frames"], &frames),
+                        );
+                        d = match &accepted {
+                            Verdict::Differ(d) => d.clone(),
+                            Verdict::Match | Verdict::Known => Vec::new(),
+                        };
+                        verdict = if accepted == Verdict::Known {
+                            "known".into()
+                        } else if satin.get("error").is_some() && d.is_empty() {
                             "refused_both".into()
                         } else if d.is_empty() {
                             "match".into()
@@ -222,6 +257,12 @@ fn test_replay_matches_reference_plain_and_inspected() {
                             satin.get("status").cloned().unwrap_or(json!("refused")),
                         );
                         o.insert("misses".into(), satin["misses"].clone());
+                        if frames_differ {
+                            o.insert(
+                                "frames".into(),
+                                json!({"satin": line["frames"], "evm2": frames}),
+                            );
+                        }
                         if !d.is_empty() {
                             o.insert("fields".into(), json!(d));
                             o.insert("satin".into(), satin.clone());
@@ -241,6 +282,12 @@ fn test_replay_matches_reference_plain_and_inspected() {
                 }
                 _ => {}
             }
+        }
+        // A listed transaction of a processed block that was never compared fails the gate.
+        for k in block_known.iter().filter(|k| !evaluated.contains(&k.index)) {
+            println!("KNOWN_MISSING {}", k.known.scenario);
+            *block_counts.entry("known_missing:differ".into()).or_default() += 1;
+            *totals.entry("known_missing:differ".into()).or_default() += 1;
         }
         println!("{set}:{n} {block_counts:?}");
         *totals.entry("blocks".into()).or_default() += 1;

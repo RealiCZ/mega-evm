@@ -31,7 +31,10 @@ engine replay and block executor on recorded blocks) against the reference outpu
 `GATE` summary line per gate.
 `sample` uses the in-repo data under `diff/data` (see `diff/data/README.md`); `full` reads the
 full corpus from `MEGA_EVM2_CORPUS_DIR`.
-The only accepted difference is listed in `diff/known-differences.toml`.
+The accepted differences are listed in `diff/known-differences.toml`: by scenario for the synthetic gate, and by set, block, transaction index and hash for the engine replay gate.
+An unlisted difference fails a gate, and so does a listed one that differs otherwise or no longer differs (a stale entry); the replay summary counts the accepted ones as `known=`.
+A replay entry whose block a run does not include is not evaluated in that run; `gate.sh` still pins how many are, because the expected summary's `known=` is counted by `count_expected.py` from the same reference files.
+Besides the open `p6_dupn` label question, four owner-accepted entries (2026-11-05) cover one inspector-only class: since evm2 #871, a transaction whose runtime gas phase runs out of gas reports one halted level-0 frame to the inspector, as go-ethereum's `haltTopFrame` does, where the reference opens none.
 Every gate script extracts its inputs fresh into its own directory under `<target>/mega-evm2-diff/` at the start of a run, so different scripts can run at the same time and no run reuses an earlier extraction.
 `diff/scripts/check-reference.sh sample` regenerates the sample's reference outputs with
 `reference/` and checks they equal the stored ones.
@@ -67,7 +70,7 @@ Prefer a case of the sample, and add a `[[control]]` with the switch, the gate, 
 Use `scope = "full"` only when no sample case catches the switch, and say so in `why`.
 
 `diff/scripts/faults.sh` injects faults into a copy of the sample's reference data, one at a time, and runs the gate each one concerns through the code `gate.sh` accepts and rejects with; the repository is not modified.
-The 26 faults (listed in `diff/scripts/faults.py`) are a representative set: for each gate a changed compared value, plus an inspected frame and a frame count (main), a pre-block call with its reads, its reference plain-vs-inspected result and its registry decision (replay), and block counters and post-state (block), a missing, duplicate or extra entry, a wrong expected count, a reference whose plain and inspected runs disagree, and the accepted difference of `known-differences.toml` missing (a stale entry, another field, another case).
+The 29 faults (listed in `diff/scripts/faults.py`) are a representative set: for each gate a changed compared value, plus an inspected frame and a frame count (main), a pre-block call with its reads, its reference plain-vs-inspected result and its registry decision (replay), and block counters and post-state (block), a missing, duplicate or extra entry, a wrong expected count, a reference whose plain and inspected runs disagree, and an accepted difference of `known-differences.toml` missing (a stale entry, another field, another case; a replay entry that is stale, lists other frames or another transaction hash).
 A fault counts as rejected only when the gate fails and its output shows the check the fault names, while the unmutated run's output does not.
 The unmutated copy must pass every gate first (the baselines).
 The last line is `FAULTS total=<n> rejected=<n> accepted=<a> baselines=<k> passed=<k>`, and the script fails unless `accepted` is 0 and every baseline passed.

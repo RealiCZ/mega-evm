@@ -133,6 +133,7 @@ echo "regen: wrote $archive" >&2
 mkdir -p "$run/packed"
 tar --zstd -xf "$archive" -C "$run/packed"
 python3 -I "$here/scripts/count_expected.py" "$run/packed/raw/satin" "$run/packed/raw/satin-block" \
+  "$here/known-differences.toml" \
   | sed -E 's/^EXPECT_/EXPECT_FULL_/' > "$run/full-counts.env"
 
 if [ "$check" = 1 ]; then
@@ -157,7 +158,8 @@ ln -s "$archive" "$run/view/reference/reference-outputs.tar.zst"
 MEGA_EVM2_CORPUS_DIR=$run/view CARGO_TARGET_DIR=$run/sample bash "$here/scripts/make-sample.sh"
 {
   grep '^#' "$here/data/expected.env"
-  python3 -I "$here/scripts/count_expected.py" "$here/data/replay" "$here/data/block"
+  python3 -I "$here/scripts/count_expected.py" "$here/data/replay" "$here/data/block" \
+    "$here/known-differences.toml"
   cat "$run/full-counts.env"
 } > "$run/expected.env"
 rename_exact "$run/expected.env" "$here/data/expected.env"

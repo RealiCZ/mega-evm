@@ -14,6 +14,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// One accepted difference between the reference and the Satin engine, from
 /// `known-differences.toml`.
+///
+/// `field` is a compared field, whose normalized values must be `reference` and `candidate`, or
+/// `frames`: then the frames the inspector recorded must differ, and `reference` and `candidate`
+/// are the two frame lists as JSON, each frame cut to the keys the frame comparison reads
+/// ([`compared_frames`]). A `frames` entry also states its `class`, `why` and `signoff`.
 #[derive(Debug, Clone)]
 pub struct Known {
     pub scenario: String,
@@ -22,31 +27,93 @@ pub struct Known {
     pub candidate: String,
 }
 
-/// The accepted differences of the synthetic gate: `known-differences.toml` as built, or the file
-/// `MEGA_EVM2_KNOWN_DIFFERENCES` names (fault injection; the gate scripts refuse it from outside).
-pub fn known_differences() -> Vec<Known> {
+/// An accepted difference of the engine replay gate: one transaction, keyed by its set, block
+/// and index, and checked against its hash.
+#[derive(Debug, Clone)]
+pub struct KnownReplay {
+    pub set: String,
+    pub block: u64,
+    pub index: u64,
+    pub hash: String,
+    /// The difference, with `scenario` set to [`replay_key`].
+    pub known: Known,
+}
+
+/// The key a replay transaction is classified under: `<set>:<block>:<index>`.
+pub fn replay_key(set: &str, block: u64, index: u64) -> String {
+    format!("{set}:{block}:{index}")
+}
+
+/// `known-differences.toml` as built, or the file `MEGA_EVM2_KNOWN_DIFFERENCES` names (fault
+/// injection; the gate scripts refuse it from outside).
+fn known_table() -> toml::Table {
     let text = match std::env::var("MEGA_EVM2_KNOWN_DIFFERENCES") {
         Ok(path) => std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}")),
         Err(_) => include_str!("../known-differences.toml").to_owned(),
     };
-    let doc: toml::Table = text.parse().expect("known-differences.toml");
-    let entries =
-        doc.get("difference").and_then(toml::Value::as_array).cloned().unwrap_or_default();
-    entries
+    text.parse().expect("known-differences.toml")
+}
+
+fn entries(doc: &toml::Table, kind: &str) -> Vec<toml::Value> {
+    doc.get(kind).and_then(toml::Value::as_array).cloned().unwrap_or_default()
+}
+
+fn text(e: &toml::Value, k: &str) -> String {
+    e.get(k)
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| panic!("known difference: missing `{k}`"))
+        .to_owned()
+}
+
+fn number(e: &toml::Value, k: &str) -> u64 {
+    let n = e
+        .get(k)
+        .and_then(toml::Value::as_integer)
+        .unwrap_or_else(|| panic!("known difference: missing `{k}`"));
+    u64::try_from(n).unwrap_or_else(|_| panic!("known difference: negative `{k}`"))
+}
+
+fn known_entry(e: &toml::Value, scenario: String) -> Known {
+    let k = Known {
+        scenario,
+        field: text(e, "field"),
+        reference: text(e, "reference"),
+        candidate: text(e, "candidate"),
+    };
+    if k.field == "frames" {
+        // A frame difference is accepted only as a stated, signed-off class with pinned frames.
+        for key in ["class", "why", "signoff"] {
+            assert!(
+                !text(e, key).trim().is_empty(),
+                "known difference {}: empty `{key}`",
+                k.scenario
+            );
+        }
+        for list in [&k.reference, &k.candidate] {
+            let v: Value = serde_json::from_str(list)
+                .unwrap_or_else(|e| panic!("known difference {}: frames: {e}", k.scenario));
+            assert!(v.is_array(), "known difference {}: frames must be a list", k.scenario);
+        }
+    }
+    k
+}
+
+/// The accepted differences of the synthetic gate (`[[difference]]`).
+pub fn known_differences() -> Vec<Known> {
+    entries(&known_table(), "difference")
+        .iter()
+        .map(|e| known_entry(e, text(e, "scenario")))
+        .collect()
+}
+
+/// The accepted differences of the engine replay gate (`[[replay_difference]]`).
+pub fn known_replay_differences() -> Vec<KnownReplay> {
+    entries(&known_table(), "replay_difference")
         .iter()
         .map(|e| {
-            let text = |k: &str| {
-                e.get(k)
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or_else(|| panic!("known difference: missing `{k}`"))
-                    .to_owned()
-            };
-            Known {
-                scenario: text("scenario"),
-                field: text("field"),
-                reference: text("reference"),
-                candidate: text("candidate"),
-            }
+            let (set, block, index) = (text(e, "set"), number(e, "block"), number(e, "index"));
+            let key = replay_key(&set, block, index);
+            KnownReplay { known: known_entry(e, key), set, block, index, hash: text(e, "hash") }
         })
         .collect()
 }
@@ -64,14 +131,16 @@ pub enum Verdict {
 }
 
 /// Classifies the differences `diffs` of scenario `name`, where `reference` and `candidate` are
-/// the two outcomes (not normalized). Only a difference in exactly the listed field, with exactly
-/// the listed normalized values, is accepted.
+/// the two outcomes (not normalized) and `frames` the frames the reference and the inspected
+/// candidate recorded. Only a difference in exactly the listed field, with exactly the listed
+/// normalized values (for `frames`, exactly the listed frames), is accepted.
 pub fn classify(
     known: &[Known],
     name: &str,
     diffs: Vec<String>,
     reference: &Value,
     candidate: &Value,
+    frames: (&Value, &Value),
 ) -> Verdict {
     let entries: Vec<&Known> = known.iter().filter(|k| k.scenario == name).collect();
     if entries.is_empty() {
@@ -83,9 +152,20 @@ pub fn classify(
     let (a, b) = (canonical(reference), canonical(candidate));
     let mut remaining = diffs;
     for k in entries {
-        let hit = remaining.iter().position(|d| *d == k.field);
-        let same = a.get(&k.field).and_then(Value::as_str) == Some(k.reference.as_str()) &&
-            b.get(&k.field).and_then(Value::as_str) == Some(k.candidate.as_str());
+        let (hit, same) = if k.field == "frames" {
+            let listed = |list: &str| serde_json::from_str::<Value>(list).ok();
+            (
+                remaining.iter().position(|d| is_frames_difference(d)),
+                compared_frames(frames.0).is_some_and(|f| Some(f) == listed(&k.reference)) &&
+                    compared_frames(frames.1).is_some_and(|f| Some(f) == listed(&k.candidate)),
+            )
+        } else {
+            (
+                remaining.iter().position(|d| *d == k.field),
+                a.get(&k.field).and_then(Value::as_str) == Some(k.reference.as_str()) &&
+                    b.get(&k.field).and_then(Value::as_str) == Some(k.candidate.as_str()),
+            )
+        };
         match hit {
             Some(i) if same => {
                 remaining.remove(i);
@@ -132,11 +212,12 @@ fn differing(totals: &BTreeMap<String, u64>) -> u64 {
 /// The summary line of the engine replay gate.
 pub fn replay_line(totals: &BTreeMap<String, u64>) -> String {
     format!(
-        "GATE replay blocks={} match={} pre={} refused={} differ={}",
+        "GATE replay blocks={} match={} pre={} refused={} known={} differ={}",
         sum(totals, |k| k == "blocks"),
         sum(totals, |k| k == "match"),
         sum(totals, |k| k == "pre_block:match"),
         sum(totals, |k| k.starts_with("refused_both")),
+        sum(totals, |k| k == "known"),
         differing(totals),
     )
 }
@@ -282,6 +363,47 @@ pub fn same_engine_differences(a: &Value, b: &Value) -> Vec<String> {
     keys.into_iter().filter(|k| a.get(*k) != b.get(*k)).cloned().collect()
 }
 
+/// The frame keys [`frames_diff`] compares.
+const FRAME_KEYS: [&str; 9] = [
+    "kind",
+    "level",
+    "gas_limit",
+    "reservoir",
+    "value",
+    "status",
+    "output",
+    "gas_left",
+    "reservoir_left",
+];
+
+/// Whether `d` is a difference [`frames_diff`] reported.
+fn is_frames_difference(d: &str) -> bool {
+    d.starts_with("frame ")
+}
+
+/// `frames` cut to what [`frames_diff`] reads of a frame on its own: every key but the output of a
+/// halted frame and the gas left of a frame that did not succeed. `None` when `frames` is not a
+/// list of frames.
+pub fn compared_frames(frames: &Value) -> Option<Value> {
+    let frames = frames.as_array()?;
+    let mut out = Vec::new();
+    for f in frames {
+        let f = f.as_object()?;
+        let status = f.get("status")?;
+        let mut cut = serde_json::Map::new();
+        for k in FRAME_KEYS {
+            if (k == "output" && status == "halt") ||
+                ((k == "gas_left" || k == "reservoir_left") && status != "success")
+            {
+                continue;
+            }
+            cut.insert(k.into(), f.get(k)?.clone());
+        }
+        out.push(Value::Object(cut));
+    }
+    Some(Value::Array(out))
+}
+
 pub fn frames_diff(a: &Value, b: &Value) -> Option<String> {
     let (a, b) = (
         a.as_array().expect("reference frames required"),
@@ -291,17 +413,7 @@ pub fn frames_diff(a: &Value, b: &Value) -> Option<String> {
         return Some(format!("frame count {} vs {}", a.len(), b.len()));
     }
     for (i, (x, y)) in a.iter().zip(b).enumerate() {
-        for k in [
-            "kind",
-            "level",
-            "gas_limit",
-            "reservoir",
-            "value",
-            "status",
-            "output",
-            "gas_left",
-            "reservoir_left",
-        ] {
+        for k in FRAME_KEYS {
             if k == "output" && x["status"] == "halt" && y["status"] == "halt" {
                 continue;
             }
