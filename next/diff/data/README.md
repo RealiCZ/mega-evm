@@ -25,20 +25,20 @@ Corpus `d4` holds blocks sampled across the whole history of the chain, so it co
 The sample takes 14 blocks of `d4` and 6 of `p9`.
 It leaves out the huge `d4` block 6780842 (21,153 transactions, 24 MiB); it is the only block with block data-size refusals, so the sample has none of those.
 
-| Block (set:number)                          | Why                                                                                                                       |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `d4:2045117`                                | Smallest block with an EIP-7702 transaction (and a deposit)                                                               |
-| `d4:14924732`, `d4:18138664`                | EIP-7702 transaction together with system-address transactions; `18138664` also has block gas-limit refusals              |
-| `d4:19010529`, `d4:28102900`                | EIP-7702 transaction, system-address transactions and block gas-limit refusals                                            |
-| `d4:27670576`, `d4:27985540`                | EIP-7702 (`27985540` has two) with system-address transactions and halts                                                  |
-| `d4:7487457`, `d4:8064067`                  | The corpus's two keyless deployment transactions, plus nonce-too-low refusals                                             |
-| `d4:3224158`, `d4:10108963`                 | Early-spec blocks whose transactions are mostly refused as nonce-too-low (`10108963` has 22, and two deposits)            |
-| `d4:12747297`, `d4:22016777`, `d4:28107033` | System-address transactions, halts and reverts; two deposits in `22016777` and `28107033`                                 |
-| `p9:26400000`                               | Current spec; block gas-limit refusals and 9 halts                                                                        |
-| `p9:26400004`                               | Current spec; plain block with system-address transactions                                                                |
-| `p9:26400020`, `p9:26400077`                | Current spec; nonce-too-high refusals (all 3 of them are in these two blocks), block gas-limit and nonce-too-low refusals |
-| `p9:26400051`                               | Current spec; three block gas-limit refusals                                                                              |
-| `p9:26400193`                               | Current spec; a revert, system-address transactions                                                                       |
+| Block (set:number)                          | Why                                                                                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `d4:2045117`                                | Smallest block with an EIP-7702 transaction (and a deposit)                                                                    |
+| `d4:14924732`, `d4:18138664`                | EIP-7702 transaction together with system-address transactions; `18138664` also has block gas-limit refusals                   |
+| `d4:19010529`, `d4:28102900`                | EIP-7702 transaction, system-address transactions and block gas-limit refusals                                                 |
+| `d4:27670576`, `d4:27985540`                | EIP-7702 (`27985540` has two) with system-address transactions; a revert in `27670576`, halts and reverts in `27985540`        |
+| `d4:7487457`, `d4:8064067`                  | The corpus's two keyless deployment transactions, plus nonce-too-low refusals                                                  |
+| `d4:3224158`, `d4:10108963`                 | Early-spec blocks whose system-address transactions are refused as nonce-too-low (10 and 22); `10108963` also has two deposits |
+| `d4:12747297`, `d4:22016777`, `d4:28107033` | System-address transactions, halts and reverts; two deposits in `22016777` and `28107033`                                      |
+| `p9:26400000`                               | Current spec; block gas-limit refusals and 9 halts                                                                             |
+| `p9:26400004`                               | Current spec; plain block with system-address transactions                                                                     |
+| `p9:26400020`, `p9:26400077`                | Current spec; the sample's three nonce-too-high refusals, and block gas-limit refusals                                         |
+| `p9:26400051`                               | Current spec; three block gas-limit refusals                                                                                   |
+| `p9:26400193`                               | Current spec; a revert, system-address transactions                                                                            |
 
 Together the sample holds every EIP-7702 transaction of the full corpus (8, in seven blocks) and both keyless deployments, a deposit in every block, and refusals for nonce too low, nonce too high and block gas limit.
 Transactions from the system address are in 19 of the 20 blocks; 133 of them, in 13 blocks, have a gas limit of 2^32 or more.
