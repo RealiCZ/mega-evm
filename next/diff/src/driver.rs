@@ -403,9 +403,36 @@ pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
                 Some(Bytes::new()),
             )
         }
+        None if s.tx_type == 1 => OpTxEnvelope::new(
+            alloy_consensus::TxEip2930 {
+                chain_id: 1,
+                nonce: 0,
+                gas_price: s.gas_price as u128,
+                gas_limit: s.gas_limit,
+                to,
+                value: s.value,
+                access_list: Default::default(),
+                input: Bytes::from(s.data.clone()),
+            },
+            Some(Bytes::new()),
+        ),
+        None if s.tx_type == 2 => OpTxEnvelope::new(
+            alloy_consensus::TxEip1559 {
+                chain_id: 1,
+                nonce: 0,
+                gas_limit: s.gas_limit,
+                max_fee_per_gas: s.gas_price as u128,
+                max_priority_fee_per_gas: s.gas_price as u128,
+                to,
+                value: s.value,
+                access_list: Default::default(),
+                input: Bytes::from(s.data.clone()),
+            },
+            Some(Bytes::new()),
+        ),
         None => OpTxEnvelope::new(
             TxLegacy {
-                chain_id: None,
+                chain_id: s.chain_id,
                 nonce: 0,
                 gas_price: s.gas_price as u128,
                 gas_limit: s.gas_limit,

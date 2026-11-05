@@ -18,8 +18,10 @@ reference = "StackOverflow"
 candidate = "StackUnderflow"
 signoff = "owner sign-off 2026-11-05"
 
-# The four transactions whose runtime gas phase cannot pay a SALT-priced state charge (a value
-# call's new account, a creation's account) on the sample and the full corpus.
+# The transactions whose runtime gas phase cannot pay a SALT-priced state charge (a value call's
+# new account, a creation's account): two scenarios and two recorded transactions of the sample
+# and the full corpus, and two deposits, whose path follows upstream evm2 here too (owner decision
+# of 2026-11-05).
 
 [[difference]]
 scenario = "p6_salt_first_value_call_m8"
@@ -37,6 +39,24 @@ reference = '[]'
 candidate = '[{"kind": "Create", "level": 0, "gas_limit": 944782, "reservoir": 0, "value": "0", "status": "halt"}]'
 class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
 why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"
+
+[[difference]]
+scenario = "edge_deposit_value_new_recipient_runtime_oog"
+field = "frames"
+reference = '[]'
+candidate = '[{"kind": "Call", "level": 0, "gas_limit": 129000, "reservoir": 0, "value": "5", "status": "halt"}]'
+class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
+why = "A deposit's first frame runs on evm2's path: evm2 #871 reports a first frame whose runtime gas phase cannot pay its value's new-account state gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. The outcome is a failed deposit on both sides; gas, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"
+
+[[difference]]
+scenario = "edge_deposit_new_caller_value_new_recipient_runtime_oog"
+field = "frames"
+reference = '[]'
+candidate = '[{"kind": "Call", "level": 0, "gas_limit": 95400, "reservoir": 0, "value": "5", "status": "halt"}]'
+class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
+why = "A deposit's first frame runs on evm2's path, after its created caller's account state gas: evm2 #871 reports a first frame whose runtime gas phase cannot pay its value's new-account state gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. The outcome is a failed deposit on both sides; gas, state and read set are equal."
 signoff = "owner sign-off 2026-11-05"
 
 [[replay_difference]]

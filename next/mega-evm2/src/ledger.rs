@@ -201,6 +201,25 @@ impl DepositLoan {
     }
 }
 
+/// Whether the signed usage `total` is over `limit`, compared over the whole `u64` range of the
+/// limit (a limit at or above 2^63 does not narrow to a negative `i64`).
+#[inline(always)]
+pub fn over(total: i64, limit: u64) -> bool {
+    if crate::off("wide_limits") {
+        return total > limit as i64;
+    }
+    i128::from(total) > i128::from(limit)
+}
+
+/// The room `limit` leaves above the signed usage `used`: none when the usage is over it.
+#[inline(always)]
+pub fn room(limit: u64, used: i64) -> u64 {
+    if crate::off("wide_limits") {
+        return (limit as i64 - used).max(0) as u64;
+    }
+    (i128::from(limit) - i128::from(used)).clamp(0, i128::from(u64::MAX)) as u64
+}
+
 pub fn limit_exceeded_output(kind: u8, limit: u64) -> Vec<u8> {
     let sel = keccak256("MegaLimitExceeded(uint8,uint64)");
     let mut out = sel[..4].to_vec();
@@ -291,7 +310,7 @@ impl Lite {
             }
             let total: i64 =
                 self.tx_net[i] + if i == 2 { self.tx_growth } else { 0 } + self.frames_net[i];
-            if total + delta[i] > self.cfg.limits[i] as i64 {
+            if over(total + delta[i], self.cfg.limits[i]) {
                 return Some((KIND[i], self.cfg.limits[i]));
             }
         }
@@ -310,12 +329,12 @@ impl Lite {
         }
         let top = self.frames.last()?;
         for (i, kind) in KIND.into_iter().enumerate() {
-            if top.net[i] > top.budget[i] as i64 {
+            if over(top.net[i], top.budget[i]) {
                 return Some((kind, top.budget[i]));
             }
             let total =
                 self.tx_net[i] + if i == 2 { self.tx_growth } else { 0 } + self.frames_net[i];
-            if total > self.cfg.limits[i] as i64 {
+            if over(total, self.cfg.limits[i]) {
                 return Some((kind, self.cfg.limits[i]));
             }
         }
@@ -566,15 +585,52 @@ pub fn bucket_for(site: StateGasSite) -> u64 {
     }
 }
 
-/// The SALT multiplier of `site`, read once per transaction and recorded in the read set.
-pub fn multiplier(ext: &mut Lite, site: StateGasSite) -> u64 {
+/// A SALT bucket that reports a capacity below the minimum bucket (Satin
+/// `BucketError::BelowMinimum`): a broken backend. The transaction fails with it rather than
+/// price its state at a multiplier nobody chose (zero, the floor division's answer). Its `Debug`
+/// is its message, as Satin reports the failure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SaltBelowMinimum {
+    pub bucket: u64,
+    pub capacity: u64,
+}
+
+impl core::fmt::Display for SaltBelowMinimum {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "SALT bucket lookup failed: bucket {} reports capacity {}, below the minimum bucket of \
+             {MIN_BUCKET_SIZE}",
+            self.bucket, self.capacity
+        )
+    }
+}
+
+impl core::fmt::Debug for SaltBelowMinimum {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::error::Error for SaltBelowMinimum {}
+
+/// The SALT multiplier of `site`, read once per transaction and recorded in the read set. A
+/// capacity below the minimum bucket is an error, neither cached nor recorded.
+pub fn multiplier(
+    ext: &mut Lite,
+    site: StateGasSite,
+) -> core::result::Result<u64, SaltBelowMinimum> {
     let id = bucket_for(site);
     if let Some(m) = ext.salt_cache.get(&id) {
-        return *m;
+        return Ok(*m);
+    }
+    let capacity = ext.cfg.buckets.get(&id).copied().unwrap_or(MIN_BUCKET_SIZE);
+    let m = capacity / MIN_BUCKET_SIZE;
+    if m == 0 && !crate::off("salt_min_bucket") {
+        return Err(SaltBelowMinimum { bucket: id, capacity });
     }
     #[cfg(feature = "witness")]
     ext.bucket_reads.insert(id);
-    let m = ext.cfg.buckets.get(&id).copied().unwrap_or(MIN_BUCKET_SIZE) / MIN_BUCKET_SIZE;
     ext.salt_cache.insert(id, m);
-    m
+    Ok(m)
 }

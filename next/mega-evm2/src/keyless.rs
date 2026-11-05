@@ -140,10 +140,11 @@ pub fn recover(signed: &Signed<TxLegacy>) -> Option<Address> {
     Some(Address::from_slice(&keccak256(&uncompressed[1..])[12..]))
 }
 
-/// alloy's ABI decode of `(bytes, uint256)` (offsets and lengths in bounds).
+/// alloy's ABI decode of `(bytes, uint256)` (offsets and lengths in bounds, every range end
+/// checked: an offset near the top of `usize` is malformed, not an overflow).
 fn decode_call(input: &[u8]) -> Option<(Vec<u8>, U256)> {
     let body = input.get(4..)?;
-    let word = |i: usize| body.get(i..i + 32).map(U256::from_be_slice);
+    let word = |i: usize| body.get(i..i.checked_add(32)?).map(U256::from_be_slice);
     let offset: usize = word(0)?.try_into().ok()?;
     let gas = word(32)?;
     let len: usize = word(offset)?.try_into().ok()?;

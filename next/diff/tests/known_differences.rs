@@ -153,6 +153,8 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             ("p6_dupn", "halt"),
             ("p6_salt_first_value_call_m8", "frames"),
             ("p6_salt_code_deposit_m8", "frames"),
+            ("edge_deposit_value_new_recipient_runtime_oog", "frames"),
+            ("edge_deposit_new_caller_value_new_recipient_runtime_oog", "frames"),
         ]
     );
     assert_eq!(
@@ -163,8 +165,8 @@ fn test_known_differences_file_lists_exactly_its_entries() {
         assert_eq!(f.reference, "[]");
     }
     let text = include_str!("../known-differences.toml");
-    assert_eq!(text.matches(HALTED_FIRST_FRAME).count(), 4);
-    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 5);
+    assert_eq!(text.matches(HALTED_FIRST_FRAME).count(), 6);
+    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 7);
 }
 
 #[test]

@@ -182,22 +182,29 @@ impl<'a> BlockExecutor<'a> {
     }
 
     /// Whether the registry has a role change due in this block (Satin
-    /// `is_apply_pending_changes_due`), read off the block's state.
-    pub fn registry_due(&mut self) -> bool {
+    /// `is_apply_pending_changes_due`), read off the block's state: each role's pending value, and
+    /// its activation block when one is pending. A read the database cannot serve is an error.
+    pub fn registry_due(&mut self) -> Result<bool, String> {
         let number = self.evm.block().number;
         let state = self.evm.state_mut();
-        if state.account_info_untracked(&SEQUENCER_REGISTRY).ok().flatten().is_none() {
-            return false;
+        let failed = |e: evm2::DatabaseError| format!("registry read: {e:?}");
+        if state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(failed)?.is_none() {
+            return Ok(false);
         }
-        REGISTRY_PENDING.iter().any(|(p, a)| {
+        let mut due = false;
+        for (p, a) in REGISTRY_PENDING {
             let pending = state
-                .storage_slot_untracked(&SEQUENCER_REGISTRY, &U256::from(*p))
-                .unwrap_or_default();
+                .storage_slot_untracked(&SEQUENCER_REGISTRY, &U256::from(p))
+                .map_err(failed)?;
+            if pending.is_zero() {
+                continue;
+            }
             let activation = state
-                .storage_slot_untracked(&SEQUENCER_REGISTRY, &U256::from(*a))
-                .unwrap_or_default();
-            !pending.is_zero() && number >= activation
-        })
+                .storage_slot_untracked(&SEQUENCER_REGISTRY, &U256::from(a))
+                .map_err(failed)?;
+            due |= number >= activation;
+        }
+        Ok(due)
     }
 
     /// Satin `apply_pre_execution_changes` (no activation block: the predeploy check is not made).
@@ -206,7 +213,7 @@ impl<'a> BlockExecutor<'a> {
         self.system_call(HISTORY_STORAGE, parent)?;
         let root = Bytes::from(self.parent_beacon_block_root.unwrap_or_default().0.to_vec());
         self.system_call(BEACON_ROOTS, root)?;
-        if self.registry_due() {
+        if self.registry_due()? {
             self.system_call(
                 SEQUENCER_REGISTRY,
                 Bytes::from(keccak256("applyPendingChanges()")[..4].to_vec()),
@@ -220,9 +227,15 @@ impl<'a> BlockExecutor<'a> {
         Ok(())
     }
 
-    fn is_system_transaction(&mut self, tx: &Recovered<OpTxEnvelope>) -> bool {
+    /// Whether `tx` is a Mega System Transaction: sent from the live system address, which every
+    /// transaction reads off the block's state, with the system shape (a transaction of another
+    /// shape from that address is refused when the engine validates it). A read the database
+    /// cannot serve is an error.
+    fn is_system_transaction(&mut self, tx: &Recovered<OpTxEnvelope>) -> Result<bool, String> {
+        let live = crate::tx::live_system_address(&mut self.evm)
+            .map_err(|e| format!("registry read: {e:?}"))?;
         let shape = tx.inner().ty() == 0 && tx.inner().kind() == TxKind::Call(ORACLE);
-        shape && crate::tx::live_system_address(&mut self.evm) == Some(tx.signer())
+        Ok(shape && live == Some(tx.signer()))
     }
 
     /// Runs `tx` (its 2718 bytes `encoded`) against the block's rules; nothing is committed.
@@ -240,7 +253,7 @@ impl<'a> BlockExecutor<'a> {
         let tx_size = encoded.len() as u64;
         let da_size = estimated_da_size(encoded);
         let gas_limit = env.gas_limit();
-        let is_system_transaction = !is_deposit && self.is_system_transaction(tx);
+        let is_system_transaction = !is_deposit && self.is_system_transaction(tx)?;
         self.limiter.pre_execution_check(gas_limit, is_deposit || is_system_transaction)?;
         let da_footprint = if is_deposit {
             0

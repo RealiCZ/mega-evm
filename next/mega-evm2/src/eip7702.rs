@@ -44,6 +44,7 @@ pub fn prepare(req: &mut TxRequest<'_, '_, MegaTypes, LazyTxEip7702>) -> Handler
     let entries = tx.authorizations().len() as u64;
     let extra = crate::tx::body_extra(tx.input.len(), &tx.access_list) as u64 +
         AUTHORIZATION_SIZE * entries;
+    crate::tx::classify(req.host, caller, 4, TxKind::Call(tx.to))?;
     // The first frame's start records are predicted after the authorities are applied.
     req.host.ext_mut().begin_tx(caller, TX_BODY_SIZE + extra, true, false);
     // Satin `admits_tx_body`: the body and one write record per entry, before any gas check.
@@ -187,8 +188,7 @@ pub fn execute(
     let (kv_room, growth_room) = {
         let ext = host.ext();
         let room = |i: usize| {
-            (ext.cfg.limits[i] as i64 - ext.tx_net[i] - if i == 2 { ext.tx_growth } else { 0 })
-                .max(0) as u64
+            crate::room(ext.cfg.limits[i], ext.tx_net[i] + if i == 2 { ext.tx_growth } else { 0 })
         };
         (room(1), room(2))
     };

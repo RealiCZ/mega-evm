@@ -9,12 +9,12 @@ FULL_FUZZ_BATCHES=(
   fqhbig:4:2001..=7000:5000 big:1:401..=3400:3000 harsh:2:1..=2000:2000
 )
 
-# The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, three of
+# The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, five of
 # them known differences (`known-differences.toml`). This is the one place that states them.
 # Adding a scenario or a known difference means changing it here (and the data under
 # `next/diff/data`, see `data/README.md`); `gate-lib.sh`, `check-reference.sh` and
 # `regen-reference.sh` read it.
-MAIN_EXPECT="total=731 match=728 known=3"
+MAIN_EXPECT="total=765 match=760 known=5"
 # The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
 MAIN_TOTAL=${MAIN_EXPECT#total=}
 MAIN_TOTAL=${MAIN_TOTAL%% *}

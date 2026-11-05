@@ -181,6 +181,6 @@ pub fn hold_caller(ext: &crate::Lite) -> Option<(u8, u64)> {
         let total = ext.tx_net[i] +
             if i == 2 { ext.tx_growth } else { 0 } +
             ext.frames.iter().map(|f| f.net[i]).sum::<i64>();
-        (total > ext.cfg.limits[i] as i64).then_some((crate::KIND[i], ext.cfg.limits[i]))
+        crate::over(total, ext.cfg.limits[i]).then_some((crate::KIND[i], ext.cfg.limits[i]))
     })
 }

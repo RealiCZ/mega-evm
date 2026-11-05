@@ -114,7 +114,7 @@ impl EvmTypesHost for MegaTypes {
         if host.ext().is_destroyed(&address) {
             return Ok(0);
         }
-        let price = reprice(host, id, site);
+        let price = reprice(host, id, site)?;
         if matches!(id, GasId::CreateState | GasId::CodeDepositState) {
             host.ext_mut().created_prices.push((address, id, price));
         }
@@ -136,10 +136,20 @@ impl EvmTypesHost for MegaTypes {
 
 /// The SALT price of a state charge at `site`, as `state_gas_price` makes it for an account the
 /// destruction table has not given back: the schedule's entry times the bucket's multiplier, read
-/// through the transaction's cache (so the same price every time in a transaction).
-pub fn reprice(host: &mut Evm<'_, MegaTypes>, id: GasId, site: StateGasSite) -> u64 {
-    let m = if host.ext().is_system || off("salt") { 1 } else { multiplier(host.ext_mut(), site) };
-    host.version().gas_params.get(id).saturating_mul(m)
+/// through the transaction's cache (so the same price every time in a transaction). A bucket whose
+/// capacity is below the minimum fails the transaction.
+pub fn reprice(
+    host: &mut Evm<'_, MegaTypes>,
+    id: GasId,
+    site: StateGasSite,
+) -> core::result::Result<u64, evm2::ExecutionError> {
+    let m = if host.ext().is_system || off("salt") {
+        1
+    } else {
+        multiplier(host.ext_mut(), site)
+            .map_err(|e| evm2::ExecutionError::Fatal(evm2::AnyError::new(e)))?
+    };
+    Ok(host.version().gas_params.get(id).saturating_mul(m))
 }
 
 impl OpTypes for MegaTypes {
@@ -561,23 +571,35 @@ pub fn mega_selfdestruct(cx: _) -> Result {
                 .find(|(a, i, _)| *a == me && *i == id)
                 .map_or(0, |(_, _, p)| *p)
         };
-        let leaf = price_of(ext, GasId::CreateState);
+        let created_leaf = price_of(ext, GasId::CreateState);
         let code = price_of(ext, GasId::CodeDepositState) * code_len;
+        // The leaf comes back when the transaction found the address absent at its start (Satin
+        // `DestroyedParts::leaf`), at the new-account price, whichever charge materialized it: a
+        // transfer, a destruction's balance or the creation itself.
+        let (leaf_back, leaf) = if off("sd_absent_leaf") {
+            (created_leaf != 0, created_leaf)
+        } else if absent_at_start {
+            let price = reprice(state.host(), GasId::NewAccountState, StateGasSite::Account(me));
+            (true, price.map_err(|e| state.fail(evm2::HostError::from(e)))?)
+        } else {
+            (false, 0)
+        };
         let fresh = slots.iter().filter(|(_, f)| *f).count() as u64;
         // A fresh slot was charged at its 0 -> x write, at the price the transaction's SALT cache
         // gives it again here.
-        let slot_gas: u64 = slots
+        let slot_gas: core::result::Result<u64, _> = slots
             .iter()
             .filter(|(_, f)| *f)
             .map(|(k, _)| {
                 reprice(state.host(), GasId::SstoreSetState, StateGasSite::Storage(me, *k))
             })
             .sum();
+        let slot_gas = slot_gas.map_err(|e| state.fail(evm2::HostError::from(e)))?;
         let records = slots.len() as u64 + (absent_at_start || off("sd_existing_record")) as u64;
         give_back = [
             -((records * WRITE_RECORD_SIZE + code_len) as i64),
             -(records as i64),
-            -((fresh + (leaf != 0) as u64) as i64),
+            -((fresh + leaf_back as u64) as i64),
         ];
         refill_state = leaf + code + slot_gas;
         refill_bytes = records * WRITE_RECORD_SIZE + code_len;

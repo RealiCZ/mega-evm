@@ -1,6 +1,7 @@
 //! Transaction handlers: op-evm2's OP layer (L1 data fee, operator fee, vaults, deposits) with
-//! Satin's transaction rules on top: the body's history as intrinsic state gas, the first frame's
-//! start records and charge, the registry read every transaction makes, the first-frame
+//! Satin's transaction rules on top: the registry read every transaction makes first and the
+//! classification of every envelope against the live system address it finds, the body's history
+//! as intrinsic state gas, the first frame's start records and charge, the first-frame
 //! settlement, deposits that pay no history but are charged their created
 //! caller's account state (SALT-priced) and held to every limit.
 
@@ -126,17 +127,96 @@ pub(crate) fn admits_body(host: &mut Evm<'_, MegaTypes>, entries: u64) -> Handle
     Ok(())
 }
 
-/// Every transaction reads the live system address: the registry's account and slot 0, warm.
-fn read_registry(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<()> {
+/// A host error of a load that cannot halt (no cold load is skipped) as the handler's error.
+fn host_error(error: evm2::HostError) -> evm2::registry::HandlerError {
+    match error {
+        evm2::HostError::Execution(error) => error.into(),
+        evm2::HostError::Halt(stop) => evm2::registry::HandlerError::Fatal(evm2::AnyError::new(
+            crate::satin_ext::Refusal(if stop == InstrStop::OutOfGas {
+                "registry read halted: out of gas"
+            } else {
+                "registry read halted"
+            }),
+        )),
+    }
+}
+
+/// Every transaction reads the live system address first (Satin `load_system_address`, the first
+/// thing its `validate_env` does): the registry's account and slot 0, warm for the rest of the
+/// transaction, both read whatever the account holds. A read the database cannot serve fails the
+/// transaction. The address is the slot's only under the trusted code and when it is non-zero.
+fn read_registry(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<Option<Address>> {
     if crate::off("registry_read") {
-        return Ok(());
+        return Ok(None);
     }
     let slot = host.ext().cfg.registry_slot;
-    let _ = Host::load_account(host, &SEQUENCER_REGISTRY, false, false);
+    Host::load_account(host, &SEQUENCER_REGISTRY, false, false).map_err(host_error)?;
     // `Host::sload` of a slot of an account the database does not hold reads nothing below the
     // journal; Satin's journal sload reads it, so the read set (witness) holds it: load it.
-    let _ = host.state_mut().storage_slot(&SEQUENCER_REGISTRY, slot).map(|_| ());
-    let _ = Host::sload(host, &SEQUENCER_REGISTRY, &slot, false);
+    host.state_mut().storage_slot(&SEQUENCER_REGISTRY, slot)?;
+    let current = Host::sload(host, &SEQUENCER_REGISTRY, &slot, false).map_err(host_error)?.value;
+    let code_hash =
+        host.state_mut().account_info_untracked(&SEQUENCER_REGISTRY)?.map(|info| info.code_hash);
+    Ok((code_hash == Some(SEQUENCER_REGISTRY_CODE_HASH) && !current.is_zero())
+        .then(|| Address::from_word(current.into())))
+}
+
+/// Satin `SYSTEM_ADDRESS_WITHOUT_SYSTEM_SHAPE`: the refusal of a transaction from the live system
+/// address that is not a legacy call to a whitelisted contract.
+pub const SYSTEM_ADDRESS_WITHOUT_SYSTEM_SHAPE: &str =
+    "a transaction from the system address must be a legacy call to a whitelisted contract";
+
+/// Satin `classify_system_transaction`, made first for every envelope on the registry read
+/// (`read_registry`): whether the transaction is a system-address transaction, a legacy (`ty` 0)
+/// call to the Oracle from the live system address. Every other envelope from that address — a
+/// call off the whitelist, a creation, a typed transaction, a deposit — is refused; any other
+/// sender is an ordinary one.
+pub(crate) fn classify(
+    host: &mut Evm<'_, MegaTypes>,
+    caller: Address,
+    ty: u8,
+    to: TxKind,
+) -> HandlerResult<bool> {
+    if read_registry(host)? != Some(caller) {
+        return Ok(false);
+    }
+    if ty == 0 && to == TxKind::Call(ORACLE) {
+        return Ok(!crate::off("system_tx"));
+    }
+    if crate::off("system_shape") {
+        return Ok(false);
+    }
+    Err(crate::satin_ext::refuse(SYSTEM_ADDRESS_WITHOUT_SYSTEM_SHAPE))
+}
+
+/// Satin `validate_account_nonce_and_code` on the live system address, its code loaded: EIP-3607
+/// first, which refuses a sender with code unless the code is an EIP-7702 delegation, then the
+/// nonce. A read the database cannot serve fails the transaction.
+fn check_system_sender(
+    host: &mut Evm<'_, MegaTypes>,
+    caller: Address,
+    nonce: u64,
+) -> HandlerResult<()> {
+    use evm2::registry::HandlerError;
+    let info = host.state_mut().account_info_untracked(&caller)?.unwrap_or_default();
+    if crate::off("system_sender_code") {
+        if info.nonce != nonce {
+            return Err(HandlerError::InvalidNonce { expected: info.nonce, got: nonce });
+        }
+        if info.code_hash != alloy_primitives::KECCAK256_EMPTY {
+            return Err(HandlerError::RejectCallerWithCode);
+        }
+        return Ok(());
+    }
+    if !info.is_empty_code_hash() && !host.state_mut().code_untracked(&caller)?.is_eip7702() {
+        return Err(HandlerError::RejectCallerWithCode);
+    }
+    if nonce == u64::MAX && info.nonce == u64::MAX {
+        return Err(HandlerError::NonceOverflow);
+    }
+    if info.nonce != nonce {
+        return Err(HandlerError::InvalidNonce { expected: info.nonce, got: nonce });
+    }
     Ok(())
 }
 
@@ -159,7 +239,6 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         caller: alloy_primitives::Address,
         upfront_fee: U256,
     ) -> HandlerResult<()> {
-        read_registry(host)?;
         // op-revm reads the L1Block account when it fetches the L1 info; op-evm2 reads only the
         // slots. Read the account so the read set matches (no gas effect).
         let number = host.block().number;
@@ -215,16 +294,21 @@ pub const ORACLE: Address = address!("0x6342000000000000000000000000000000000001
 pub const MEGA_SYSTEM_TRANSACTION_SOURCE_HASH: B256 =
     b256!("852c082c0faff590c6300c2c34815d1f79882552fa95ba413cd5aeb1dba84957");
 
-/// The live system address the registry names (Satin `live_system_address`): only with the
-/// trusted code and a non-zero `_currentSystemAddress`.
-pub fn live_system_address(host: &mut Evm<'_, MegaTypes>) -> Option<Address> {
-    let info = host.state_mut().account_info_untracked(&SEQUENCER_REGISTRY).ok().flatten()?;
+/// The live system address the registry names, read off the state (Satin `live_system_address`):
+/// only with the trusted code and a non-zero `_currentSystemAddress`. A read the database cannot
+/// serve is an error.
+pub fn live_system_address(
+    host: &mut Evm<'_, MegaTypes>,
+) -> Result<Option<Address>, evm2::DatabaseError> {
+    let Some(info) = host.state_mut().account_info_untracked(&SEQUENCER_REGISTRY)? else {
+        return Ok(None);
+    };
     if info.code_hash != SEQUENCER_REGISTRY_CODE_HASH {
-        return None;
+        return Ok(None);
     }
     let slot = host.ext().cfg.registry_slot;
-    let current = host.state_mut().storage_slot_untracked(&SEQUENCER_REGISTRY, &slot).ok()?;
-    (!current.is_zero()).then(|| Address::from_word(current.into()))
+    let current = host.state_mut().storage_slot_untracked(&SEQUENCER_REGISTRY, &slot)?;
+    Ok((!current.is_zero()).then(|| Address::from_word(current.into())))
 }
 
 /// Satin's body bytes beyond the 310-byte envelope: calldata, 20 per access-list address and
@@ -246,36 +330,17 @@ fn prepare_legacy(
     let caller = req.tx.signer();
     let tx = req.tx.inner();
     let (to, len, value) = (tx.to, tx.input.len(), tx.value);
-    if to == TxKind::Call(ORACLE) &&
-        !crate::off("system_tx") &&
-        live_system_address(req.host) == Some(caller)
-    {
-        // Satin `validate_and_promote`: the chain id must be present and right (the nonce and
-        // EIP-3607 are the deposit path's own checks on the state, made by op-evm2 below).
+    if classify(req.host, caller, 0, to)? {
+        // Satin `validate_and_promote`: the chain id must be present and right.
         if tx.chain_id != Some(req.host.version().chain_id) {
             return Err(evm2::registry::HandlerError::InvalidChainId {
                 expected: req.host.version().chain_id,
                 got: tx.chain_id.unwrap_or(0),
             });
         }
-        // The nonce and EIP-3607, which the deposit path does not check (Satin checks both).
+        // EIP-3607 and the nonce, which the deposit path does not check (Satin checks both).
         if !crate::off("system_nonce") {
-            let info = req
-                .host
-                .state_mut()
-                .account_info_untracked(&caller)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            if info.nonce != tx.nonce {
-                return Err(evm2::registry::HandlerError::InvalidNonce {
-                    expected: info.nonce,
-                    got: tx.nonce,
-                });
-            }
-            if info.code_hash != alloy_primitives::KECCAK256_EMPTY {
-                return Err(evm2::registry::HandlerError::RejectCallerWithCode);
-            }
+            check_system_sender(req.host, caller, tx.nonce)?;
         }
         let deposit = TxDeposit {
             source_hash: MEGA_SYSTEM_TRANSACTION_SOURCE_HASH,
@@ -309,6 +374,7 @@ fn prepare_2930(req: &mut TxRequest<'_, '_, MegaTypes, TxEip2930>) -> HandlerRes
     let caller = req.tx.signer();
     let tx = req.tx.inner();
     let (to, len, value) = (tx.to, body_extra(tx.input.len(), &tx.access_list), tx.value);
+    classify(req.host, caller, 1, to)?;
     begin(req.host, caller, to, len, value, false, 0);
     admits_body(req.host, 0)?;
     eip2930::prepare_with_hooks::<MegaTypes, MegaHooks>(req)
@@ -318,6 +384,7 @@ fn prepare_1559(req: &mut TxRequest<'_, '_, MegaTypes, TxEip1559>) -> HandlerRes
     let caller = req.tx.signer();
     let tx = req.tx.inner();
     let (to, len, value) = (tx.to, body_extra(tx.input.len(), &tx.access_list), tx.value);
+    classify(req.host, caller, 2, to)?;
     begin(req.host, caller, to, len, value, false, 0);
     admits_body(req.host, 0)?;
     eip1559::prepare_with_hooks::<MegaTypes, MegaHooks>(req)
@@ -327,7 +394,21 @@ fn prepare_deposit(
     req: &mut TxRequest<'_, '_, MegaTypes, TxDeposit>,
 ) -> HandlerResult<PreparedDeposit> {
     let tx = *req.tx.inner();
-    prepare_deposit_inner(req.host, tx, false)
+    match classify(req.host, tx.from, DEPOSIT_TRANSACTION_TYPE, tx.to) {
+        Ok(_) => prepare_deposit_inner(req.host, tx, false),
+        Err(
+            error @ (evm2::registry::HandlerError::Database(_) |
+            evm2::registry::HandlerError::Fatal(_)),
+        ) => Err(error),
+        // A deposit from the live system address: refused before anything of it runs, and
+        // included as a failed deposit (op-revm). No frame is started, so its start ledger holds
+        // nothing; its body is counted.
+        Err(refusal) => {
+            req.host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, false, true);
+            req.host.ext_mut().frames.clear();
+            Ok(PreparedDeposit::Failed(refusal))
+        }
+    }
 }
 
 fn prepare_deposit_inner(
@@ -350,7 +431,6 @@ fn prepare_deposit_inner(
         ext.frames[0].budget[2] = ext.frames[0].budget[2].saturating_sub(1);
     }
     host.ext_mut().deposit_created_caller = created;
-    let _ = read_registry(host);
     // A deposit whose body is over the data-size limit is a failed deposit (Satin).
     host.ext_mut().mechanisms.body_refused = admits_body(host, 0).is_err();
     op_evm2::prepare_deposit_tx(host, tx)

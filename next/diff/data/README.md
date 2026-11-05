@@ -17,7 +17,7 @@
 | `expected.env`                    | The replay and block counts `gate.sh` expects, sample and full                                   |
 
 The main gate's expected count is `MAIN_EXPECT` in `scripts/common.sh`, the one place the scripts state it; `expected.env` holds the others, counted by `count_expected.py` from the reference files and `known-differences.toml`, independently of the gates.
-Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q8`, `cap`) and fuzz batch names (`fq`, `fqbig`, `fqh`, `fqhbig`, `big`, `harsh`) are stable data identifiers: the reference outputs and `known-differences.toml` are keyed on them.
+Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q8`, `cap`, `edge`) and fuzz batch names (`fq`, `fqbig`, `fqh`, `fqhbig`, `big`, `harsh`) are stable data identifiers: the reference outputs and `known-differences.toml` are keyed on them.
 
 ## Selection of the sample blocks
 

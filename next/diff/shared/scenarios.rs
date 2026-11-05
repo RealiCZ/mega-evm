@@ -3,8 +3,11 @@
 //! `all()` is the base scenario list (group "p5"); the sibling files included below add the
 //! regression sets (`p6`, `p7`), the interaction scenarios (`q2`), the fuzz generator (`fz`) and
 //! the scenarios of the later mechanisms (`q8`: EIP-7702, keyless deployment, access control,
-//! Oracle hints, the precompile catalogue) and the gas limits above the EIP-8037 total cap
-//! (`cap`). Group names are part of the reference outputs.
+//! Oracle hints, the precompile catalogue), the gas limits above the EIP-8037 total cap
+//! (`cap`) and the edge inputs of single rules (`edge`: the live system address's envelopes, a
+//! destroyed leaf a transfer created, a transaction-level detained precompile, SALT capacities
+//! below the minimum bucket, limits at or above 2^63, deposits whose first frame cannot start).
+//! Group names are part of the reference outputs.
 
 #![allow(dead_code)]
 
@@ -261,8 +264,8 @@ pub struct Scenario {
     pub data: Vec<u8>,
     pub gas_limit: u64,
     pub limits: Limits,
-    /// "p5", "p6", "p7" (regression), "q2" (interaction), "fz" (fuzz), "q8" (later mechanisms) or
-    /// "cap" (gas limits above the EIP-8037 total cap).
+    /// "p5", "p6", "p7" (regression), "q2" (interaction), "fz" (fuzz), "q8" (later mechanisms),
+    /// "cap" (gas limits above the EIP-8037 total cap) or "edge" (edge inputs of single rules).
     pub group: &'static str,
     /// The transaction's sender.
     pub sender: Address,
@@ -283,6 +286,12 @@ pub struct Scenario {
     pub auths: Vec<Auth>,
     /// the block beneficiary (default zero).
     pub beneficiary: Address,
+    /// An EIP-2930 (1) or EIP-1559 (2) transaction instead of a legacy one (0): chain id 1, nonce
+    /// 0, `gas_price` as its fee cap and priority fee, no access list. Not with `auths` or
+    /// `deposit`.
+    pub tx_type: u8,
+    /// A legacy transaction's chain id (`None`: one signed without EIP-155).
+    pub chain_id: Option<u64>,
 }
 
 /// one EIP-7702 authorization, its authority recovered already (`None`: an invalid
@@ -333,6 +342,8 @@ pub fn scenario(
         oracle: Vec::new(),
         auths: Vec::new(),
         beneficiary: Address::ZERO,
+        tx_type: 0,
+        chain_id: None,
     }
 }
 
@@ -345,8 +356,8 @@ pub fn three_writes() -> Vec<u8> {
     Asm::new().sstore(1, 1).sstore(2, 1).sstore(3, 1).stop().build()
 }
 
-/// Every scenario of the run: the base list, then the `p6`, `p7`, `q2`, `fz`, `q8` and `cap`
-/// groups.
+/// Every scenario of the run: the base list, then the `p6`, `p7`, `q2`, `fz`, `q8`, `cap` and
+/// `edge` groups.
 pub fn everything() -> Vec<Scenario> {
     let mut v = all();
     v.extend(p6::all());
@@ -355,6 +366,7 @@ pub fn everything() -> Vec<Scenario> {
     v.extend(fz::all());
     v.extend(q8::all());
     v.extend(cap::all());
+    v.extend(edge::all());
     // The L1Block predeploy and the SequencerRegistry exist on a real chain: give both a code
     // byte so their slots are read below the journal on both engines (an absent account's slots
     // are not read by evm2).
@@ -383,6 +395,8 @@ pub const SEQUENCER_REGISTRY: Address =
 
 #[path = "cap_scenarios.rs"]
 pub mod cap;
+#[path = "edge_scenarios.rs"]
+pub mod edge;
 #[path = "fuzz_scenarios.rs"]
 pub mod fz;
 #[path = "p6_scenarios.rs"]

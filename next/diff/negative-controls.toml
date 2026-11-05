@@ -347,6 +347,20 @@ scope = "sample"
 why = "State gas prices are multiplied by the SALT bucket multiplier of the account or slot (and read its bucket); off, every multiplier is 1. The case writes a fresh slot in a bucket of multiplier 8, so its gas differs, not only its reads."
 
 [[control]]
+switch = "salt_min_bucket"
+gate = "main"
+scenario = "edge_salt_capacity_zero_slot"
+scope = "sample"
+why = "A SALT bucket that reports a capacity below the minimum bucket fails the transaction with the lookup's error; off, the floor division prices every state charge in that bucket at zero and the transaction runs."
+
+[[control]]
+switch = "sd_absent_leaf"
+gate = "main"
+scenario = "edge_transfer_then_create_destroyed"
+scope = "sample"
+why = "A destroyed account created in the transaction gives back its leaf's state gas, unit of state growth and write record when the transaction found the address absent at its start, at the new-account price, whichever charge materialized it; off, only a leaf the creation itself charged comes back, so a leaf an earlier transfer materialized keeps 183,600 state gas and its growth."
+
+[[control]]
 switch = "sd_existing_record"
 gate = "replay"
 block = "d4:28399774"
@@ -382,11 +396,32 @@ scope = "sample"
 why = "A system-address transaction's nonce and EIP-3607 are checked (the deposit path it runs on checks neither); off, a stale system transaction runs instead of being refused."
 
 [[control]]
+switch = "system_sender_code"
+gate = "main"
+scenario = "edge_system_sender_delegated"
+scope = "sample"
+why = "A system-address transaction's sender passes EIP-3607 when its code is an EIP-7702 delegation, and the code is checked before the nonce; off, any code refuses the sender and the nonce is checked first, so a delegated live system address is refused where the reference promotes and runs its transaction."
+
+[[control]]
+switch = "system_shape"
+gate = "main"
+scenario = "edge_system_legacy_off_whitelist"
+scope = "sample"
+why = "Every envelope from the live system address other than a legacy call to a whitelisted contract is refused (a deposit from it is a failed deposit); off, a call off the whitelist from it runs as an ordinary transaction."
+
+[[control]]
 switch = "system_tx"
 gate = "replay"
 block = "p9:26400004"
 scope = "sample"
 why = "A legacy transaction from the live system address to the Oracle runs as a system transaction (exempt, fee-free, through the deposit path); off, it is an ordinary transaction. The block's ten system transactions have gas price 0 and gas limits near the block's 10,000,000,000, so off they are refused (fee cap below the base fee) where the reference runs them."
+
+[[control]]
+switch = "top_precompile_hold"
+gate = "main"
+scenario = "edge_top_ripemd160_sender_is_beneficiary"
+scope = "sample"
+why = "The transaction's own call of a precompile is priced and held under detention as a child call is (detained from the start when the sender or recipient is the block beneficiary): past the allowance and within the forward it is the compute stop; off, the precompile runs and the transaction succeeds."
 
 [[control]]
 switch = "tx_beneficiary"
@@ -404,6 +439,13 @@ scope = "full"
 why = "A frame's own resource draws see its budget minus its net use, unclamped, so a restore gives room back; off, the room is clamped to the budget. Full corpus only: no sample case draws on room a restore gave back."
 
 # The gate harness's fixture switches (`next/diff`).
+
+[[control]]
+switch = "wide_limits"
+gate = "main"
+scenario = "edge_growth_limit_u64_max"
+scope = "sample"
+why = "Usage is compared with each per-transaction limit over the whole u64 range of the limit; off, a limit at or above 2^63 narrows to a negative signed value and a transaction under it is stopped at once."
 
 [[harness]]
 switch = "absent_storage_read"

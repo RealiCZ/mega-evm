@@ -253,14 +253,33 @@ fn tx(s: &Scenario) -> mega_evm::MegaTransaction {
         t.0.enveloped_tx = Some(Bytes::new());
         return t;
     }
+    let kind = if s.create { TxKind::Create } else { TxKind::Call(s.to) };
+    if s.tx_type != 0 {
+        // An EIP-2930 or EIP-1559 transaction: chain id 1, nonce 0, no access list.
+        let env = TxEnv::builder()
+            .tx_type(Some(s.tx_type))
+            .caller(s.sender)
+            .kind(kind)
+            .data(Bytes::from(s.data.clone()))
+            .value(s.value)
+            .gas_limit(s.gas_limit)
+            .gas_price(s.gas_price as u128)
+            .gas_priority_fee((s.tx_type == 2).then_some(s.gas_price as u128))
+            .chain_id(Some(1))
+            .nonce(0)
+            .build_fill();
+        let mut t = OpTx(op_transaction(env));
+        t.0.enveloped_tx = Some(Bytes::new());
+        return t;
+    }
     let mut t = OpTx(op_transaction(TxEnv {
         caller: s.sender,
-        kind: if s.create { TxKind::Create } else { TxKind::Call(s.to) },
+        kind,
         data: Bytes::from(s.data.clone()),
         value: s.value,
         gas_limit: s.gas_limit,
         gas_price: s.gas_price as u128,
-        chain_id: if s.deposit.is_some() { Some(1) } else { None },
+        chain_id: if s.deposit.is_some() { Some(1) } else { s.chain_id },
         ..Default::default()
     }));
     if let Some((_, _, bytes)) = &s.l1_fee {

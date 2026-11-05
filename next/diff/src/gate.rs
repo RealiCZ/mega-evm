@@ -307,6 +307,13 @@ pub fn error_kind(s: &str) -> String {
             "intrinsic_gas",
         ),
         (&["RejectCallerWithCode", "caller has code"][..], "caller_code"),
+        (
+            &[
+                "a transaction from the system address must be a legacy call to a whitelisted contract",
+            ][..],
+            "system_shape",
+        ),
+        (&["SALT bucket lookup failed"][..], "salt_lookup"),
         (&["InvalidChainId", "invalid chain id"][..], "chain_id"),
         (&["NonceOverflow", "nonce overflow"][..], "nonce_overflow"),
     ] {

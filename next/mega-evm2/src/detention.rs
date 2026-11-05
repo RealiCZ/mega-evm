@@ -434,16 +434,20 @@ pub fn precompile_price(address: &alloy_primitives::Address, input: &[u8]) -> Op
 }
 
 /// Satin's `hold_precompile` (`before` message hook, before evm2 runs the precompile): priced past
-/// the
-/// allowance and within the forward, the call is answered with the compute stop without running;
-/// the caller gets its whole forward back. A value call whose caller cannot fund it is not held.
+/// the allowance and within the forward, the call is answered with the compute stop without
+/// running; the caller gets its whole forward back. A value call whose caller cannot fund it is not
+/// held. The transaction's own call of a precompile is held too (detained from its start when its
+/// sender or recipient is the block beneficiary): the stop is then the transaction's.
 pub fn hold_precompile(
     evm: &mut Evm<'_, MegaTypes>,
     msg: &Message<MegaTypes>,
     is_precompile: bool,
 ) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
     use evm2::interpreter::MessageKind;
-    if !is_precompile || !detains(evm.ext()) || msg.depth == 0 {
+    if !is_precompile ||
+        !detains(evm.ext()) ||
+        (msg.depth == 0 && crate::off("top_precompile_hold"))
+    {
         return None;
     }
     if !matches!(
@@ -483,7 +487,11 @@ pub fn hold_precompile(
     if !crosses {
         return None;
     }
-    evm.ext_mut().detention.crossings += 1;
+    let ext = evm.ext_mut();
+    ext.detention.crossings += 1;
+    if msg.depth == 0 {
+        ext.top_stop = Some((2, limit));
+    }
     Some(evm2::interpreter::MessageResultExt {
         stop: InstrStop::Revert,
         output: limit_exceeded_output(2, limit).into(),
