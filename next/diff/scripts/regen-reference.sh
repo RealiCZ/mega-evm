@@ -4,7 +4,7 @@
 #
 # Usage: MEGA_EVM2_CORPUS_DIR=<corpus> regen-reference.sh [--check] <out-dir>
 #
-# It runs `next/reference` over the main scenarios, the six fuzz batches of `gate.sh full` and
+# It runs `next/reference` over the main scenarios, the fuzz batches of `gate.sh full` and
 # every block of `$MEGA_EVM2_CORPUS_DIR/real-blocks` (engine replay and block level), and packs
 # the outputs as `<out-dir>/reference-outputs.tar.zst` in the layout `gate.sh full` reads:
 #   satin-oracle.json, oracles/<batch>.json, raw/satin/<set>/<n>.jsonl, raw/satin-block/<set>/<n>.jsonl
@@ -101,9 +101,10 @@ mkdir -p "$run/new/oracles" "$run/new/raw"
 if [ "$check" = 1 ]; then
   # The expected outputs, taken out before anything is generated.
   mkdir -p "$run/expected"
+  members=()
+  for spec in "${FULL_FUZZ_BATCHES[@]}"; do members+=("oracles/${spec%%:*}.json"); done
   tar --zstd -xf "$expected_archive" -C "$run/expected" \
-    satin-oracle.json oracles/fq.json oracles/fqbig.json oracles/fqh.json oracles/fqhbig.json \
-    oracles/big.json oracles/harsh.json raw/satin raw/satin-block
+    satin-oracle.json "${members[@]}" raw/satin raw/satin-block
 fi
 
 gen() {

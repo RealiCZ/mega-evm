@@ -18,7 +18,7 @@
 #   switch    the name in `off("…")`
 #   gate      main | fuzz | replay | block
 #   scenario  (main) the scenario name
-#   mode      (fuzz) the generator mode, 1..=4
+#   mode      (fuzz) the generator mode, 1..=10
 #   seed      (fuzz) the seed
 #   block     (replay, block) the recorded block, `<set>:<number>`
 #   scope     sample: the case is in the in-repo sample (run by CI on every change);
@@ -467,6 +467,69 @@ gate = "main"
 scenario = "edge_growth_limit_u64_max"
 scope = "sample"
 why = "Usage is compared with each per-transaction limit over the whole u64 range of the limit; off, a limit at or above 2^63 narrows to a negative signed value and a transaction under it is stopped at once."
+
+[[control]]
+switch = "body_after_env"
+gate = "main"
+scenario = "edge_gas_above_block_body_over_limit"
+scope = "sample"
+why = "A user transaction's body is checked against its data-size limit after the environment's rules (the gas limit against the block's), as Satin does; off, a transaction whose gas limit is above the block's and whose body is over the limit is refused for its body instead."
+
+[[control]]
+switch = "body_refused_start"
+gate = "main"
+scenario = "edge_deposit_body_over_limit"
+scope = "sample"
+why = "A deposit refused for its body runs nothing: its first frame's start is not predicted (no read of its recipient) and no start settles; off, its recipient is read and an empty start settles on the ledger."
+
+[[control]]
+switch = "deposit_caller_code"
+gate = "main"
+scenario = "edge_deposit_delegated_sender"
+scope = "sample"
+why = "A deposit's caller is loaded with its code, as op-revm loads it; off, the code of a caller with a delegation or code is not read."
+
+[[control]]
+switch = "destroyed_start_charge"
+gate = "main"
+scenario = "edge_transfer_after_create_destroyed"
+scope = "sample"
+why = "An account the transaction created and destroyed counts nothing more, so a value sent to it or a creation onto it prices no write record at its start; off, the start charges a record nothing gives back (history gas and bytes rise)."
+
+[[control]]
+switch = "exempt_caller_budget"
+gate = "main"
+scenario = "edge_system_legacy_oracle_absent_sender"
+scope = "sample"
+why = "The account a promoted system-address transaction creates for its caller is counted outside the frames and not taken from the frame's unlimited budgets; off, the frame's state-growth budget is one less on the start ledger."
+
+[[control]]
+switch = "floor_before_history"
+gate = "main"
+scenario = "edge_gas_below_floor"
+scope = "sample"
+why = "A gas limit that covers the intrinsic gas without the body's history but not the calldata floor is refused for the floor, Satin's order of the gas checks; off, it is refused for the intrinsic gas with the history."
+
+[[control]]
+switch = "refused_deposit_caller"
+gate = "main"
+scenario = "edge_system_deposit_absent_sender"
+scope = "sample"
+why = "A deposit from the live system address is a failed deposit whose nonce bump creates an absent caller: a unit of state growth; off, no growth is counted."
+
+[[control]]
+switch = "resume_before_stop"
+gate = "main"
+scenario = "edge_creator_stopped_on_resume_detained"
+scope = "sample"
+why = "A frame stopped by a limit as it resumes from its child (its nonce record after a creation, or held again by hold_caller) resumes on the detention ledger first, as Satin counts the limit once the child merged into it; off, the frame stops unresumed and the detention stops its caller as soon as it resumes (gas and reads differ)."
+
+[[control]]
+switch = "own_creation_record_spill"
+gate = "main"
+scenario = "edge_create_tx_destroyed_in_constructor"
+scope = "sample"
+why = "When a creation transaction's constructor destroys the new contract, the start record that comes back with the leaf returns to the regular gas that paid it, as Satin's spill does; off, it stays in the reservoir (reservoir_remaining differs)."
 
 [[harness]]
 switch = "absent_storage_read"

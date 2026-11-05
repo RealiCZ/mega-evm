@@ -28,7 +28,7 @@ gate_inputs() {
   local mode=$1 work=$2 corpus archive batches blocks=""
   fresh_dir "$work" > /dev/null
   if [ "$mode" = sample ]; then
-    batches="mode4:4:1..=2000:2000"
+    batches="${SAMPLE_FUZZ_BATCHES[*]}"
   else
     : "${MEGA_EVM2_CORPUS_DIR:?set MEGA_EVM2_CORPUS_DIR to the full corpus}"
     corpus=$(cd -P "$MEGA_EVM2_CORPUS_DIR" && pwd -P)
@@ -59,8 +59,11 @@ gate_extract() {
   if [ "$mode" = sample ]; then
     mkdir -p "$work/fuzz"
     gate_unz "$gate_lib_diff/data/synthetic/main.json.zst" "$work/main.json"
-    gate_unz "$gate_lib_diff/data/synthetic/fuzz-mode4.json.zst" "$work/fuzz/mode4.json"
-    local kind src dst f
+    local kind src dst f spec name
+    for spec in "${SAMPLE_FUZZ_BATCHES[@]}"; do
+      name=${spec%%:*}
+      gate_unz "$gate_lib_diff/data/synthetic/fuzz-$name.json.zst" "$work/fuzz/$name.json"
+    done
     for kind in real-blocks:blocks replay:replay block:block; do
       src=${kind%%:*}
       dst=${kind##*:}
@@ -79,8 +82,11 @@ gate_extract() {
     mv "$work/extract/satin-oracle.json" "$work/main.json"
     mv "$work/extract/raw/satin" "$work/replay"
     mv "$work/extract/raw/satin-block" "$work/block"
-    local name
-    for name in fq fqbig fqh fqhbig big harsh; do mv "$work/extract/oracles/$name.json" "$work/fuzz/$name.json"; done
+    local spec name
+    for spec in "${FULL_FUZZ_BATCHES[@]}"; do
+      name=${spec%%:*}
+      mv "$work/extract/oracles/$name.json" "$work/fuzz/$name.json"
+    done
     rm -rf "$work/extract"
   fi
 }

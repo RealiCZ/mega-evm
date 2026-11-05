@@ -892,3 +892,22 @@ pub fn all() -> Vec<Scenario> {
 pub fn remaining_compute_gas_selector() -> [u8; 4] {
     alloy_primitives::keccak256("remainingComputeGas()")[..4].try_into().unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    /// A deposit carries no gas price: the engine's deposit envelope has none, so a scenario that
+    /// gave one would run as a different transaction on each side.
+    #[test]
+    fn test_no_deposit_carries_a_gas_price() {
+        let mut all = super::hand_written();
+        for mode in super::fz::MODES.iter().map(|m| m.0) {
+            all.extend(super::fz::generate(mode, 1, 300));
+        }
+        let priced: Vec<_> = all
+            .iter()
+            .filter(|s| s.deposit.is_some() && s.gas_price != 0)
+            .map(|s| s.name)
+            .collect();
+        assert!(priced.is_empty(), "{priced:?}");
+    }
+}

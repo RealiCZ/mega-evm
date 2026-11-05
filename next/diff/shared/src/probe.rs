@@ -10,10 +10,11 @@
 //!   accepted differences apply by name, so a probe named like a listed scenario is held to its
 //!   entry.
 //! - Transaction: `gas` (the gas limit), `value`, `data` (hex), `to`, `create` (a creation; `to`
-//!   ignored), `sender`, `deposit` (an OP deposit's mint, or null for none), `gas_price`, `tx_type`
-//!   (0, 1 or 2), `chain_id` (a legacy transaction's, or null), `auths` (an EIP-7702 list:
-//!   `{chain_id, address, nonce, authority}`, `authority` null for an invalid signature), `l1_fee`
-//!   (`[l1 base fee, base fee scalar, enveloped bytes]`, or null).
+//!   ignored), `sender`, `deposit` (an OP deposit's mint, or null for none), `gas_price` (0 for a
+//!   deposit, which carries none), `tx_type` (0, 1 or 2), `chain_id` (a legacy transaction's, or
+//!   null), `auths` (an EIP-7702 list: `{chain_id, address, nonce, authority}`, `authority` null
+//!   for an invalid signature), `l1_fee` (`[l1 base fee, base fee scalar, enveloped bytes]`, or
+//!   null).
 //! - Block and environment: `beneficiary`; `salt` (`[address, slot or null, capacity in minimum
 //!   buckets]` per bucket), `salt_capacity` (the same with the capacity in entries), `oracle`
 //!   (`[slot, value]` per answer).
@@ -22,6 +23,8 @@
 //! - `accounts`: `{address, code, balance, nonce, storage}` per account (`storage` as `[key,
 //!   value]` pairs; the others default to empty or zero). An entry replaces the account at its
 //!   address, or adds one; the others stay.
+//!
+//! Also `group` (the record's group, default the base's) and `comment` (ignored).
 //!
 //! A list replaces the base's list. Numbers are JSON integers or strings (`0x` hex or decimal),
 //! byte strings and addresses `0x` hex. An unknown key, a repeated name or a malformed value is an
@@ -119,6 +122,9 @@ pub fn parse_line(line: &str, number: usize) -> Result<Scenario, String> {
     s.name = Box::leak(name.into_boxed_str());
     for (k, v) in &members {
         apply(&mut s, k, v).map_err(|e| at(format!("`{k}`: {e}")))?;
+    }
+    if s.deposit.is_some() && s.gas_price != 0 {
+        return Err(at("a deposit carries no gas price (`gas_price` must be 0)".into()));
     }
     add_chain_accounts(&mut s);
     Ok(s)
@@ -380,6 +386,7 @@ mod tests {
             (r#"{"accounts": [{"code": "0x00"}]}"#, "needs an `address`"),
             (r#"{"salt": [["0x0000000000000000000000000000000000000001", 0]]}"#, "a list of 3"),
             (r#"[1]"#, "a JSON object"),
+            (r#"{"deposit": 0, "gas_price": 1}"#, "no gas price"),
         ] {
             let e = parse_line(line, 9).unwrap_err();
             assert!(e.starts_with("line 9: ") && e.contains(needle), "{line}: {e}");

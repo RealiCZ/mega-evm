@@ -21,22 +21,32 @@ d4:2045117 d4:3224158 d4:7487457 d4:8064067 d4:10108963 d4:12747297 d4:14924732
 d4:18138664 d4:19010529 d4:22016777 d4:27670576 d4:27985540 d4:28102900 d4:28107033
 p9:26400000 p9:26400004 p9:26400020 p9:26400051 p9:26400077 p9:26400193
 "
-# Seeds 1..=FUZZ_SEEDS of the mode-4 (harsh, with the MegaETH mechanisms) fuzz batch.
-FUZZ_SEEDS=2000
 
 rm -rf "$work" "$data/synthetic" "$data/real-blocks" "$data/replay" "$data/block"
 mkdir -p "$work" "$data/synthetic" "$data/real-blocks" "$data/replay" "$data/block"
 archive=$corpus/reference/reference-outputs.tar.zst
 [ -f "$archive" ] || archive=$corpus/reference/q11-oracles.tar.zst
-tar --zstd -xf "$archive" -C "$work" \
-  satin-oracle.json oracles/fqh.json raw/satin raw/satin-block
+tar --zstd -xf "$archive" -C "$work" satin-oracle.json oracles raw/satin raw/satin-block
 
 zst() { zstd -q -19 --long=27 -f -o "$2" "$1"; }
 
 zst "$work/satin-oracle.json" "$data/synthetic/main.json.zst"
-jq -c "map(select(.name | test(\"^fqh0*([1-9][0-9]{0,3})\$\")) | select((.name[3:] | tonumber) <= $FUZZ_SEEDS))" \
-  "$work/oracles/fqh.json" > "$work/fuzz.json"
-zst "$work/fuzz.json" "$data/synthetic/fuzz-mode4.json.zst"
+# Each sample batch is the first seeds of the full batch of its mode that starts at seed 1, whose
+# outputs are in seed order: a slice of it.
+for spec in "${SAMPLE_FUZZ_BATCHES[@]}"; do
+  IFS=: read -r name fmode range count <<< "$spec"
+  source_batch=""
+  for full in "${FULL_FUZZ_BATCHES[@]}"; do
+    IFS=: read -r fname ffmode frange _ <<< "$full"
+    [ "$ffmode" = "$fmode" ] && [ "${frange%%..=*}" = 1 ] && source_batch=$fname
+  done
+  [ -n "$source_batch" ] && [ "${range%%..=*}" = 1 ] ||
+    { echo "make-sample.sh: no full batch of mode $fmode starts at seed 1 for $name" >&2; exit 1; }
+  jq -c ".[0:$count]" "$work/oracles/$source_batch.json" > "$work/fuzz-$name.json"
+  [ "$(jq length "$work/fuzz-$name.json")" = "$count" ] ||
+    { echo "make-sample.sh: $source_batch holds fewer than $count seeds for $name" >&2; exit 1; }
+  zst "$work/fuzz-$name.json" "$data/synthetic/fuzz-$name.json.zst"
+done
 
 for item in $BLOCKS; do
   set=${item%%:*}

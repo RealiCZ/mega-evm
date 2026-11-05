@@ -15,25 +15,40 @@
 //! - a SALT bucket that reports a capacity below the minimum bucket: the transaction fails;
 //! - per-transaction limits at or above 2^63: compared over the whole `u64` range;
 //! - a `keylessDeploy` call whose `bytes` offset is the largest machine word: malformed encoding;
-//! - a deposit whose first frame cannot pay the new-account state gas of its value's recipient.
+//! - a deposit whose first frame cannot pay the new-account state gas of its value's recipient;
+//! - the order of a transaction's gas checks: the intrinsic gas without the body's history, the
+//!   calldata floor, then the intrinsic gas with the history; the environment's rules (the block's
+//!   gas limit) before the body's data size;
+//! - a deposit refused for its body: nothing of it runs, no start is predicted or settled;
+//! - a failed deposit from the live system address, and its permitted legacy call, from an absent
+//!   account: the account the nonce bump creates is counted outside the frames, whose budgets stay
+//!   unlimited for the protocol's own work;
+//! - a deposit from an account with code or a delegation: its code is read;
+//! - a value sent to, or a creation onto, an account the transaction created and destroyed: it
+//!   counts nothing more, so the start prices no record of it;
+//! - a frame stopped by a limit as it resumes from its child (a creator's nonce record): it resumes
+//!   first, so the detention of the transaction holds its caller as before;
+//! - a creation transaction whose constructor destroys the new contract (itself, or through a frame
+//!   it delegates to): the start record that comes back with the leaf goes back to the regular gas
+//!   the record took, the reservoir keeps the rest.
 #![allow(dead_code)]
 use super::{
-    A, Account, Asm, Auth, B, BELOW_CAP, D, EMPTY, KEYLESS, Limits, ORACLE, SENDER,
-    SEQUENCER_REGISTRY, Scenario, acct, funded, init_returning, op, scenario,
+    A, Account, Asm, Auth, B, BELOW_CAP, BLOCK_GAS_LIMIT, D, EMPTY, IDENTITY, KEYLESS, Limits,
+    ORACLE, SENDER, SEQUENCER_REGISTRY, Scenario, acct, funded, init_returning, op, scenario,
 };
 use alloy_primitives::{Address, B256, U256, b256, hex, keccak256};
 
 /// The system address the registry names in these scenarios.
 pub const SYSTEM: Address = Address::with_last_byte(0x5a);
 /// An address no scenario gives an account: an EIP-7702 authority, created by its authorization.
-const AUTHORITY: Address = Address::with_last_byte(0xc1);
+pub(crate) const AUTHORITY: Address = Address::with_last_byte(0xc1);
 /// The `SequencerRegistry` v2.0.0 runtime code, the code both engines trust.
 const REGISTRY_CODE: &str = include_str!("SequencerRegistry-2.0.0.hex");
 const REGISTRY_CODE_HASH: B256 =
     b256!("abd7e8f1c8f0f9ca0346df585b65d9791a7e9ba5c431cc4eda5d2c2f1f5e9c43");
 const RIPEMD160: Address = Address::with_last_byte(0x03);
 const BLAKE2F: Address = Address::with_last_byte(0x09);
-const ONE_ETHER: u64 = 1_000_000_000_000_000_000;
+pub(crate) const ONE_ETHER: u64 = 1_000_000_000_000_000_000;
 
 fn edge(name: &'static str, accounts: Vec<Account>, gas: u64, limits: Limits) -> Scenario {
     let mut s = scenario(name, accounts, gas, limits);
@@ -42,7 +57,7 @@ fn edge(name: &'static str, accounts: Vec<Account>, gas: u64, limits: Limits) ->
 }
 
 /// The registry with its trusted code, naming `system` in `_currentSystemAddress` (slot 0).
-fn registry_naming(system: Address) -> Account {
+pub(crate) fn registry_naming(system: Address) -> Account {
     let code = hex::decode(REGISTRY_CODE.trim()).unwrap();
     assert_eq!(keccak256(&code), REGISTRY_CODE_HASH, "the registry's trusted code");
     let word = u64::from_be_bytes(system.0[12..].try_into().unwrap());
@@ -51,7 +66,7 @@ fn registry_naming(system: Address) -> Account {
 }
 
 /// SSTORE(1, 1); STOP.
-fn store_one() -> Vec<u8> {
+pub(crate) fn store_one() -> Vec<u8> {
     Asm::new().sstore(1, 1).stop().build()
 }
 
@@ -370,6 +385,200 @@ fn deposit_first_frame() -> Vec<Scenario> {
     v
 }
 
+/// The order of a user transaction's gas checks. A call of the identity precompile with 213 zero
+/// bytes: its intrinsic gas without the body's history is 15,852, its calldata floor 28,632 and
+/// its intrinsic gas with the history 61,876; each gas limit below sits in one window. Then a gas
+/// limit above the block's, alone and with a body over a data-size limit of 0 (the block's rule is
+/// the environment's, checked first), and the body alone.
+fn gas_check_order() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    for (name, gas) in [
+        ("edge_gas_below_intrinsic", 15_000u64),
+        ("edge_gas_below_floor", 23_000),
+        ("edge_gas_below_history", 40_000),
+    ] {
+        let mut s = edge(name, vec![], gas, Limits::default());
+        s.to = IDENTITY;
+        s.data = vec![0; 213];
+        v.push(s);
+    }
+    let body_limit = Limits { data: Some(0), ..Limits::default() };
+    for (name, gas, limits) in [
+        ("edge_gas_above_block", BLOCK_GAS_LIMIT + 1, Limits::default()),
+        ("edge_gas_above_block_body_over_limit", BLOCK_GAS_LIMIT + 1, body_limit),
+        ("edge_body_over_limit", BELOW_CAP, body_limit),
+    ] {
+        v.push(edge(name, vec![acct(A, store_one())], gas, limits));
+    }
+    v
+}
+
+/// Deposits: one whose body is over the data-size limit (from a caller it creates, with a value
+/// for an account that exists), and ones from an account with a delegation and with code.
+fn deposit_rules() -> Vec<Scenario> {
+    let depositor = super::q2::DEPOSITOR;
+    let mut v = Vec::new();
+    let mut s = edge(
+        "edge_deposit_body_over_limit",
+        vec![acct(A, store_one())],
+        BELOW_CAP,
+        Limits { data: Some(100), ..Limits::default() },
+    );
+    s.sender = depositor;
+    s.deposit = Some(1_000_000);
+    s.value = U256::from(1);
+    v.push(s);
+    for (name, code) in [
+        ("edge_deposit_delegated_sender", delegation(A)),
+        ("edge_deposit_sender_with_code", vec![op::STOP]),
+    ] {
+        let mut s = edge(
+            name,
+            vec![acct(A, store_one()), funded(depositor, code, 5)],
+            BELOW_CAP,
+            Limits::default(),
+        );
+        s.sender = depositor;
+        s.deposit = Some(0);
+        v.push(s);
+    }
+    v
+}
+
+/// From the live system address without an account: a deposit (a failed deposit, whose nonce bump
+/// creates the account) and the permitted legacy call to the Oracle (promoted; the created
+/// account is counted outside its frame, whose budgets stay unlimited).
+fn system_absent_sender() -> Vec<Scenario> {
+    let accounts = vec![registry_naming(SYSTEM), acct(ORACLE, store_one()), acct(A, store_one())];
+    let mut v = Vec::new();
+    let mut s =
+        edge("edge_system_deposit_absent_sender", accounts.clone(), BELOW_CAP, Limits::default());
+    s.sender = SYSTEM;
+    s.deposit = Some(0);
+    v.push(s);
+    let mut s =
+        edge("edge_system_legacy_oracle_absent_sender", accounts, BELOW_CAP, Limits::default());
+    s.sender = SYSTEM;
+    s.to = ORACLE;
+    s.chain_id = Some(1);
+    v.push(s);
+    v
+}
+
+/// A (nonce 1, balance 10) funds the address T of its next creation, creates there a contract
+/// whose constructor destroys it, then sends T another wei, or creates onto T again with CREATE2
+/// (a collision): T counts nothing more, so neither start prices a record of it.
+fn after_destruction() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    let a = |code: Vec<u8>| Account {
+        address: A,
+        code,
+        balance: U256::from(10),
+        nonce: 1,
+        ..Account::default()
+    };
+    let destroys_to_a = Asm::new().push_addr(A).op(op::SELFDESTRUCT).build();
+    let t = A.create(1);
+    let code = Asm::new()
+        .call_all(op::CALL, t, 1)
+        .op(op::POP)
+        .create(&destroys_to_a, 0)
+        .op(op::POP)
+        .call_all(op::CALL, t, 1)
+        .record_call(0x10)
+        .stop()
+        .build();
+    v.push(edge(
+        "edge_transfer_after_create_destroyed",
+        vec![a(code)],
+        BELOW_CAP,
+        Limits::default(),
+    ));
+    // CREATE2 twice at the same address: the first contract destroys itself in its constructor,
+    // the second creation collides with what is left of it.
+    let mut c = Asm::new();
+    for i in 0..2u64 {
+        for (j, chunk) in destroys_to_a.chunks(32).enumerate() {
+            let mut w = [0u8; 32];
+            w[..chunk.len()].copy_from_slice(chunk);
+            c = c.push_bytes(&w).push(32 * j as u64).op(op::MSTORE);
+        }
+        c = c
+            .push(0)
+            .push(destroys_to_a.len() as u64)
+            .push(0)
+            .push(0)
+            .op(op::CREATE2)
+            .push(0x20 + i)
+            .op(op::SSTORE);
+    }
+    v.push(edge(
+        "edge_create2_after_create2_destroyed",
+        vec![a(c.stop().build())],
+        BELOW_CAP,
+        Limits::default(),
+    ));
+    v
+}
+
+/// A calls C, whose CREATE's constructor reads TIMESTAMP (the transaction is detained from there
+/// on, under a cap of 500 or the default) and writes a slot; the creation's records leave C less
+/// data-size room than its own nonce record needs, so C stops as the creation returns. A then
+/// reads one of its slots (cold) and loops: the detention stops it there.
+fn creator_stopped_on_resume() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    let mut init = Asm::new().sstore(1, 1).op(op::TIMESTAMP).op(op::POP).build();
+    init.extend(init_returning(1));
+    let c = Asm::new().create(&init, 0).op(op::POP).sstore(1, 1).revert0().build();
+    let a = Asm::new().call_with(op::CALL, super::C, 0, 200_000, 0).op(op::POP);
+    let a = a.push(3).op(op::SLOAD).op(op::POP);
+    let jd = a.0.len() as u64;
+    let a = a.op(op::JUMPDEST).push(jd).op(op::JUMP).build();
+    for (name, cap) in [
+        ("edge_creator_stopped_on_resume_detained", Some(500)),
+        ("edge_creator_stopped_on_resume_default_cap", None),
+    ] {
+        let c = Account {
+            address: super::C,
+            code: c.clone(),
+            storage: vec![(1, 1)],
+            ..Account::default()
+        };
+        let limits = Limits { data: Some(410), block_env_cap: cap, ..Limits::default() };
+        v.push(edge(name, vec![acct(A, a.clone()), c], 200_300_000, limits));
+    }
+    v
+}
+
+/// A creation transaction whose constructor destroys the new contract to A: by itself, below the
+/// execution cap (the regular gas paid its start record) and above it by less than the body's
+/// history and the record (the reservoir paid part of the record), and through a DELEGATECALL of
+/// D, whose code destroys its caller's account.
+fn creation_destroyed_in_constructor() -> Vec<Scenario> {
+    let destroy = Asm::new().push_addr(A).op(op::SELFDESTRUCT).build();
+    let mut v = Vec::new();
+    // 22 bytes of init code: a body of 332 bytes, whose history is 29,216; the record is 3,520.
+    for (name, gas) in [
+        ("edge_create_tx_destroyed_in_constructor", 5_000_000u64),
+        ("edge_create_tx_destroyed_in_constructor_part_reservoir", 200_000_000 + 30_000),
+    ] {
+        let mut s = edge(name, vec![], gas, Limits::default());
+        s.create = true;
+        s.data = destroy.clone();
+        v.push(s);
+    }
+    let mut s = edge(
+        "edge_create_tx_destroyed_by_delegate",
+        vec![acct(D, destroy)],
+        5_000_000,
+        Limits::default(),
+    );
+    s.create = true;
+    s.data = Asm::new().call_all(op::DELEGATECALL, D, 0).op(op::POP).stop().build();
+    v.push(s);
+    v
+}
+
 pub fn all() -> Vec<Scenario> {
     let mut v = system_address();
     v.extend(destroyed_leaf());
@@ -378,5 +587,11 @@ pub fn all() -> Vec<Scenario> {
     v.extend(wide_limits());
     v.extend(keyless_offsets());
     v.extend(deposit_first_frame());
+    v.extend(gas_check_order());
+    v.extend(deposit_rules());
+    v.extend(system_absent_sender());
+    v.extend(after_destruction());
+    v.extend(creator_stopped_on_resume());
+    v.extend(creation_destroyed_in_constructor());
     v
 }

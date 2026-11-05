@@ -138,6 +138,12 @@ pub struct Lite {
     pub stops: u64,
     pub detention: DetentionState,
     pub tx_start_charge: u64,
+    /// The account the transaction's own frame starts on (its recipient, or its creation) when
+    /// its start charges a record.
+    pub tx_start_target: Option<Address>,
+    /// The transaction's own creation was destroyed in its constructor and its start record came
+    /// back with the leaf (the settlement gives it back as Satin's spill would).
+    pub tx_start_returned: bool,
     pub tx_start_bytes: u64,
     pub body_history: u64,
     pub body_bytes: u64,
@@ -249,6 +255,8 @@ impl Lite {
         self.stops = 0;
         self.detention.reset(self.cfg.cap, self.cfg.oracle_cap);
         self.tx_start_charge = 0;
+        self.tx_start_target = None;
+        self.tx_start_returned = false;
         self.tx_start_bytes = 0;
         self.last_caller_remaining = 0;
         self.reservoir_left = 0;

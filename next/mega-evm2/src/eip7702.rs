@@ -47,8 +47,9 @@ pub fn prepare(req: &mut TxRequest<'_, '_, MegaTypes, LazyTxEip7702>) -> Handler
     crate::tx::classify(req.host, caller, 4, TxKind::Call(tx.to))?;
     // The first frame's start records are predicted after the authorities are applied.
     req.host.ext_mut().begin_tx(caller, TX_BODY_SIZE + extra, true, false);
-    // Satin `admits_tx_body`: the body and one write record per entry, before any gas check.
-    crate::tx::admits_body(req.host, entries)?;
+    // Satin `admits_tx_body`: the body and one write record per entry, before any gas check and
+    // after the environment's rules.
+    crate::tx::defer_body_check(req.host, entries)?;
     eip7702::prepare_with_hooks::<MegaTypes, MegaHooks>(req)
 }
 

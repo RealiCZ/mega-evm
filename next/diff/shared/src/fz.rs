@@ -9,6 +9,8 @@
 //! `MegaAccessControl`, Oracle hints and reads, the precompile catalogue), mode 4 both. Modes 1
 //! and 2 stay byte-identical to the original generator's.
 //!
+//! Modes 5 to 10 ([`classes`]) each draw inputs of one class of edge inputs of single rules.
+//!
 //! A gate selects a mode with `MEGA_EVM2_FUZZ_MODE` (default 1) and the seeds with
 //! `MEGA_EVM2_FUZZ=first..=last` (default `1..=400`); a seed's scenario name ([`name`]) states
 //! both.
@@ -20,6 +22,8 @@ use super::{
     scenario,
 };
 use alloy_primitives::{Address, U256};
+
+mod classes;
 
 pub(crate) struct Rng(pub(crate) u64);
 
@@ -53,7 +57,18 @@ const EMPTY2: Address =
 
 /// The generator modes: `(mode, name prefix, seed digits)`. A seed's name is the prefix and the
 /// seed, zero-padded to the digits; the names are part of the reference outputs.
-pub const MODES: [(u8, &str, usize); 4] = [(1, "fz", 3), (2, "fh", 4), (3, "fq", 4), (4, "fqh", 4)];
+pub const MODES: [(u8, &str, usize); 10] = [
+    (1, "fz", 3),
+    (2, "fh", 4),
+    (3, "fq", 4),
+    (4, "fqh", 4),
+    (5, "fxs", 4),
+    (6, "fxc", 4),
+    (7, "fxp", 4),
+    (8, "fxl", 4),
+    (9, "fxd", 4),
+    (10, "fxr", 4),
+];
 
 /// The scenario name of seed `seed` of mode `mode`.
 pub fn name(mode: u8, seed: u64) -> String {
@@ -112,7 +127,7 @@ pub fn seed_scenario(mode: u8, seed: u64) -> Scenario {
         2 => composition(Gen { harsh: true, mechanisms: false }, seed),
         3 => composition(Gen { harsh: false, mechanisms: true }, seed),
         4 => composition(Gen { harsh: true, mechanisms: true }, seed),
-        _ => panic!("unknown fuzz mode {mode}"),
+        _ => classes::generate(mode, seed),
     };
     s.name = Box::leak(name(mode, seed).into_boxed_str());
     s.group = "fz";

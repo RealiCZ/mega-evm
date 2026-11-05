@@ -46,11 +46,11 @@ use super::{
 use alloy_primitives::{Address, keccak256};
 
 /// The block beneficiary of the refusal scenarios.
-const BEN: Address = B;
+pub(crate) const BEN: Address = B;
 /// The probe account, when the probe's frame is not the beneficiary's.
-const P: Address = D;
+pub(crate) const P: Address = D;
 /// Where a probe's SELFDESTRUCT sends the balance.
-const HEIR: Address = C;
+pub(crate) const HEIR: Address = C;
 
 const EXTCODECOPY: u8 = 0x3c;
 const EXTCODEHASH: u8 = 0x3f;
@@ -60,8 +60,8 @@ const BASEFEE: u8 = 0x48;
 const BLOBBASEFEE: u8 = 0x4a;
 
 /// Satin's gas figures the windows are placed on.
-const COLD_ACCOUNT: u64 = 2_900;
-const COLD_SLOT: u64 = 2_000;
+pub(crate) const COLD_ACCOUNT: u64 = 2_900;
+pub(crate) const COLD_SLOT: u64 = 2_000;
 const SELFDESTRUCT_COLD: u64 = 3_000;
 const WARM_READ: u64 = 100;
 const TRANSFER_VALUE: u64 = 11_300;
@@ -73,10 +73,10 @@ const MEMORY_32_WORDS: u64 = 3 * 32 + 32 * 32 / 512;
 /// call and the POP of its success word. MSTORE of the selector (PUSH32, PUSH0, MSTORE and one
 /// word of memory: 3 + 2 + 3 + 3), the call's operands (2 + 2 + 3 + 2 + 2 + 3 + 3), CALL's static
 /// gas and its cold target (100 + 2,900), POP (2). The interceptor answers on untouched gas.
-const OWN_PREFIX: u64 = 11 + 17 + 100 + COLD_ACCOUNT + 2;
+pub(crate) const OWN_PREFIX: u64 = 11 + 17 + 100 + COLD_ACCOUNT + 2;
 /// A gas limit no probe runs out of.
-const PLENTY: u64 = 200_000;
-const STACK_LIMIT: usize = 1_024;
+pub(crate) const PLENTY: u64 = 200_000;
+pub(crate) const STACK_LIMIT: usize = 1_024;
 
 fn bd(name: String, accounts: Vec<Account>, gas: u64, limits: Limits) -> Scenario {
     let mut s = scenario(Box::leak(name.into_boxed_str()), accounts, gas, limits);
@@ -84,20 +84,20 @@ fn bd(name: String, accounts: Vec<Account>, gas: u64, limits: Limits) -> Scenari
     s
 }
 
-fn delegation(target: Address) -> Vec<u8> {
+pub(crate) fn delegation(target: Address) -> Vec<u8> {
     let mut c = vec![0xef, 0x01, 0x00];
     c.extend_from_slice(target.as_slice());
     c
 }
 
 /// `A` switches its access off (`disableVolatileDataAccess()`, success word at slot 1).
-fn access_off(a: Asm) -> Asm {
+pub(crate) fn access_off(a: Asm) -> Asm {
     mem_call(a, op::CALL, ACCESS_CONTROL, 0, 100_000, &sel("disableVolatileDataAccess()"))
         .record_call(1)
 }
 
 /// `n` PUSH0s.
-fn fill(mut a: Asm, n: usize) -> Asm {
+pub(crate) fn fill(mut a: Asm, n: usize) -> Asm {
     for _ in 0..n {
         a = a.op(op::PUSH0);
     }
@@ -153,7 +153,7 @@ fn own_probe(name: String, rest: Asm, gas: u64) -> Scenario {
 }
 
 /// The Oracle, reading its slot 5 for the probes of its storage.
-fn oracle() -> Account {
+pub(crate) fn oracle() -> Account {
     Account {
         address: ORACLE,
         code: Asm::new().push(5).op(op::SLOAD).stop().build(),
@@ -169,27 +169,27 @@ fn window(at: u64) -> [(u64, &'static str); 3] {
 
 /// An instruction under test: its operands (pushed in order, the last on top), the instruction,
 /// and the charges before its load, cumulative from the start of the probe's frame.
-struct Probe {
-    name: &'static str,
-    operands: Vec<Operand>,
-    opcode: u8,
+pub(crate) struct Probe {
+    pub(crate) name: &'static str,
+    pub(crate) operands: Vec<Operand>,
+    pub(crate) opcode: u8,
     /// Named boundaries: `(name, gas the frame needs to pay everything up to and including it)`.
-    boundaries: Vec<(&'static str, u64)>,
+    pub(crate) boundaries: Vec<(&'static str, u64)>,
     /// The cold side, for a target whose warmth is set: `(warm list for A, extra boundaries)`.
-    variants: Vec<Variant>,
+    pub(crate) variants: Vec<Variant>,
 }
 
 /// A warmth variant of a probe: its name, the accounts `A` loads first, and the boundaries it adds.
-type Variant = (&'static str, Vec<Address>, Vec<(&'static str, u64)>);
+pub(crate) type Variant = (&'static str, Vec<Address>, Vec<(&'static str, u64)>);
 
 #[derive(Clone, Copy)]
-enum Operand {
+pub(crate) enum Operand {
     Word(u64),
     Addr(Address),
 }
 
 impl Operand {
-    fn push(self, a: Asm) -> Asm {
+    pub(crate) fn push(self, a: Asm) -> Asm {
         match self {
             Self::Word(v) => a.push(v),
             Self::Addr(x) => a.push_addr(x),
@@ -197,7 +197,7 @@ impl Operand {
     }
 
     /// The gas of its push: PUSH0 for zero, a PUSHn otherwise.
-    fn gas(self) -> u64 {
+    pub(crate) fn gas(self) -> u64 {
         match self {
             Self::Word(0) => 2,
             _ => 3,
@@ -206,7 +206,7 @@ impl Operand {
 }
 
 impl Probe {
-    fn code(&self, fill_to_full: bool) -> Vec<u8> {
+    pub(crate) fn code(&self, fill_to_full: bool) -> Vec<u8> {
         let mut a = Asm::new();
         if fill_to_full {
             a = fill(a, STACK_LIMIT - self.operands.len());
@@ -218,13 +218,13 @@ impl Probe {
     }
 
     /// The gas of the operands' pushes.
-    fn push_gas(&self) -> u64 {
+    pub(crate) fn push_gas(&self) -> u64 {
         self.operands.iter().map(|o| o.gas()).sum()
     }
 }
 
 /// The probes of the instructions `A` can reach through a plain frame of its own.
-fn probes() -> Vec<Probe> {
+pub(crate) fn probes() -> Vec<Probe> {
     use Operand::{Addr, Word};
     let mut v = Vec::new();
     // Account opcodes: the static gas, then the load. The beneficiary is warm, so the cold-access

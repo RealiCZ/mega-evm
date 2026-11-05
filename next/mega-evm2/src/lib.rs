@@ -687,6 +687,11 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         return stop_frame(gas, state, stop);
     }
     if eligible {
+        // The transaction's own creation, destroyed in its constructor: its start record came
+        // back with the leaf (the settlement gives it back as Satin's spill).
+        if absent_at_start && state.host().ext().tx_start_target == Some(me) {
+            state.host().ext_mut().tx_start_returned = true;
+        }
         gas.refill_reservoir(refill_state);
         refill_history(gas, state, refill_bytes);
         let ext = state.host().ext_mut();
@@ -709,6 +714,20 @@ pub fn mega_selfdestruct(cx: _) -> Result {
 
 // ---------------------------------------------------------------------------------------------
 // CALL / CREATE: start records, start charge, reservoir share, allowance, detention
+
+/// A limit a frame meets as it resumes from a child (a creator's nonce record, a caller held
+/// again by `hold_caller`): Satin counts it once the child's result merged into the frame, so the
+/// frame resumes on the detention ledger first, then stops.
+fn stop_on_resume(
+    gas: &mut Gas,
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    stop: (u8, u64),
+) -> Result {
+    if !off("resume_before_stop") {
+        detention::on_resume(gas, state)?;
+    }
+    stop_frame(gas, state, stop)
+}
 
 /// The frame-start hook's charge of the start's records, out of what the caller kept. A caller
 /// that cannot pay starts no frame: the forward is handed back first and the halt is recorded as
@@ -779,8 +798,17 @@ fn mega_call_impl(
                 }
             }
             let sender = state.host().ext().sender;
-            let records =
-                start.accounts().iter().filter(|(a, c)| !c && *a != sender).count() as u64;
+            // An account the transaction created and destroyed counts nothing more (Satin): a
+            // value moved to it makes no record, so its start charge holds none
+            // (`count_start` counts none for it either).
+            let ext = state.host().ext();
+            let records = start
+                .accounts()
+                .iter()
+                .filter(|(a, c)| {
+                    !c && *a != sender && (!ext.is_destroyed(a) || off("destroyed_start_charge"))
+                })
+                .count() as u64;
             let prices = state.host().ext().prices_history;
             let start_charge = if prices { records * WRITE_RECORD_SIZE * CPHB } else { 0 };
             if start_charge > 0 {
@@ -842,7 +870,7 @@ fn mega_call_impl(
             // Satin `hold_caller`: a failed child restored records a take-back had freed
             // while a hint it sent into that room stays: the caller resumes over a limit.
             if !success && let Some(stop) = crate::satin_ext::hold_caller(state.host().ext()) {
-                return stop_frame(gas, state, stop);
+                return stop_on_resume(gas, state, stop);
             }
             Ok(())
         },
@@ -897,7 +925,11 @@ fn mega_create_impl(
                 !msg.value.is_zero(),
             );
             let prices = state.host().ext().prices_history;
-            let start_records = (!dest_changed) as u64;
+            // A creation onto an account the transaction created and destroyed makes no record of
+            // it (Satin: the account counts nothing more).
+            let start_records = (!dest_changed &&
+                (!state.host().ext().is_destroyed(&msg.destination) ||
+                    off("destroyed_start_charge"))) as u64;
             let nonce_records =
                 (!creator_changed.get() && creator != state.host().ext().sender) as u64;
             let start_charge = if prices { start_records * WRITE_RECORD_SIZE * CPHB } else { 0 };
@@ -929,10 +961,10 @@ fn mega_create_impl(
             if let Some(stop) =
                 host.ext_mut().draw([records * WRITE_RECORD_SIZE as i64, records, 0])
             {
-                return stop_frame(gas, state, stop);
+                return stop_on_resume(gas, state, stop);
             }
             if !success && let Some(stop) = crate::satin_ext::hold_caller(state.host().ext()) {
-                return stop_frame(gas, state, stop);
+                return stop_on_resume(gas, state, stop);
             }
             Ok(())
         },

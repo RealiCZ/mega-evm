@@ -13,6 +13,8 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=common.sh
+source "$here/scripts/common.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 failed=0
@@ -25,8 +27,9 @@ fail() {
 corpus=$tmp/corpus
 mkdir -p "$tmp/members/oracles" "$tmp/members/raw/satin" "$tmp/members/raw/satin-block" "$tmp/bin" \
   "$corpus/real-blocks" "$corpus/reference"
-for f in satin-oracle.json oracles/fq.json oracles/fqbig.json oracles/fqh.json oracles/fqhbig.json \
-  oracles/big.json oracles/harsh.json; do
+members=(satin-oracle.json)
+for spec in "${FULL_FUZZ_BATCHES[@]}"; do members+=("oracles/${spec%%:*}.json"); done
+for f in "${members[@]}"; do
   echo '{}' > "$tmp/members/$f"
 done
 echo keep > "$corpus/real-blocks/keep.json"

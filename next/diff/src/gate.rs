@@ -362,6 +362,8 @@ pub fn error_kind(s: &str) -> String {
             ][..],
             "system_shape",
         ),
+        (&["GasFloorMoreThanGasLimit", "GasLimitBelowFloor"][..], "floor_gas"),
+        (&["CallerGasLimitMoreThanBlock", "GasLimitMoreThanBlock"][..], "tx_gas_above_block"),
         (&["SALT bucket lookup failed"][..], "salt_lookup"),
         (&["MissingChainId", "missing chain id"][..], "missing_chain_id"),
         (&["InvalidChainId", "invalid chain id"][..], "chain_id"),
@@ -474,4 +476,37 @@ pub fn frames_diff(a: &Value, b: &Value) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_kind;
+
+    /// A refusal both engines make is one kind, whichever text each writes for it: the texts
+    /// below are the two sides' own for the same transactions.
+    #[test]
+    fn test_one_refusal_is_one_kind_on_both_sides() {
+        for (reference, engine, kind) in [
+            (
+                "Transaction(OpTxError(Base(GasFloorMoreThanGasLimit { gas_floor: 28632, gas_limit: 23000 })))",
+                "GasLimitBelowFloor { required: 28632, got: 23000 }",
+                "floor_gas",
+            ),
+            (
+                "Transaction(OpTxError(Base(CallerGasLimitMoreThanBlock)))",
+                "GasLimitMoreThanBlock { gas_limit: 10000000001, block_gas_limit: 10000000000 }",
+                "tx_gas_above_block",
+            ),
+            (
+                "Transaction(OpTxError(Base(CallGasCostMoreThanGasLimit { initial_gas: 15852, gas_limit: 15000 })))",
+                "IntrinsicGasTooLow { required: 61876, got: 15000 }",
+                "intrinsic_gas",
+            ),
+        ] {
+            assert_eq!(error_kind(reference), kind, "{reference}");
+            assert_eq!(error_kind(engine), kind, "{engine}");
+        }
+        // The floor and the intrinsic gas stay apart.
+        assert_ne!(error_kind("GasLimitBelowFloor { required: 2, got: 1 }"), "intrinsic_gas");
+    }
 }

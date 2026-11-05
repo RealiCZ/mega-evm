@@ -43,6 +43,10 @@ pub struct MechanismState {
     pub keyless_frame: bool,
     /// A deposit whose body is over the data-size limit (a failed deposit).
     pub body_refused: bool,
+    /// The body check of a user transaction, waiting for the intrinsic-gas hook (Satin checks
+    /// the body after the environment's rules, which evm2 checks before the hook): its number of
+    /// authorization entries.
+    pub body_check: Option<u64>,
     /// The running opcode's load of the block beneficiary was refused
     /// (`MegaTypes::before_account_load`), waiting for the opcode's wrapper to revert the frame.
     pub load_refused: bool,

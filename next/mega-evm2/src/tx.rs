@@ -29,37 +29,17 @@ use op_evm2::{
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MegaHooks;
 
-/// Resets the ledger for a transaction and parks its own frame's start records.
+/// Resets the ledger for a user transaction and parks its own frame's start records (a deposit
+/// does both in `prepare_deposit_inner`, after its body check).
 fn begin(
     host: &mut Evm<'_, MegaTypes>,
     caller: alloy_primitives::Address,
     to: TxKind,
     input_len: usize,
     value: U256,
-    deposit: bool,
-    mint: u128,
 ) {
-    begin_as(host, caller, to, input_len, value, deposit, mint, false)
-}
-
-/// `begin`, for the protocol's own work too (a promoted system-address transaction is
-/// exempt, undetained, history-free and priced at the minimum bucket before anything is drawn).
-#[allow(clippy::too_many_arguments)]
-fn begin_as(
-    host: &mut Evm<'_, MegaTypes>,
-    caller: alloy_primitives::Address,
-    to: TxKind,
-    input_len: usize,
-    value: U256,
-    deposit: bool,
-    mint: u128,
-    system: bool,
-) {
-    host.ext_mut().begin_tx(caller, TX_BODY_SIZE + input_len as u64, !deposit, deposit);
-    if system {
-        host.ext_mut().set_system_originated();
-    }
-    first_frame_start(host, caller, to, value, mint);
+    host.ext_mut().begin_tx(caller, TX_BODY_SIZE + input_len as u64, true, false);
+    first_frame_start(host, caller, to, value, 0);
 }
 
 /// Parks the transaction's own frame's start records and charge as the journal stands now
@@ -109,11 +89,23 @@ pub(crate) fn first_frame_start(
     if ext.prices_history {
         ext.tx_start_charge = records as u64 * WRITE_RECORD_SIZE * CPHB;
         ext.tx_start_bytes = records as u64 * WRITE_RECORD_SIZE;
+        ext.tx_start_target = Some(target);
     }
 }
 
 /// Satin `admits_tx_body`: the body, with one write record per authorization entry, against the
 /// transaction's data-size limit, before any gas check (the protocol's own work is exempt).
+/// Checks the body where Satin does, after the environment's rules (the chain id, the gas limit
+/// against the cap and the block, the fees, the init code): the intrinsic-gas hook runs it
+/// ([`TxHandlerHooks::adjust_intrinsic_gas`]).
+pub(crate) fn defer_body_check(host: &mut Evm<'_, MegaTypes>, entries: u64) -> HandlerResult<()> {
+    if crate::off("body_after_env") {
+        return admits_body(host, entries);
+    }
+    host.ext_mut().mechanisms.body_check = Some(entries);
+    Ok(())
+}
+
 pub(crate) fn admits_body(host: &mut Evm<'_, MegaTypes>, entries: u64) -> HandlerResult<()> {
     let ext = host.ext();
     if !crate::off("body_records") &&
@@ -224,6 +216,24 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         initial_state_gas: &mut u64,
         _floor_gas: &mut u64,
     ) -> HandlerResult<()> {
+        if let Some(entries) = host.ext_mut().mechanisms.body_check.take() {
+            admits_body(host, entries)?;
+        }
+        // Satin checks revm's intrinsic gas (execution and EIP-8037 state gas, without the body's
+        // history), then the calldata floor, then the intrinsic gas with the history; evm2 checks
+        // the floor after the intrinsic gas, which carries the history from here on. A gas limit
+        // that covers the first and not the floor is refused for the floor, as in Satin: only the
+        // reason of a refusal changes, never whether the transaction is refused.
+        let gas_limit = _envelope.gas_limit();
+        if gas_limit >= _intrinsic.saturating_add(*initial_state_gas) &&
+            gas_limit < *_floor_gas &&
+            !crate::off("floor_before_history")
+        {
+            return Err(evm2::registry::HandlerError::GasLimitBelowFloor {
+                required: *_floor_gas,
+                got: gas_limit,
+            });
+        }
         *initial_state_gas += host.ext().body_history + host.ext().tx_start_charge;
         host.ext_mut().mechanisms.prepared = Some((*_intrinsic, *initial_state_gas, *_floor_gas));
         Ok(())
@@ -258,7 +268,9 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         // history (spill first); after a halt the regular gas the credit put back is burned.
         let mut gas = gas;
         let charge = host.ext().tx_start_charge;
-        if charge > 0 && !gas.result.stop.is_success() {
+        // The part of the start charge the regular gas paid: the reservoir pays the body's
+        // history first, then the start (Satin charges the start on the frame, a spill there).
+        let spilled = || {
             let reservoir0 = gas.gas_limit.saturating_sub(EXECUTION_CAP);
             let body = gas.initial_state_gas - charge;
             let from_reservoir = match host.ext().mechanisms.start_from_reservoir {
@@ -266,7 +278,10 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
                 Some(paid) => paid,
                 None => charge.min(reservoir0.saturating_sub(body)),
             };
-            let spilled = charge - from_reservoir;
+            (charge - from_reservoir, from_reservoir)
+        };
+        if charge > 0 && !gas.result.stop.is_success() {
+            let (spilled, from_reservoir) = spilled();
             let g = &mut gas.result.gas;
             g.erase_cost(spilled);
             g.set_reservoir(g.reservoir() + from_reservoir);
@@ -274,6 +289,18 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
             if gas.result.stop.is_halt() {
                 gas.result.gas.spend_all();
             }
+        } else if charge > 0 &&
+            host.ext().tx_start_returned &&
+            !crate::off("own_creation_record_spill")
+        {
+            // The transaction's own creation was destroyed in its constructor (by its own frame or
+            // one it delegated to) and its start record came back to the reservoir with the leaf;
+            // Satin's merges give a spilled charge back to the regular gas first.
+            let (spilled, _) = spilled();
+            let g = &mut gas.result.gas;
+            let moved = spilled.min(g.reservoir());
+            g.set_reservoir(g.reservoir() - moved);
+            g.erase_cost(moved);
         }
         host.ext_mut().reservoir_left = gas.result.gas.reservoir();
         settle_first_frame(host.ext_mut(), gas.result.stop.is_success());
@@ -354,8 +381,8 @@ fn prepare_legacy(
         let prepared = prepare_deposit_inner(req.host, &deposit, true)?;
         return Ok(LegacyPrepared::System(deposit, prepared));
     }
-    begin(req.host, caller, to, len, value, false, 0);
-    admits_body(req.host, 0)?;
+    begin(req.host, caller, to, len, value);
+    defer_body_check(req.host, 0)?;
     legacy::prepare_with_hooks::<MegaTypes, MegaHooks>(req).map(LegacyPrepared::User)
 }
 
@@ -374,8 +401,8 @@ fn prepare_2930(req: &mut TxRequest<'_, '_, MegaTypes, TxEip2930>) -> HandlerRes
     let tx = req.tx.inner();
     let (to, len, value) = (tx.to, body_extra(tx.input.len(), &tx.access_list), tx.value);
     classify(req.host, caller, 1, to)?;
-    begin(req.host, caller, to, len, value, false, 0);
-    admits_body(req.host, 0)?;
+    begin(req.host, caller, to, len, value);
+    defer_body_check(req.host, 0)?;
     eip2930::prepare_with_hooks::<MegaTypes, MegaHooks>(req)
 }
 
@@ -384,8 +411,8 @@ fn prepare_1559(req: &mut TxRequest<'_, '_, MegaTypes, TxEip1559>) -> HandlerRes
     let tx = req.tx.inner();
     let (to, len, value) = (tx.to, body_extra(tx.input.len(), &tx.access_list), tx.value);
     classify(req.host, caller, 2, to)?;
-    begin(req.host, caller, to, len, value, false, 0);
-    admits_body(req.host, 0)?;
+    begin(req.host, caller, to, len, value);
+    defer_body_check(req.host, 0)?;
     eip1559::prepare_with_hooks::<MegaTypes, MegaHooks>(req)
 }
 
@@ -403,8 +430,16 @@ fn prepare_deposit(
         // included as a failed deposit (op-revm). No frame is started, so its start ledger holds
         // nothing; its body is counted.
         Err(refusal) => {
+            // The failed deposit still bumps the caller's nonce: an absent caller is created, a
+            // unit of state growth outside any frame (Satin counts a failed deposit's created
+            // caller).
+            let created =
+                req.host.state_mut().account_info_untracked(&tx.from)?.is_none_or(|i| i.is_empty());
             req.host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, false, true);
             req.host.ext_mut().frames.clear();
+            if created && !crate::off("refused_deposit_caller") {
+                req.host.ext_mut().tx_growth += 1;
+            }
             Ok(PreparedDeposit::Failed(refusal))
         }
     }
@@ -415,23 +450,36 @@ fn prepare_deposit_inner(
     tx: &TxDeposit,
     system: bool,
 ) -> HandlerResult<PreparedDeposit> {
-    let created = host
-        .state_mut()
-        .account_info_untracked(&tx.from)
-        .ok()
-        .flatten()
-        .is_none_or(|i| i.is_empty());
-    begin_as(host, tx.from, tx.to, tx.input.len(), tx.value, true, tx.mint, system);
+    let info = host.state_mut().account_info_untracked(&tx.from).ok().flatten();
+    let created = info.as_ref().is_none_or(|i| i.is_empty());
+    // op-revm loads the caller with its code (no EIP-3607 check for a deposit): its code is read.
+    if info.is_some_and(|i| !i.is_empty_code_hash()) && !crate::off("deposit_caller_code") {
+        host.state_mut().code_untracked(&tx.from)?;
+    }
+    // A deposit whose body is over the data-size limit is a failed deposit (Satin), refused
+    // before anything of it runs: its first frame's start is not even predicted (no read of its
+    // recipient), and no start settles.
+    host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, false, true);
+    if system {
+        host.ext_mut().set_system_originated();
+    }
+    let body_refused = admits_body(host, 0).is_err();
+    if !body_refused || crate::off("body_refused_start") {
+        first_frame_start(host, tx.from, tx.to, tx.value, tx.mint);
+    }
     if created {
         let ext = host.ext_mut();
         if !crate::off("deposit_caller") {
             ext.tx_growth += 1;
         }
-        ext.frames[0].budget[2] = ext.frames[0].budget[2].saturating_sub(1);
+        // The created caller is counted outside the frames; a frame of the protocol's own work
+        // keeps unlimited budgets (Satin), so nothing is taken from them.
+        if !ext.exempt || crate::off("exempt_caller_budget") {
+            ext.frames[0].budget[2] = ext.frames[0].budget[2].saturating_sub(1);
+        }
     }
     host.ext_mut().deposit_created_caller = created;
-    // A deposit whose body is over the data-size limit is a failed deposit (Satin).
-    host.ext_mut().mechanisms.body_refused = admits_body(host, 0).is_err();
+    host.ext_mut().mechanisms.body_refused = body_refused;
     op_evm2::prepare_deposit_tx(host, tx)
 }
 
@@ -456,6 +504,10 @@ fn execute_deposit_inner(
         PreparedDeposit::Failed(_) => return failed_deposit(host, tx, InstrStop::OutOfGas),
     };
     if host.ext().mechanisms.body_refused {
+        // No frame starts, so its start ledger holds nothing.
+        if !crate::off("body_refused_start") {
+            host.ext_mut().frames.clear();
+        }
         return failed_deposit(host, tx, InstrStop::OutOfGas);
     }
     let created_state = if host.ext().deposit_created_caller && !crate::off("deposit_caller") {

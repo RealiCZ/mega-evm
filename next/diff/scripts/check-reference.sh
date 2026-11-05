@@ -28,7 +28,10 @@ unz() { mkdir -p "$(dirname "$2")"; zstd -q -d -f -o "$2" "$1"; }
 
 # Inputs: the recorded blocks. Expected outputs: the stored reference.
 unz "$here/data/synthetic/main.json.zst" "$work/expected/main.json"
-unz "$here/data/synthetic/fuzz-mode4.json.zst" "$work/expected/fuzz-mode4.json"
+for spec in "${SAMPLE_FUZZ_BATCHES[@]}"; do
+  name=${spec%%:*}
+  unz "$here/data/synthetic/fuzz-$name.json.zst" "$work/expected/fuzz-$name.json"
+done
 for src in real-blocks replay block; do
   (cd "$here/data/$src" && find . -type f) | while read -r f; do
     f=${f#./}
@@ -51,8 +54,11 @@ gen() {
 }
 
 gen synthetic MEGA_EVM2_ORACLE_OUT="$work/out/main.json" MEGA_EVM2_EXPECT="$MAIN_TOTAL"
-gen synthetic MEGA_EVM2_ORACLE_OUT="$work/out/fuzz-mode4.json" MEGA_EVM2_FUZZ_ONLY=1 \
-  MEGA_EVM2_FUZZ_MODE=4 MEGA_EVM2_FUZZ=1..=2000 MEGA_EVM2_EXPECT=2000
+for spec in "${SAMPLE_FUZZ_BATCHES[@]}"; do
+  IFS=: read -r name fmode range count <<< "$spec"
+  gen synthetic MEGA_EVM2_ORACLE_OUT="$work/out/fuzz-$name.json" MEGA_EVM2_FUZZ_ONLY=1 \
+    MEGA_EVM2_FUZZ_MODE="$fmode" MEGA_EVM2_FUZZ="$range" MEGA_EVM2_EXPECT="$count"
+done
 gen replay MEGA_EVM2_BLOCK_DIR="$work/blocks" MEGA_EVM2_REPLAY_OUT="$work/out/replay"
 gen block MEGA_EVM2_BLOCK_DIR="$work/blocks" MEGA_EVM2_BLOCK_OUT="$work/out/block"
 
