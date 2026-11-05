@@ -161,7 +161,7 @@ struct Started {
     signer_changed_before: bool,
 }
 
-#[instruction(EvmTypes = MegaTypes, dynamic_gas)]
+#[instruction(EvmTypes = MegaTypes, hooked)]
 pub fn mega_keyless(cx: _) -> Result {
     let is_call = cx.state.message().depth == 0 &&
         cx.state.message().call_target == KEYLESS &&

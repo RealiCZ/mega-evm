@@ -845,22 +845,22 @@ fn mega_call_impl(
     detention::on_resume(gas, state)
 }
 
-#[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+#[instruction(EvmTypes = MegaTypes, no_stack_preamble, hooked)]
 pub fn mega_call(cx: _) -> Result {
     mega_call_impl(stack, cx.gas, cx.state, MessageKind::Call)
 }
 
-#[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+#[instruction(EvmTypes = MegaTypes, no_stack_preamble, hooked)]
 pub fn mega_callcode(cx: _) -> Result {
     mega_call_impl(stack, cx.gas, cx.state, MessageKind::CallCode)
 }
 
-#[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+#[instruction(EvmTypes = MegaTypes, no_stack_preamble, hooked)]
 pub fn mega_delegatecall(cx: _) -> Result {
     mega_call_impl(stack, cx.gas, cx.state, MessageKind::DelegateCall)
 }
 
-#[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+#[instruction(EvmTypes = MegaTypes, no_stack_preamble, hooked)]
 pub fn mega_staticcall(cx: _) -> Result {
     mega_call_impl(stack, cx.gas, cx.state, MessageKind::StaticCall)
 }
@@ -934,12 +934,12 @@ fn mega_create_impl(
     detention::on_resume(gas, state)
 }
 
-#[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+#[instruction(EvmTypes = MegaTypes, no_stack_preamble, hooked)]
 pub fn mega_create(cx: _) -> Result {
     mega_create_impl(stack, cx.gas, cx.state, false)
 }
 
-#[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+#[instruction(EvmTypes = MegaTypes, no_stack_preamble, hooked)]
 pub fn mega_create2(cx: _) -> Result {
     mega_create_impl(stack, cx.gas, cx.state, true)
 }

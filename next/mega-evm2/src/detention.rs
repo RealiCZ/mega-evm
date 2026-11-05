@@ -27,7 +27,7 @@ use evm2::{
         Gas, GasTracker, InstrStop, InterpreterState, Message, Pc, Result, StackMut,
         instructions::{self, BudgetUse, ReserveDraw},
         op,
-        private::{Instruction, split_gas_state},
+        private::{Instruction, InstructionFlags, split_gas_state},
     },
     version::GasId,
 };
@@ -224,7 +224,7 @@ pub fn commit_read(ext: &mut Lite, gas: &mut GasTracker, cap: u64, forwarded: u6
 pub struct Volatile<I, const A: u8>(PhantomData<I>);
 
 impl<I: Instruction<MegaTypes>, const A: u8> Instruction<MegaTypes> for Volatile<I, A> {
-    const DYNAMIC_GAS: bool = true;
+    const FLAGS: InstructionFlags = I::FLAGS.union(InstructionFlags::DYNAMIC_GAS);
 
     fn execute(
         pc: &mut Pc,

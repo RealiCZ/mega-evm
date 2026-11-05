@@ -240,11 +240,13 @@ pub fn execute(
     } else if host.ext().prices_history {
         host.ext_mut().mechanisms.start_from_reservoir = Some(0);
     }
-    let Some(frame) =
-        prepare_initial_frame(host, caller, tx.nonce, to, &tx.input, tx.value, &mut tx_gas)?
-    else {
+    let frame =
+        prepare_initial_frame(host, caller, tx.nonce, to, &tx.input, tx.value, &mut tx_gas)?;
+    // A first frame the runtime gas phase cannot pay is settled here, as Satin opens no frame for
+    // it: an inspector sees none.
+    if frame.runtime_oog {
         return settle_oog(host);
-    };
+    }
     // The authorities' records and created accounts are the transaction's own: kept whatever the
     // first frame does; the first frame's budget is what they leave.
     {
@@ -280,7 +282,6 @@ pub fn execute(
             ext.detention.limit = Some(ext.detention.limit.map_or(cap, |l| l.min(cap)));
         }
     }
-    let result =
-        execute_initial_frame(host, Some(frame), &mut tx_gas, execution_gas_limit, reservoir)?;
+    let result = execute_initial_frame(host, frame, &mut tx_gas, execution_gas_limit, reservoir)?;
     settle(host, result)
 }
