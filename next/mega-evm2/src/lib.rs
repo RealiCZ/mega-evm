@@ -452,20 +452,33 @@ account_opcode!(mega_extcodesize, extcodesize);
 account_opcode!(mega_extcodehash, extcodehash);
 account_opcode!(mega_extcodecopy, extcodecopy);
 
-#[instruction(EvmTypes = MegaTypes, dynamic_gas)]
-pub fn mega_selfbalance(cx: _) -> Result<out> {
+/// SELFBALANCE: the frame's own account, loaded as revm loads it, before the push's stack check:
+/// a refused load comes before a full stack's overflow. evm2's body (and its account-load site) is
+/// not used, since its stack preamble checks the push before the load.
+#[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+pub fn mega_selfbalance(cx: _) -> Result {
     let a = cx.state.message().destination;
-    if a == cx.state.host().block().beneficiary && crate::satin_ext::refused_here(cx.state) {
+    let refused = |state: &mut InterpreterState<'_, '_, MegaTypes>| {
+        crate::satin_ext::refused_here(state) &&
+            refuses_load(state, &a, AccountLoadSite::SelfBalance)
+    };
+    let overflows = stack.len() >= evm2::constants::STACK_LIMIT;
+    if overflows && off("selfbalance_stack_order") {
+        return Err(InstrStop::StackOverflow);
+    }
+    if refused(cx.state) {
         return revert_with(
             cx.gas,
             cx.state,
             &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
         );
     }
-    *out = evm2::interpreter::Host::load_account(cx.state.host(), &a, false, false)
+    let balance = evm2::interpreter::Host::load_account(cx.state.host(), &a, false, false)
         .map_err(|e| cx.state.fail(e))?
         .balance;
+    stack.push(balance)?;
     beneficiary_read(cx.gas, cx.state, a);
+    Ok(())
 }
 
 /// SSTORE: evm2's body (its sentry, skip-cold check and state spill see the withheld gas through

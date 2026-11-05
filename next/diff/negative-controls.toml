@@ -105,6 +105,13 @@ scope = "sample"
 why = "A result for a message whose frame was never built (a precompile or interceptor answer, a refused start) is settled against its caller's detention entry; off, it pops the caller's entry as its own."
 
 [[control]]
+switch = "unbuilt_burn"
+gate = "main"
+scenario = "x5_default_caps_read_collision_sstore"
+scope = "sample"
+why = "A message that halts without a built frame (a precompile answer, a creation that collides after its start) burns its whole forward, which is not compute; off, the forward a collision burned stays in the transaction's compute, so a creation that collides after a volatile read leaves its caller over the detention limit and the caller reverts."
+
+[[control]]
 switch = "classify"
 gate = "main"
 scenario = "d1_top_frame_crosses"
@@ -195,6 +202,13 @@ gate = "main"
 scenario = "t05_call_follows_delegation_refused"
 scope = "sample"
 why = "In a frame with volatile access off, a call of an account whose EIP-7702 delegate is the beneficiary is refused at the delegate's load (after the target's load and the delegation guard); off, it proceeds."
+
+[[control]]
+switch = "selfbalance_stack_order"
+gate = "main"
+scenario = "u2_full_stack_selfbalance_refused"
+scope = "sample"
+why = "SELFBALANCE of the beneficiary's own account in a frame whose access is off is refused before the push's stack check, as revm loads before it pushes; off, a full stack halts with a stack overflow instead of the refusal."
 
 [[control]]
 switch = "forward"

@@ -6,8 +6,8 @@
 //! Oracle hints, the precompile catalogue), the gas limits above the EIP-8037 total cap
 //! (`cap`) and the edge inputs of single rules (`edge`: the live system address's envelopes, a
 //! destroyed leaf a transfer created, a transaction-level detained precompile, SALT capacities
-//! below the minimum bucket, limits at or above 2^63, deposits whose first frame cannot start).
-//! Group names are part of the reference outputs.
+//! below the minimum bucket, limits at or above 2^63, deposits whose first frame cannot start)
+//! and the refusal boundaries (`bd`). Group names are part of the reference outputs.
 
 #![allow(dead_code)]
 
@@ -265,7 +265,8 @@ pub struct Scenario {
     pub gas_limit: u64,
     pub limits: Limits,
     /// "p5", "p6", "p7" (regression), "q2" (interaction), "fz" (fuzz), "q8" (later mechanisms),
-    /// "cap" (gas limits above the EIP-8037 total cap) or "edge" (edge inputs of single rules).
+    /// "cap" (gas limits above the EIP-8037 total cap), "edge" (edge inputs of single rules) or
+    /// "bd" (refusal boundaries).
     pub group: &'static str,
     /// The transaction's sender.
     pub sender: Address,
@@ -356,8 +357,8 @@ pub fn three_writes() -> Vec<u8> {
     Asm::new().sstore(1, 1).sstore(2, 1).sstore(3, 1).stop().build()
 }
 
-/// Every scenario of the run: the base list, then the `p6`, `p7`, `q2`, `fz`, `q8`, `cap` and
-/// `edge` groups.
+/// Every scenario of the run: the base list, then the `p6`, `p7`, `q2`, `fz`, `q8`, `cap`, `edge`
+/// and `bd` groups.
 pub fn everything() -> Vec<Scenario> {
     let mut v = all();
     v.extend(p6::all());
@@ -367,6 +368,7 @@ pub fn everything() -> Vec<Scenario> {
     v.extend(q8::all());
     v.extend(cap::all());
     v.extend(edge::all());
+    v.extend(bd::all());
     // The L1Block predeploy and the SequencerRegistry exist on a real chain: give both a code
     // byte so their slots are read below the journal on both engines (an absent account's slots
     // are not read by evm2).
@@ -393,6 +395,8 @@ pub const L1_BLOCK: Address =
 pub const SEQUENCER_REGISTRY: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x06]);
 
+#[path = "boundary_scenarios.rs"]
+pub mod bd;
 #[path = "cap_scenarios.rs"]
 pub mod cap;
 #[path = "edge_scenarios.rs"]

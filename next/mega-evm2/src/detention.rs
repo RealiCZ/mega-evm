@@ -348,9 +348,9 @@ pub fn before_commit(
     // `OutOfFunds`, depth) has no side-ledger entry: the top entry is its caller's.
     let built = det_built(&ext.detention, msg) || crate::off("built_check");
     if answered || !built {
-        // A precompile (or interceptor) answer that halts burns its whole forward, stipend
-        // included: none of it is compute.
-        if stop.is_halt() {
+        // A precompile (or interceptor) answer, or a creation that fails before its frame (a
+        // collision), that halts burns its whole forward, stipend included: none of it is compute.
+        if stop.is_halt() && !crate::off("unbuilt_burn") {
             ext.detention.burned = ext.detention.burned.saturating_add(msg.gas_limit);
         }
         return;
