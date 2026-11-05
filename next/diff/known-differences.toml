@@ -18,10 +18,11 @@ reference = "StackOverflow"
 candidate = "StackUnderflow"
 signoff = "owner sign-off 2026-11-05"
 
-# The transactions whose runtime gas phase cannot pay a SALT-priced state charge (a value call's
-# new account, a creation's account): two scenarios and two recorded transactions of the sample
-# and the full corpus, and two deposits, whose path follows upstream evm2 here too (owner decision
-# of 2026-11-05).
+# evm2 #871's halted first frame: a transaction whose runtime gas phase cannot pay a SALT-priced
+# state charge (a value call's new account, a creation's account). The engine follows upstream
+# evm2 for this class (owner decision of 2026-11-05); the entries are the cases the gates
+# exercise, each signed off: two scenarios, two deposit scenarios and two recorded transactions
+# (`d4:8064067` is in the sample, `d4:6780842` only in the full corpus).
 
 [[difference]]
 scenario = "p6_salt_first_value_call_m8"

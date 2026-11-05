@@ -36,7 +36,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Every built-in result decided after the message's checkpoint reaches `before_commit`: a frame's, a precompile's, an account without code's, a call's out-of-funds answer and a creation's failure to create its account (a collision, an endowment the creator cannot pay); a result decided before the checkpoint (a call or creation too deep, a creation's balance or nonce check) does not (`out_of_funds_call_reaches_before_commit_on_both_paths`, `create_collision_reaches_before_commit_on_both_paths`).
   A message that halts without executing (`Evm::execute_halted_message`) reaches none of them, on either path (`halted_messages_run_no_hooks_on_either_path`).
 - **Why.** Satin's frame-start rules stop a frame before its code runs, take back a success answer, and answer the system contracts before evm2 moves value.
-  The engine's `StartHooks` implements them: `pre_frame_stop`, `tx_beneficiary`, `keyless`, `access_control`, `oracle_hints` and `precompile_hold` (`before`); `hold_start` (`started`); `hold` (`frame_built`); `classify`, `built_check`, `unbuilt_burn` and `deposit_loan_reset` (`before_commit`).
+  The engine's `StartHooks` implements them: `pre_frame_stop`, `tx_beneficiary`, `keyless`, `access_control`, `oracle_hints`, `precompile_hold` and `top_precompile_hold` (`before`); `hold_start` (`started`); `hold` (`frame_built`); `classify`, `built_check`, `unbuilt_burn` and `deposit_loan_reset` (`before_commit`).
   Detention counts the whole forward of a message that halts without a built frame as burned in `before_commit` (`unbuilt_burn`), so a creation that collides after a volatile read is burned, not compute (the `bd` collision scenarios).
   The type is static so that a family without hooks compiles no hook calls on the message path.
 - **Upstream.** None filed.
@@ -50,7 +50,8 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Tests price every site at a multiple of the schedule and make the hook fail (`instruction_state_charges_take_the_family_price`, `initial_frame_state_charges_take_the_family_price`, `accepted_authorization_state_charges_take_the_family_price`, `a_failed_price_aborts_the_message`, `empty_code_deposit_is_not_priced`).
   The seam is interpreter-only: the JIT builtins price state gas from the schedule directly.
 - **Why.** Satin's SALT price is the schedule entry times the bucket multiplier of that account or slot, stable for a location within a transaction (`MegaTypes::state_gas_price`, `reprice`).
-  Controls: `salt`, `deposit_caller`.
+  A bucket whose capacity is below the minimum fails the transaction through the hook's error (`salt_min_bucket`).
+  Controls: `salt`, `deposit_caller`, `salt_min_bucket`.
 - **Upstream.** None filed; the caller shape has to be agreed first, because every state-gas charge site calls it.
 - **Drop** when upstream can price a state charge by account and storage location.
 
@@ -98,8 +99,8 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **API.** `AccountHandle::original` returns the account info at the transaction boundary (`None` for an account absent then); loading bytecode does not move it.
   `AccountHandle::is_changed` reports whether existence or persisted account fields differ from it; storage-only writes do not count (`original_is_the_transaction_baseline`).
 - **Why.** Write records and SELFDESTRUCT's absent-at-start refund compare an account with its start-of-transaction info; a snapshot at first observation is exact only when that observation precedes every change.
-  The engine reads `original` in SELFDESTRUCT and in the write-record helper `ledger::changed`; it does not call `is_changed`.
-  Controls: `sd_existing_record`, `sd_records`.
+  The engine reads `original` in SELFDESTRUCT (the absent-at-start test and the beneficiary's record) and in the write-record helper `ledger::changed`; it does not call `is_changed`.
+  Controls: `sd_existing_record`, `sd_records`, `sd_absent_leaf`.
 - **Upstream.** Issue [#1024](https://github.com/alloy-rs/evm2/issues/1024) and PR [#1025](https://github.com/alloy-rs/evm2/pull/1025), open; the PR exposes `original` only.
 - **Drop** when `AccountHandle::original` is public.
 
@@ -135,6 +136,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   The seam is interpreter-only: the JIT builtins load accounts without consulting it.
 - **Why.** Satin refuses a read of the block beneficiary's account in a frame whose volatile access is off where the account is loaded, after the charges the instruction makes before that load.
   `MegaTypes::before_account_load` refuses the beneficiary's load at every site but a creation's, and the opcode's wrapper reverts the frame on the gas it had after its static gas (`settle_refusal`), so the engine does not restate evm2's charge order before a load.
+  The engine's SELFBALANCE keeps a body of its own, because revm refuses before the push's stack check and evm2's body checks the stack first (`selfbalance_stack_order`); evm2's `SelfBalance` site is not reached.
   Controls: `refuse_at_load`, `refusal_gas`, `delegate_refusal`; the `bd` scenarios run every refusable instruction through the gas windows around each charge before its load.
 - **Upstream.** None filed.
 - **Drop** when upstream lets a type family stop an instruction at each of its account loads, after the instruction's charges before the load and before its skip-cold check.

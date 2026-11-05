@@ -1,6 +1,6 @@
 # Gate sample and full-corpus layout
 
-`gate.sh sample` runs every gate on the files in this directory (about 2.6 MiB, zstd-compressed).
+`gate.sh sample` runs every gate on the files in this directory (about 2.4 MiB, zstd-compressed).
 `gate.sh full` runs them on the full corpus under `MEGA_EVM2_CORPUS_DIR`.
 `make-sample.sh` cuts this directory from the full corpus; `regen-reference.sh` calls it.
 

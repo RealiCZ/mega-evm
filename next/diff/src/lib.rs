@@ -1,4 +1,4 @@
-//! Shared scenarios and strict differential gates for the Satin engine.
+//! Strict differential gates for the Satin engine, and the engine side of the two-sided probe.
 //!
 //! The harness modules run the Satin engine (`mega-evm2`) on the shared scenarios and on recorded
 //! blocks and render every outcome in the JSON shape the reference harness (`next/reference`)
