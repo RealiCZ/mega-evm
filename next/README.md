@@ -9,7 +9,7 @@ The existing engine in `crates/` (REX1–REX6, built on revm) is frozen: it keep
 - `mega-evm2` — the Satin engine: Satin and later specs, resource metering, system contracts and block execution.
 - `op-evm2` — a vendored OP Stack execution layer for evm2, so the engine does not depend on `op-revm`; `op-evm2/VENDORED.md` records its upstream base and every local change.
 - `diff` — the shared scenarios and the strict differential gates that compare the engine with the Satin implementation under review; `diff/data/README.md` describes the in-repo sample and the full corpus.
-- `reference` — its own workspace (separate lockfile): generates the reference outputs from the Satin implementation under review, mega-evm `5e3f30ad` (reachable through `refs/pull/409/head`; move the pin to a tag or a merged commit before that branch disappears).
+- `reference` — its own workspace (separate lockfile): generates the reference outputs from the Satin implementation under review, mega-evm `5e3f30ad`, which stays reachable through `refs/pull/409/head` because the repository forbids force-pushes; the pin moves only when the reference itself changes, with `regen-reference.sh`.
 - `scripts` — CI setup: `fetch-evm2-fork.sh` checks the pinned evm2 fork out next to the repository, `install-zstd.sh`.
 - `evm2-fork.env`, [`evm2-fork.md`](evm2-fork.md) — the evm2 fork pin, and what each fork patch adds, why, and when it goes.
 
