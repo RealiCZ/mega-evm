@@ -105,13 +105,6 @@ scope = "sample"
 why = "A result for a message whose frame was never built (a precompile or interceptor answer, a refused start) is settled against its caller's detention entry; off, it pops the caller's entry as its own."
 
 [[control]]
-switch = "call_lend"
-gate = "main"
-scenario = "q42_det_unfunded_value_new_account"
-scope = "sample"
-why = "A CALL's new-account state charge that spills past the reservoir is funded from the frame's withheld gas first; off, it is charged to the spendable gas only."
-
-[[control]]
 switch = "classify"
 gate = "main"
 scenario = "d1_top_frame_crosses"
@@ -119,19 +112,26 @@ scope = "sample"
 why = "An out-of-gas whose failed charge the withheld gas could have paid is a detention crossing (limit exceeded, compute burned as Satin burns it), not a plain out-of-gas halt."
 
 [[control]]
+switch = "cold_account"
+gate = "main"
+scenario = "q47_det_balance_skip_cold_sees_total"
+scope = "sample"
+why = "An account load's skip-cold check (the account opcodes, the call family's target, SELFDESTRUCT's beneficiary) sees spendable plus withheld gas, through the fork's gas reserve (BudgetUse::ColdAccount); off, spendable gas only, so a cold load Satin makes is skipped and the frame halts instead of crossing."
+
+[[control]]
 switch = "create_lend"
 gate = "main"
 scenario = "q01_det_create_spill_salt2"
 scope = "sample"
-why = "A CREATE's state charge that spills past the reservoir is funded from the frame's withheld gas first; off, it is charged to the spendable gas only."
+why = "A CREATE's state charge that spills past the reservoir draws the frame's withheld gas first, through the fork's gas reserve (ReserveDraw::StateSpill(CreateState), keyless deployment included); off, it is charged to the spendable gas only."
 
 [[control]]
 switch = "delegate_no_debit"
 gate = "fuzz"
 mode = 4
-seed = 1788
+seed = 1101
 scope = "sample"
-why = "A CALL whose EIP-7702 delegate load cannot be paid halts with a failed-charge record, so the inspected run keeps the frame's gas; off, the plain and inspected runs of the engine disagree."
+why = "The guard on a CALL's EIP-7702 delegation charge and the delegate's skip-cold check see spendable plus withheld gas, through the fork's gas reserve (BudgetUse::DelegationGuard); off, spendable gas only, so the call halts without a debit where Satin loads the delegate and crosses."
 
 [[control]]
 switch = "deposit_caller"
@@ -142,18 +142,17 @@ why = "A deposit whose caller account does not exist yet counts the new account 
 
 [[control]]
 switch = "deposit_loan_back"
-gate = "fuzz"
-mode = 1
-seed = 1142
-scope = "full"
-why = "When a code deposit's data-size draw is refused, the withheld gas lent to its history charge goes back to the frame. Full corpus only: no sample case refuses such a draw."
+gate = "main"
+scenario = "q62_det_refused_deposit_alone"
+scope = "sample"
+why = "When a code deposit's data-size draw is refused, the withheld gas its state spill and its history drew (the deposit loan) goes back to the frame, since the refusal restores the frame's gas from before the deposit; off, it is lost (a creator's gas_left of 2,780,357 against the reference's 2,942,157)."
 
 [[control]]
 switch = "deposit_loan_reset"
 gate = "main"
 scenario = "q61_det_failed_deposit_then_refused_deposit"
 scope = "sample"
-why = "A code deposit's loan from withheld gas is cleared when the next deposit starts. A creation whose state spill ran out of gas never reaches admission, so its loan would otherwise be handed back to a later creation whose data-size draw is refused (a creator's gas_left of 2,542,160 against the reference's 403,211)."
+why = "A code deposit's loan from withheld gas ends with its creation's frame. A creation whose state spill ran out of gas never reaches admission, so its loan would otherwise be handed back to a later creation whose data-size draw is refused (a creator's gas_left of 2,542,160 against the reference's 403,211)."
 
 [[control]]
 switch = "deposit_oof"
@@ -167,37 +166,21 @@ switch = "deposit_site"
 gate = "main"
 scenario = "q03_det_create_ctor_write_salt8"
 scope = "sample"
-why = "The code-deposit hook checks the deposit's regular cost against spendable gas and funds the deposited code's history from withheld gas first; off, the stock deposit runs."
-
-[[control]]
-switch = "empty_deposit_price"
-gate = "fuzz"
-mode = 4
-seed = 515
-scope = "sample"
-why = "An empty code deposit reads no SALT bucket, as Satin prices it without one; off, its price is looked up, which reads the bucket. The price is paid per code byte, so with no byte it costs nothing either way and the reads are the only difference."
-
-[[control]]
-switch = "emulate_detained_calls"
-gate = "fuzz"
-mode = 4
-seed = 533
-scope = "sample"
-why = "CALL-family opcodes use the copied body whenever detention keeps figures, so a skipped cold load leaves a failed-charge record; off, the stock body runs and the engine's inspected run differs."
+why = "A code deposit's state spill draws the frame's withheld gas first, through the fork's gas reserve (ReserveDraw::StateSpill(CodeDepositState)), and so does the deposited code's history at admission; off, both are charged to the spendable gas only."
 
 [[control]]
 switch = "forward"
 gate = "main"
 scenario = "i9_limit_call_detained"
 scope = "sample"
-why = "A CALL's 63/64 forward in a frame with withheld gas is computed from spendable plus withheld gas, as Satin computes it; off, from spendable gas only."
+why = "A CALL's or CREATE's forward is computed from spendable plus withheld gas and draws the withheld gas first, through the fork's gas reserve (BudgetUse::Forward, ReserveDraw::Forward; keyless deployment included), as Satin computes it; off, from spendable gas only."
 
 [[control]]
 switch = "gas_total"
 gate = "main"
 scenario = "d3_gas_reads_full_gas"
 scope = "sample"
-why = "The GAS opcode reports spendable plus withheld gas; off, only the spendable part."
+why = "The GAS opcode reports spendable plus withheld gas, through the fork's gas reserve (BudgetUse::Gas); off, only the spendable part."
 
 [[control]]
 switch = "hand_back"
@@ -205,7 +188,7 @@ gate = "fuzz"
 mode = 4
 seed = 1995
 scope = "sample"
-why = "A caller that cannot pay a frame's start records starts no frame: the forward is handed back and the halt's failed-charge record rewritten, so its burn is exact; off, the forward is lost."
+why = "A caller that cannot pay a frame's start records starts no frame: the forward is handed back and the halt recorded as one that made no debit (GasTracker::record_no_debit_halt), so its burn is exact; off, the forward is lost."
 
 [[control]]
 switch = "hold"
@@ -268,7 +251,7 @@ switch = "lend"
 gate = "main"
 scenario = "d3_gas_reads_full_gas"
 scope = "sample"
-why = "A state charge that spills past the reservoir (SSTORE and the other state sites) is funded from the frame's withheld gas first; off, it is charged to the spendable gas only."
+why = "Every state charge that spills past the reservoir (SSTORE's set and the other state sites, through the fork's gas reserve) and every history charge draws the frame's withheld gas first; off, they are charged to the spendable gas only."
 
 [[control]]
 switch = "modexp_two_step"
@@ -279,12 +262,19 @@ scope = "full"
 why = "ModExp's price is probed in two steps (its 500 minimum, then the rest), as evm2 charges it; off, only the minimum is seen. Full corpus only: no sample case prices a ModExp call this way."
 
 [[control]]
+switch = "new_account_lend"
+gate = "main"
+scenario = "q42_det_unfunded_value_new_account"
+scope = "sample"
+why = "A new account's state charge that spills past the reservoir (a value CALL's target, SELFDESTRUCT's beneficiary, a keyless signer) draws the frame's withheld gas first, through the fork's gas reserve (ReserveDraw::StateSpill(NewAccountState)); off, it is charged to the spendable gas only. q18_det_selfdestruct_to_new_beneficiary differs too."
+
+[[control]]
 switch = "no_debit_record"
 gate = "fuzz"
 mode = 4
 seed = 533
 scope = "sample"
-why = "A halt that attempts no debit (the SSTORE sentry, a skipped cold load) records a failed charge no gas could pay, so the inspected run keeps the frame's gas; off, the engine's plain and inspected runs disagree."
+why = "A frame's burn reads what it had before its halt from the fork's halt record (GasTracker::halt_remaining), which keeps a halt that made no debit (a skipped cold load, the SSTORE sentry, a refused delegation) readable on the inspected path, where remaining is zeroed; off, only failed charges are read and the engine's plain and inspected runs disagree. Fuzz 4:1788 (the delegation's halt) differs too."
 
 [[control]]
 switch = "oracle_hints"
@@ -350,18 +340,18 @@ scope = "sample"
 why = "SELFDESTRUCT's own write records are rebuilt from what it moved (each account's change since before the opcode); off, they are counted from the move alone."
 
 [[control]]
-switch = "selfdestruct_lend"
-gate = "main"
-scenario = "q18_det_selfdestruct_to_new_beneficiary"
-scope = "sample"
-why = "SELFDESTRUCT to a new beneficiary funds the beneficiary's new-account state spill from withheld gas first; off, it is charged to the spendable gas only."
-
-[[control]]
 switch = "sload_copy"
 gate = "main"
-scenario = "q56_det_oracle_read_crosses"
+scenario = "p7_sload_skip_cold_sees_total_read"
 scope = "sample"
-why = "The skip-cold checks of SLOAD, the account opcodes and SELFDESTRUCT see spendable plus withheld gas; off, spendable gas only, so a cold load is skipped where Satin makes it."
+why = "A storage load's skip-cold check (SLOAD, SSTORE, and the Oracle's SLOAD in the engine) sees spendable plus withheld gas, through the fork's gas reserve (BudgetUse::ColdStorage); off, spendable gas only, so a cold load is skipped where Satin makes it. q56_det_oracle_read_crosses (the Oracle's read) differs too."
+
+[[control]]
+switch = "sstore_sentry"
+gate = "main"
+scenario = "p7_sstore_sentry_sees_total_read"
+scope = "sample"
+why = "SSTORE's EIP-2200 stipend sentry sees spendable plus withheld gas, through the fork's gas reserve (BudgetUse::SstoreSentry); off, spendable gas only, so a store Satin makes halts on the sentry."
 
 [[control]]
 switch = "system_nonce"

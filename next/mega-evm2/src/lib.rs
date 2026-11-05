@@ -5,8 +5,8 @@
 //! Where each mechanism lives:
 //! - type family, Satin `Version`, opcode table, SALT pricing (state-gas price hook): this file;
 //! - start ledger, pools, stops, history ledger, SALT multipliers: `ledger.rs`;
-//! - withheld-gas detention (side ledger), code-deposit and precompile sites: `detention.rs`;
-//! - CALL copy, whose skip-cold check sees the withheld gas too: `call_emulation.rs`;
+//! - withheld-gas detention (side ledger, read and drawn through the fork's gas reserve),
+//!   code-deposit and precompile sites: `detention.rs`;
 //! - interceptors (`MegaLimitControl`, `MegaAccessControl`, the Oracle's hints): `intercept.rs`;
 //! - transaction handlers (body history, first frame, settlement, deposits, L1 fee): `tx.rs`;
 //! - EIP-7702 transactions: `eip7702.rs`; keyless deployment: `keyless.rs`;
@@ -16,7 +16,6 @@
 #![allow(missing_docs)]
 
 pub mod block;
-pub mod call_emulation;
 pub mod detention;
 pub mod eip7702;
 pub mod intercept;
@@ -30,13 +29,12 @@ pub mod tx;
 pub use crate::ledger::*;
 
 use alloy_primitives::{Address, Bytes, U256};
-use call_emulation::call_with;
 use evm2::{
     Evm, EvmConfig, EvmConfigSelector, EvmFeatures, EvmTypes, EvmTypesHost, ExecutionConfig,
     MessageHooks, OpcodeConfig, SpecId, Version,
     interpreter::{
         Gas, GasTracker, InstrStop, InterpreterState, Message, MessageKind, Result, StackMut, Word,
-        instructions::{self as ins, create_with_state_charge},
+        instructions::{self as ins, BudgetUse, ReserveDraw, call_with, create_with},
         op,
     },
     precompiles::{PrecompileMap, Precompiles},
@@ -116,17 +114,23 @@ impl EvmTypesHost for MegaTypes {
         if host.ext().is_destroyed(&address) {
             return Ok(0);
         }
-        // Empty deposits must not read a SALT bucket.
-        if id == GasId::CodeDepositState &&
-            core::mem::take(&mut host.ext_mut().mechanisms.empty_deposit)
-        {
-            return Ok(0);
-        }
         let price = reprice(host, id, site);
         if matches!(id, GasId::CreateState | GasId::CodeDepositState) {
             host.ext_mut().created_prices.push((address, id, price));
         }
         Ok(price)
+    }
+
+    /// Detention's withheld gas: every budget decision of evm2's instructions sees it.
+    #[inline(always)]
+    fn gas_reserve(host: &mut Evm<'_, Self>, use_: BudgetUse) -> u64 {
+        detention::reserve_for(host.ext(), use_)
+    }
+
+    /// The forward and the state spills draw the withheld gas first.
+    #[inline(always)]
+    fn draw_gas_reserve(host: &mut Evm<'_, Self>, amount: u64, draw: ReserveDraw) -> u64 {
+        detention::draw_reserve(host.ext_mut(), amount, draw)
     }
 }
 
@@ -275,67 +279,49 @@ fn kzg100k(
 // ---------------------------------------------------------------------------------------------
 // Completed writes: SSTORE, LOG, SELFDESTRUCT
 
-/// SLOAD (copied body): the skip-cold check sees spendable + withheld gas.
-#[instruction(EvmTypes = MegaTypes, dynamic_gas)]
-pub fn mega_sload(cx: _, [key]: [Word]) -> Result<out> {
-    let additional_cold_cost = cx.state.gas_params().get(GasId::ColdStorageAdditionalCost);
-    let total = detention::available(cx.gas.tracker(), &cx.state.host().ext().detention);
-    let total = if off("sload_copy") { cx.gas.remaining() } else { total };
-    let skip_cold_load = cx.state.feature(EvmFeatures::EIP2929) && total < additional_cold_cost;
+/// SLOAD: the Oracle's slots are Satin's `oracle_sload`; every other slot is evm2's body, whose
+/// skip-cold check sees the withheld gas through the gas reserve.
+#[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+pub fn mega_sload(cx: _) -> Result {
     let destination = cx.state.message().destination;
-    if destination == ORACLE && crate::satin_ext::refused_here(cx.state) {
+    if destination != ORACLE {
+        return ins::sload::<MegaTypes>::execute(cx.pc, stack, cx.state);
+    }
+    // The key first, as the stack preamble of evm2's body and revm's take it: an empty stack halts
+    // before anything is refused.
+    let key = stack.pop()?;
+    if crate::satin_ext::refused_here(cx.state) {
         return revert_with(
             cx.gas,
             cx.state,
             &crate::satin_ext::disabled_revert(crate::satin_ext::access::ORACLE),
         );
     }
-    if destination == ORACLE {
-        // Satin `oracle_sload`: no load when the whole gas cannot pay the cold access; otherwise
-        // the slot is loaded through the journal, the service asked, the read priced cold
-        // whatever its warmth, and committed as a volatile read under the Oracle's cap.
-        if skip_cold_load {
-            detention::no_debit_halt(cx.gas);
-            return Err(InstrStop::OutOfGas);
-        }
-        let load = evm2::interpreter::Host::sload(cx.state.host(), &destination, key, false)
-            .map_err(|error| cx.state.fail(error))?;
-        let answer = cx.state.host().ext().cfg.oracle.get(key).copied();
-        cx.state.host().ext_mut().oracle_reads += 1;
-        cx.gas.spend(additional_cold_cost)?;
-        let cap = cx.state.host().ext().detention.oracle_cap;
-        detention::commit_read(cx.state.host().ext_mut(), cx.gas.tracker_mut(), cap, 0);
-        out.write(answer.unwrap_or(load.value));
-    } else {
-        let load = match evm2::interpreter::Host::sload(
-            cx.state.host(),
-            &destination,
-            key,
-            skip_cold_load,
-        ) {
-            Ok(load) => load,
-            Err(error) => {
-                if skip_cold_load {
-                    detention::no_debit_halt(cx.gas);
-                }
-                return Err(cx.state.fail(error));
-            }
-        };
-        if load.is_cold {
-            cx.gas.spend(additional_cold_cost)?;
-        }
-        out.write(load.value);
+    let (gas, state) = unsafe { evm2::interpreter::private::split_gas_state(cx.state) };
+    // Satin `oracle_sload`: no load when the whole gas cannot pay the cold access; otherwise
+    // the slot is loaded through the journal, the service asked, the read priced cold
+    // whatever its warmth, and committed as a volatile read under the Oracle's cap.
+    let additional_cold_cost = state.gas_params().get(GasId::ColdStorageAdditionalCost);
+    let budget = ins::gas_budget(gas, state, BudgetUse::ColdStorage);
+    if state.feature(EvmFeatures::EIP2929) && budget < additional_cold_cost {
+        return Err(InstrStop::OutOfGas);
     }
+    let load = evm2::interpreter::Host::sload(state.host(), &destination, &key, false)
+        .map_err(|error| state.fail(error))?;
+    let answer = state.host().ext().cfg.oracle.get(&key).copied();
+    state.host().ext_mut().oracle_reads += 1;
+    gas.spend(additional_cold_cost)?;
+    let cap = state.host().ext().detention.oracle_cap;
+    detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+    stack.push(answer.unwrap_or(load.value))
 }
 
-/// An account opcode's load (copied `env.rs::load_account`): the skip-cold check sees
-/// spendable + withheld gas; a load of the block beneficiary's account is a volatile read.
-fn account_load(
+/// A load of the block beneficiary's account in a frame whose volatile access is off: refused.
+fn refuse_beneficiary(
     gas: &mut Gas,
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     addr: Address,
-    load_code: bool,
-) -> Result<evm2::evm::AccountLoad> {
+) -> Result {
     if addr == state.host().block().beneficiary && crate::satin_ext::refused_here(state) {
         revert_with(
             gas,
@@ -343,27 +329,7 @@ fn account_load(
             &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
         )?;
     }
-    let cold_load_gas = state.gas_params().cold_account_additional_cost();
-    let total = detention::available(gas.tracker(), &state.host().ext().detention);
-    let total = if off("sload_copy") { gas.remaining() } else { total };
-    let account = match evm2::interpreter::Host::load_account(
-        state.host(),
-        &addr,
-        load_code,
-        total < cold_load_gas,
-    ) {
-        Ok(account) => account,
-        Err(error) => {
-            if total < cold_load_gas {
-                detention::no_debit_halt(gas);
-            }
-            return Err(state.fail(error));
-        }
-    };
-    if account.is_cold {
-        gas.spend(cold_load_gas)?;
-    }
-    Ok(account)
+    Ok(())
 }
 
 /// Commits a read of the beneficiary's account once the opcode completed (`read_volatile`).
@@ -374,12 +340,25 @@ fn beneficiary_read(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaType
     }
 }
 
-#[instruction(EvmTypes = MegaTypes, dynamic_gas)]
-pub fn mega_balance(cx: _, [addr]: [Word]) -> Result<out> {
-    let a = addr.to_address();
-    *out = account_load(cx.gas, cx.state, a, false)?.balance;
-    beneficiary_read(cx.gas, cx.state, a);
+/// An account opcode: evm2's body (its skip-cold check sees the withheld gas through the gas
+/// reserve), with the beneficiary's refusal before it and its volatile read after it.
+macro_rules! account_opcode {
+    ($name:ident, $base:ident) => {
+        #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
+        pub fn $name(cx: _) -> Result {
+            let a = stack.peek(0).ok_or(InstrStop::StackUnderflow)?.to_address();
+            refuse_beneficiary(cx.gas, cx.state, a)?;
+            ins::$base::<MegaTypes>::execute(cx.pc, stack, cx.state)?;
+            let (gas, state) = unsafe { evm2::interpreter::private::split_gas_state(cx.state) };
+            beneficiary_read(gas, state, a);
+            Ok(())
+        }
+    };
 }
+account_opcode!(mega_balance, balance);
+account_opcode!(mega_extcodesize, extcodesize);
+account_opcode!(mega_extcodehash, extcodehash);
+account_opcode!(mega_extcodecopy, extcodecopy);
 
 #[instruction(EvmTypes = MegaTypes, dynamic_gas)]
 pub fn mega_selfbalance(cx: _) -> Result<out> {
@@ -397,47 +376,18 @@ pub fn mega_selfbalance(cx: _) -> Result<out> {
     beneficiary_read(cx.gas, cx.state, a);
 }
 
-#[instruction(EvmTypes = MegaTypes, dynamic_gas)]
-pub fn mega_extcodesize(cx: _, [addr]: [Word]) -> Result<out> {
-    let a = addr.to_address();
-    out.write_u64(account_load(cx.gas, cx.state, a, true)?.code.len() as u64);
-    beneficiary_read(cx.gas, cx.state, a);
-}
-
-#[instruction(EvmTypes = MegaTypes, dynamic_gas)]
-pub fn mega_extcodehash(cx: _, [addr]: [Word]) -> Result<out> {
-    let a = addr.to_address();
-    let account = account_load(cx.gas, cx.state, a, false)?;
-    *out = if account.is_empty { Word::ZERO } else { evm2::utils::b256_to_word(account.code_hash) };
-    beneficiary_read(cx.gas, cx.state, a);
-}
-
-#[instruction(EvmTypes = MegaTypes, dynamic_gas)]
-pub fn mega_extcodecopy(cx: _, [addr, memory_offset, code_offset, len]: [Word]) -> Result {
-    let a = addr.to_address();
-    let len = len.to_usize()?;
-    cx.gas.spend(cx.state.gas_params().extcodecopy_cost(len))?;
-    let memory_offset = if len != 0 {
-        let memory_offset = memory_offset.to_usize()?;
-        cx.state.resize_memory(cx.gas, memory_offset, len)?;
-        memory_offset
-    } else {
-        0
-    };
-    let code = account_load(cx.gas, cx.state, a, true)?.code;
-    cx.state.memory().set_data(
-        memory_offset,
-        code_offset.to_usize_saturated(),
-        len,
-        code.original_byte_slice(),
-    );
-    beneficiary_read(cx.gas, cx.state, a);
-    Ok(())
-}
-
+/// SSTORE: evm2's body (its sentry, skip-cold check and state spill see the withheld gas through
+/// the gas reserve), then Satin's completed write once every charge is made.
 #[instruction(EvmTypes = MegaTypes, dynamic_gas)]
 pub fn mega_sstore(cx: _, [key, value]: [Word]) -> Result {
-    detention::sstore_body(cx.gas, cx.state, key, value)?;
+    let mut written = None;
+    ins::sstore_with(cx.gas, cx.state, key, value, |_, _, _, s| {
+        written = Some(*s);
+        Ok(())
+    })?;
+    if let Some(s) = written {
+        sstore_completed(cx.gas, cx.state, key, s)?;
+    }
     detention::after_sstore(cx.gas, cx.state)
 }
 
@@ -489,7 +439,8 @@ pub fn mega_log<const N: usize>(cx: _) -> Result {
     charge_history(gas, state, bytes, true)
 }
 
-/// SELFDESTRUCT: the base body (its beneficiary's new-account state spill funded W first), then
+/// SELFDESTRUCT: evm2's body (its skip-cold check sees the withheld gas, its beneficiary's
+/// new-account state spill draws it first, both through the gas reserve), then
 /// the completed-write rule: the destruction table of an account created in the transaction,
 /// the records of the account it clears and of its beneficiary, its
 /// transfer log and state growth, held to the limits, then the records' history.
@@ -510,7 +461,7 @@ pub fn mega_selfdestruct(cx: _) -> Result {
             &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
         );
     }
-    let (gas, state) = unsafe { evm2::interpreter::private::split_gas_state(cx.state) };
+    let state = &mut *cx.state;
     let looked: core::result::Result<_, evm2::DatabaseError> = (|| {
         let mut a = state.host().state_mut().account(&me)?;
         let eligible = a.is_created() && !a.is_destructed();
@@ -526,38 +477,6 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         looked.map_err(|e| state.fail(evm2::HostError::from(e)))?;
     let me_changed = changed(state.host(), me);
     let moves = !balance.is_zero() && target != me;
-    // The beneficiary is probed only where the opcode itself loads it: its skip-cold check sees
-    // spendable + withheld, so a load the whole gas cannot pay is not made (no read).
-    let cold = state.gas_params().selfdestruct_cold_cost();
-    let w = state.host().ext().detention.frames.last().map_or(0, |f| f.withheld);
-    let w = if off("sload_copy") { 0 } else { w };
-    if gas.remaining().saturating_add(w) >= cold {
-        let target_warm =
-            state.host().state_mut().account(&target).map(|a| a.is_warm()).unwrap_or(false);
-        let target_info = state.host().state_mut().account_info_untracked(&target).ok().flatten();
-        let topup = target_info.as_ref().is_none_or(|i| i.is_empty()) && !balance.is_zero();
-        let regular = state.gas_params().selfdestruct_cost(topup, !target_warm);
-        if !target_warm && gas.remaining() < cold {
-            // Only the whole gas pays the cold access: Satin loads the beneficiary and the charge
-            // then crosses; the stock body would skip the load.
-            let before = gas.remaining();
-            gas.tracker_mut().record_failed_charge(before, regular);
-            return Err(InstrStop::OutOfGas);
-        }
-        // W-first funding of the beneficiary's new-account state spill, only when the regular
-        // charges fit the spendable part (otherwise the base body's regular charge crosses).
-        if topup && gas.remaining() >= regular && !off("selfdestruct_lend") {
-            let price = <MegaTypes as EvmTypesHost>::state_gas_price(
-                state.host(),
-                GasId::NewAccountState,
-                StateGasSite::Account(target),
-            )
-            .map_err(|e| state.fail(e))?;
-            lend_state(gas, state, price);
-        }
-    } else {
-        detention::no_debit_halt(gas);
-    }
     let r = ins::selfdestruct::<MegaTypes>::execute(cx.pc, stack, cx.state);
     if r != Err(InstrStop::SelfDestruct) {
         return r;
@@ -675,8 +594,9 @@ pub fn mega_selfdestruct(cx: _) -> Result {
 // CALL / CREATE: start records, start charge, reservoir share, allowance, detention
 
 /// The frame-start hook's charge of the start's records, out of what the caller kept. A caller
-/// that cannot pay starts no frame: the forward is handed back first and the halt's record
-/// re-written to what the frame then has (Satin), so its burn is exact. Never a crossing.
+/// that cannot pay starts no frame: the forward is handed back first and the halt is recorded as
+/// one that made no debit, on what the frame then has (Satin), so its burn is exact. Never a
+/// crossing.
 fn start_charge_or_hand_back(
     gas: &mut Gas,
     state: &mut InterpreterState<'_, '_, MegaTypes>,
@@ -691,7 +611,7 @@ fn start_charge_or_hand_back(
                 let kept = gas.tracker().failed_charge().map_or(gas.remaining(), |(r, _)| r);
                 let with_forward = kept.saturating_add(forward);
                 gas.tracker_mut().set_remaining(with_forward);
-                gas.tracker_mut().record_failed_charge(with_forward, u64::MAX);
+                gas.tracker_mut().record_no_debit_halt(with_forward);
             }
             Err(stop)
         }
@@ -728,14 +648,14 @@ fn reaches_target_load(
     let have = (state.memory().len() as u64).div_ceil(32);
     let cost = |w: u64| (3 * w).saturating_add(w.saturating_mul(w) / 512);
     let memory = if need <= have { 0 } else { cost(need) - cost(have) };
-    // ... then the value-transfer charge, then the skip-cold check (`call_emulation.rs`'s order):
-    // a frame that cannot pay a cold access loads nothing.
+    // ... then the value-transfer charge, then the skip-cold check (evm2's CALL order, its budget
+    // read as the target's): a frame that cannot pay a cold access loads nothing.
     let value = if has_value && !stack.peek(2).is_some_and(|v| v.is_zero()) {
         state.gas_params().get(GasId::TransferValueCost)
     } else {
         0
     };
-    let total = detention::available(gas.tracker(), &state.host().ext().detention);
+    let total = ins::gas_budget(gas, state, BudgetUse::ColdAccount);
     let charge = memory.saturating_add(value);
     charge <= gas.remaining() &&
         total.saturating_sub(charge) >= state.gas_params().cold_account_additional_cost()
@@ -776,20 +696,12 @@ fn mega_call_impl(
             );
         }
     }
-    let requested = stack.peek(0).map(|v| u64::try_from(v).unwrap_or(u64::MAX)).unwrap_or(0);
     call_with(
         stack,
         gas,
         state,
         kind,
-        |gas, state, _, price| {
-            if !off("call_lend") {
-                lend_state(gas, state, price);
-            }
-            Ok(())
-        },
         |gas, state, msg| {
-            detention::repair_forward(gas, state, msg, requested);
             let mut start = StartRecords::default();
             let transfers = matches!(kind, MessageKind::Call | MessageKind::CallCode) &&
                 !msg.value.is_zero() &&
@@ -911,19 +823,12 @@ fn mega_create_impl(
 ) -> Result {
     let creator = state.message().destination;
     let creator_changed = core::cell::Cell::new(false);
-    create_with_state_charge(
+    create_with(
         stack,
         gas,
         state,
         is_create2,
-        |gas, state, _, price| {
-            if !off("create_lend") {
-                lend_state(gas, state, price);
-            }
-            Ok(())
-        },
         |gas, state, msg| {
-            detention::repair_forward(gas, state, msg, u64::MAX);
             let host = state.host();
             let dest_info =
                 host.state_mut().account_info_untracked(&msg.destination).ok().flatten();
@@ -1128,6 +1033,12 @@ impl MessageHooks<MegaTypes> for StartHooks {
         output: &mut Bytes,
         gas: &mut GasTracker,
     ) -> core::result::Result<(), evm2::ExecutionError> {
+        // A creation's deposit is over once its frame ends: a loan its admission did not settle
+        // (the deposit failed before admission ran) is dropped, so it never reaches the next
+        // deposit's refusal.
+        if !off("deposit_loan_reset") {
+            evm.ext_mut().deposit_loan.drop_unsettled();
+        }
         let answered = is_answered(evm, msg);
         detention::before_commit(evm, msg, answered, stop, output, gas);
         // A frame's return switches back on what it (or a frame below it) switched off.
@@ -1162,19 +1073,6 @@ impl MessageHooks<MegaTypes> for StartHooks {
         Ok(())
     }
 
-    fn before_code_deposit(
-        evm: &mut Evm<'_, MegaTypes>,
-        msg: &Message<MegaTypes>,
-        code: &Bytes,
-        gas: &mut Gas,
-    ) -> core::result::Result<(), evm2::HostError> {
-        evm.ext_mut().mechanisms.empty_deposit = code.is_empty() && !off("empty_deposit_price");
-        if off("deposit_site") {
-            return Ok(());
-        }
-        detention::before_code_deposit(evm, msg, code, gas)
-    }
-
     fn admit_code_deposit(
         evm: &mut Evm<'_, MegaTypes>,
         _msg: &Message<MegaTypes>,
@@ -1185,29 +1083,29 @@ impl MessageHooks<MegaTypes> for StartHooks {
         if keyless::refuses_empty_deposit(evm, _msg, code) {
             return Ok(Some((InstrStop::Revert, Bytes::new())));
         }
-        // The deposited code's history (W first), then its bytes drawn on the creation's budget.
+        // The deposited code's history (W first, as its state spill was), then its bytes drawn on
+        // the creation's budget.
         let len = code.len() as u64;
         if evm.ext().prices_history && len > 0 {
             let amount = len * CPHB;
             let spill = amount.saturating_sub(gas.reservoir());
-            let ext = evm.ext_mut();
-            if let Some(frame) = ext.detention.frames.last_mut() &&
-                !off("deposit_site")
-            {
-                let loan = spill.min(frame.withheld);
-                frame.withheld -= loan;
-                gas.erase_cost(loan);
-                ext.deposit_loan += loan;
+            if !off("deposit_site") {
+                let ext = evm.ext_mut();
+                let drawn = detention::draw_withheld(ext, spill);
+                gas.erase_cost(drawn);
+                ext.deposit_loan.lend(drawn);
             }
             if gas.spend_state(amount).is_err() {
-                evm.ext_mut().deposit_loan = 0;
+                // The refusal keeps the charged gas: what the deposit drew is spent.
+                evm.ext_mut().deposit_loan.settle();
                 return Ok(Some((InstrStop::OutOfGas, Bytes::new())));
             }
             evm.ext_mut().book_history(amount as i64, len as i64);
         }
-        let loan = core::mem::take(&mut evm.ext_mut().deposit_loan);
+        let loan = evm.ext_mut().deposit_loan.settle();
         if let Some(cross) = evm.ext_mut().draw([len as i64, 0, 0]) {
-            // The refusal restores the pre-hook snapshot: the withheld gas lent since goes back.
+            // The refusal restores the frame's gas from before the deposit, which does not hold
+            // what the deposit drew: the withheld gas takes it back.
             if !off("deposit_loan_back") &&
                 let Some(frame) = evm.ext_mut().detention.frames.last_mut()
             {

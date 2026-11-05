@@ -166,7 +166,7 @@ pub struct Lite {
     pub top_started: bool,
     pub oracle_reads: u64,
     pub tx_start_pending: Option<[i64; 3]>,
-    pub deposit_loan: u64,
+    pub deposit_loan: DepositLoan,
     /// The protocol's own work (a promoted system-address transaction, a pre-block system
     /// call): held to no per-transaction limit (still counted), not detained, no history, the
     /// minimum SALT bucket (Satin `AdditionalLimit::is_exempt`, `is_system_originated`).
@@ -174,6 +174,31 @@ pub struct Lite {
     /// The state of the volatile-access control, hint, authority and keyless mechanisms
     /// (`satin_ext.rs`).
     pub mechanisms: crate::satin_ext::MechanismState,
+}
+
+/// Withheld gas a code deposit drew (its state spill, its history), which an admission refusal
+/// gives back: the refusal restores the frame's gas from before the deposit, which does not hold
+/// the draw. Lent by the deposit's draws, settled by its admission, and dropped unsettled when the
+/// creation's frame ends (a deposit that failed before admission ran), so a loan never outlives
+/// its deposit.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DepositLoan(u64);
+
+impl DepositLoan {
+    /// Lends `drawn` more to the running deposit.
+    pub fn lend(&mut self, drawn: u64) {
+        self.0 += drawn;
+    }
+
+    /// The admission's settlement: what the deposit drew, the loan ended.
+    pub fn settle(&mut self) -> u64 {
+        core::mem::take(&mut self.0)
+    }
+
+    /// Ends a loan its admission did not settle.
+    pub fn drop_unsettled(&mut self) {
+        self.0 = 0;
+    }
 }
 
 pub fn limit_exceeded_output(kind: u8, limit: u64) -> Vec<u8> {
@@ -221,7 +246,7 @@ impl Lite {
         self.top_started = false;
         self.oracle_reads = 0;
         self.tx_start_pending = None;
-        self.deposit_loan = 0;
+        self.deposit_loan = DepositLoan::default();
         self.exempt = false;
         self.mechanisms.reset();
         self.body_bytes = if prices_history { body_bytes } else { 0 };
@@ -457,25 +482,20 @@ pub const fn reservoir_share(reservoir: u64) -> u64 {
     reservoir - (reservoir as u128 * 2 / 100) as u64
 }
 
-/// Funds a state spill from the consumer's withheld pool before the base debit (W first).
-pub fn lend_state(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>, cost: u64) {
-    if crate::off("lend") {
-        return;
-    }
-    let spill = cost.saturating_sub(gas.reservoir());
-    if let Some(frame) = state.host().ext_mut().detention.frames.last_mut() {
-        let loan = spill.min(frame.withheld);
-        frame.withheld -= loan;
-        gas.erase_cost(loan);
-    }
-}
-
-pub fn spend_state_withheld(
+/// Charges `cost` of history as state gas, its spill past the reservoir funded W first (the rule
+/// evm2's state charges follow through the gas reserve).
+pub fn spend_history_withheld(
     gas: &mut Gas,
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     cost: u64,
 ) -> Result {
-    lend_state(gas, state, cost);
+    if !crate::off("lend") {
+        let drawn = crate::detention::draw_withheld(
+            state.host().ext_mut(),
+            cost.saturating_sub(gas.reservoir()),
+        );
+        gas.erase_cost(drawn);
+    }
     gas.spend_state(cost)
 }
 
@@ -498,7 +518,7 @@ pub fn charge_history(
         amount -= paid;
     }
     if amount > 0 {
-        spend_state_withheld(gas, state, amount)?;
+        spend_history_withheld(gas, state, amount)?;
     }
     state.host().ext_mut().book_history(amount as i64, bytes as i64);
     Ok(())

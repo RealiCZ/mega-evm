@@ -230,10 +230,20 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     let signer_account_charged = info.is_empty();
     if signer_account_charged {
         let price = state_price(state, GasId::NewAccountState, StateGasSite::Account(signer))?;
-        spend_state_withheld(gas, state, price)?;
+        evm2::interpreter::instructions::spend_state_reserve_first(
+            gas,
+            state,
+            GasId::NewAccountState,
+            price,
+        )?;
     }
+    // What a `CREATE` opcode forwards from: the spendable and the withheld gas.
     let available = |gas: &Gas, state: &mut InterpreterState<'_, '_, MegaTypes>| {
-        detention::available(gas.tracker(), &state.host().ext().detention)
+        evm2::interpreter::instructions::gas_budget(
+            gas,
+            state,
+            evm2::interpreter::instructions::BudgetUse::Forward,
+        )
     };
     let forward = override_gas.min(available(gas, state));
     if forward < tx.gas_limit {
@@ -264,7 +274,12 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         0
     };
     if create_price > 0 {
-        spend_state_withheld(gas, state, create_price)?;
+        evm2::interpreter::instructions::spend_state_reserve_first(
+            gas,
+            state,
+            GasId::CreateState,
+            create_price,
+        )?;
     }
     let deploy_changed = changed(state.host(), deploy);
     let signer_changed_before = changed(state.host(), signer);
@@ -281,14 +296,12 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         refuse!(err("GasLimitTooLow(uint64,uint64)", &[w(tx.gas_limit), w(forward)]));
     }
     // The forward draws the withheld part first, as a `CREATE` opcode's does.
-    {
-        let ext = state.host().ext_mut();
-        let drawn = ext.detention.frames.last().map_or(0, |f| f.withheld).min(forward);
-        if let Some(f) = ext.detention.frames.last_mut() {
-            f.withheld -= drawn;
-        }
-        gas.spend(forward - drawn)?;
-    }
+    evm2::interpreter::instructions::spend_reserve_first(
+        gas,
+        state,
+        forward,
+        evm2::interpreter::instructions::ReserveDraw::Forward,
+    )?;
     let r = gas.reservoir();
     let share = reservoir_share(r);
     gas.set_reservoir(r - share);

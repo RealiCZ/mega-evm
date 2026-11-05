@@ -43,8 +43,6 @@ pub struct MechanismState {
     pub keyless_frame: bool,
     /// A deposit whose body is over the data-size limit (a failed deposit).
     pub body_refused: bool,
-    /// The creation returning now deposits empty code (its deposit is priced at nothing).
-    pub empty_deposit: bool,
 }
 
 impl MechanismState {

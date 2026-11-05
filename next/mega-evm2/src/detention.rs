@@ -1,5 +1,7 @@
-//! Gas detention using consumer-owned withheld gas, the thin evm2 fork's failed-charge records,
-//! static message hooks and CALL/CREATE hooks. No evm2 gas-core split.
+//! Gas detention using consumer-owned withheld gas, held outside evm2's gas core and seen through
+//! the thin evm2 fork's gas reserve: evm2's budget decisions read it (`reserve_for`), its forward
+//! and state spills draw it first (`draw_reserve`); with the fork's halt records, static message
+//! hooks and CALL/CREATE hooks.
 //!
 //! The rule is Satin's (`access/detention.rs`):
 //!
@@ -22,10 +24,12 @@ use core::marker::PhantomData;
 use evm2::{
     Evm, OpcodeConfig,
     interpreter::{
-        Gas, GasTracker, InstrStop, InterpreterState, Message, Pc, Result, StackMut, instructions,
+        Gas, GasTracker, InstrStop, InterpreterState, Message, Pc, Result, StackMut,
+        instructions::{self, BudgetUse, ReserveDraw},
         op,
         private::{Instruction, split_gas_state},
     },
+    version::GasId,
 };
 
 /// Detention's per-transaction state (Satin `access/detention.rs`, `FrameFigures`).
@@ -143,6 +147,56 @@ impl DetentionState {
     }
 }
 
+/// The withheld gas a budget decision of evm2's instructions sees (the fork's gas reserve): the
+/// running frame's. Each decision has its negative control.
+#[inline(always)]
+pub fn reserve_for(ext: &Lite, use_: BudgetUse) -> u64 {
+    let disabled = match use_ {
+        BudgetUse::Gas => crate::off("gas_total"),
+        BudgetUse::ColdAccount => crate::off("cold_account"),
+        BudgetUse::ColdStorage => crate::off("sload_copy"),
+        BudgetUse::SstoreSentry => crate::off("sstore_sentry"),
+        BudgetUse::DelegationGuard => crate::off("delegate_no_debit"),
+        BudgetUse::Forward => crate::off("forward"),
+    };
+    if disabled { 0 } else { ext.detention.frames.last().map_or(0, |f| f.withheld) }
+}
+
+/// A deduction evm2 makes that is not the frame's own execution draws the withheld gas first (the
+/// fork's gas reserve): the forward to a child and every state spill. Each draw has its negative
+/// control; a code deposit's draw is lent to its admission (`DepositLoan`).
+#[inline(always)]
+pub fn draw_reserve(ext: &mut Lite, amount: u64, draw: ReserveDraw) -> u64 {
+    let disabled = match draw {
+        ReserveDraw::Forward => crate::off("forward"),
+        ReserveDraw::StateSpill(GasId::CodeDepositState) => crate::off("deposit_site"),
+        ReserveDraw::StateSpill(GasId::NewAccountState) => {
+            crate::off("lend") || crate::off("new_account_lend")
+        }
+        ReserveDraw::StateSpill(GasId::CreateState) => {
+            crate::off("lend") || crate::off("create_lend")
+        }
+        ReserveDraw::StateSpill(_) => crate::off("lend"),
+    };
+    if disabled {
+        return 0;
+    }
+    let drawn = draw_withheld(ext, amount);
+    if draw == ReserveDraw::StateSpill(GasId::CodeDepositState) {
+        ext.deposit_loan.lend(drawn);
+    }
+    drawn
+}
+
+/// Takes up to `amount` of the running frame's withheld gas; returns what it took.
+#[inline(always)]
+pub fn draw_withheld(ext: &mut Lite, amount: u64) -> u64 {
+    let Some(frame) = ext.detention.frames.last_mut() else { return 0 };
+    let drawn = amount.min(frame.withheld);
+    frame.withheld -= drawn;
+    drawn
+}
+
 pub fn detains(ext: &Lite) -> bool {
     ext.detention.cap != u64::MAX || ext.detention.oracle_cap != u64::MAX
 }
@@ -212,7 +266,6 @@ impl<I: Instruction<MegaTypes>, const A: u8> Instruction<MegaTypes> for Volatile
 }
 
 pub const fn wrap_table(mut c: OpcodeConfig<MegaTypes>) -> OpcodeConfig<MegaTypes> {
-    c.set_instruction::<total_gas>(op::GAS, c.static_gas(op::GAS));
     c.set_instruction::<Volatile<instructions::coinbase<MegaTypes>, { crate::satin_ext::access::COINBASE }>>(op::COINBASE, c.static_gas(op::COINBASE));
     c.set_instruction::<Volatile<instructions::difficulty<MegaTypes>, { crate::satin_ext::access::PREV_RANDAO }>>(op::DIFFICULTY, c.static_gas(op::DIFFICULTY));
     c.set_instruction::<Volatile<instructions::gaslimit<MegaTypes>, { crate::satin_ext::access::GAS_LIMIT }>>(op::GASLIMIT, c.static_gas(op::GASLIMIT));
@@ -319,10 +372,14 @@ pub fn before_commit(
         }
         return;
     }
-    let left = gas
-        .failed_charge()
-        .map_or(gas.remaining(), |(remaining, _)| remaining)
-        .saturating_add(withheld);
+    // What the frame had before its halt: the failed charge's record, or that of a halt that made
+    // no debit (which the inspected path keeps, as it zeroes `remaining`).
+    let had = if crate::off("no_debit_record") {
+        gas.failed_charge().map(|(remaining, _)| remaining)
+    } else {
+        gas.halt_remaining()
+    };
+    let left = had.unwrap_or(gas.remaining()).saturating_add(withheld);
     if crate::debug() {
         eprintln!(
             "BURN depth={} stop={:?} failed={:?} rem={} withheld={} spilled={} limit={} burned_before={}",
@@ -339,153 +396,13 @@ pub fn before_commit(
     det.burned = det.burned.saturating_add(left).saturating_add(gas.state_gas_spilled());
 }
 
-#[evm2_macros::instruction(EvmTypes = MegaTypes, dynamic_gas)]
-pub fn total_gas(cx: _) -> out {
-    let total = available(cx.gas.tracker(), &cx.state.host().ext().detention);
-    *out = evm2::interpreter::Word::from(if crate::off("gas_total") {
-        cx.gas.remaining()
-    } else {
-        total
-    });
-}
-
-/// Recomputes the forward from spendable + withheld and debits withheld first.
-pub fn repair_forward(
-    gas: &mut Gas,
-    state: &mut InterpreterState<'_, '_, MegaTypes>,
-    msg: &mut Message<MegaTypes>,
-    requested: u64,
-) {
-    let stipend = if !msg.value.is_zero() &&
-        matches!(
-            msg.kind,
-            evm2::interpreter::MessageKind::Call | evm2::interpreter::MessageKind::CallCode
-        ) {
-        2300
-    } else {
-        0
-    };
-    let naive = msg.gas_limit.saturating_sub(stipend);
-    let before = gas.remaining() + naive;
-    let w = state.host().ext().detention.frames.last().map_or(0, |f| f.withheld);
-    if w == 0 || crate::off("forward") {
-        return;
-    }
-    let total = before + w;
-    let forward = state.gas_params().call_stipend_reduction(total).min(requested);
-    let drawn = forward.min(w);
-    state.host().ext_mut().detention.frames.last_mut().unwrap().withheld -= drawn;
-    gas.set_remaining(before - (forward - drawn));
-    msg.gas_limit = forward + stipend;
-}
-
-/// SSTORE's sentry/load checks see the full budget; regular charges still draw spendable gas.
-pub fn sstore_body(
-    gas: &mut Gas,
-    state: &mut InterpreterState<'_, '_, MegaTypes>,
-    key: &evm2::interpreter::Word,
-    value: &evm2::interpreter::Word,
-) -> Result {
-    use evm2::{EvmFeatures, interpreter::Host, version::GasId};
-    if state.is_static() {
-        return Err(InstrStop::StateChangeDuringStaticCall);
-    }
-    let eip2200 = state.feature(EvmFeatures::EIP2200);
-    if eip2200 &&
-        available(gas.tracker(), &state.host().ext().detention) <=
-            state.gas_params().get(GasId::CallStipend)
-    {
-        no_debit_halt(gas);
-        return Err(InstrStop::ReentrancySentryOOG);
-    }
-    gas.spend(state.gas_params().get(GasId::SstoreStatic))?;
-    let cold = state.gas_params().get(GasId::ColdStorageAdditionalCost);
-    let skip = state.feature(EvmFeatures::EIP2929) &&
-        available(gas.tracker(), &state.host().ext().detention) < cold;
-    let dest = state.message().destination;
-    let load = state.host().sstore(&dest, key, value, skip).map_err(|e| state.fail(e))?;
-    gas.spend(state.gas_params().sstore_dynamic_gas(eip2200, &load))?;
-    if state.feature(EvmFeatures::EIP8037) {
-        // The slot's SALT price, captured for the 0 -> x -> 0 refill too.
-        let site = evm2::version::StateGasSite::Storage(dest, *key);
-        if state.gas_params().sstore_state_gas(&load) != 0 {
-            let price = <MegaTypes as evm2::EvmTypesHost>::state_gas_price(
-                state.host(),
-                GasId::SstoreSetState,
-                site,
-            )
-            .map_err(|e| state.fail(e))?;
-            spend_state_withheld(gas, state, price)?;
-        }
-        if state.gas_params().sstore_state_gas_refill(&load) != 0 {
-            let price = <MegaTypes as evm2::EvmTypesHost>::state_gas_price(
-                state.host(),
-                GasId::SstoreSetState,
-                site,
-            )
-            .map_err(|e| state.fail(e))?;
-            gas.refill_reservoir(price);
-        }
-    }
-    gas.record_refund(state.gas_params().sstore_refund(eip2200, &load));
-    crate::sstore_completed(gas, state, key, load)
-}
-
 // ---------------------------------------------------------------------------------------------
 // Code deposits and precompiles
-
-/// The code deposit (code-deposit pre-charge hook, before evm2's deposit precheck and charges):
-/// the hash
-/// charge is a regular charge on the spendable part (a crossing if S < cost <= S + W, recorded
-/// as a failed charge so `before_commit` classifies it); the deposit's state spill draws W first.
-pub fn before_code_deposit(
-    evm: &mut Evm<'_, MegaTypes>,
-    msg: &Message<MegaTypes>,
-    code: &Bytes,
-    gas: &mut Gas,
-) -> core::result::Result<(), evm2::HostError> {
-    // A loan taken here is settled by `admit_code_deposit`; one whose creation failed before
-    // admission ran (the state spill ran out of gas) would otherwise stay and be handed to the
-    // next creation's refusal, so the previous creation's loan never outlives this point.
-    if !crate::off("deposit_loan_reset") {
-        evm.ext_mut().deposit_loan = 0;
-    }
-    if !detains(evm.ext()) || evm.ext().detention.frames.last().is_none_or(|f| f.withheld == 0) {
-        return Ok(());
-    }
-    let params = &evm.version().gas_params;
-    let regular = (code.len() as u64)
-        .saturating_mul(params.get(evm2::version::GasId::CodeDepositCost))
-        .saturating_add(params.keccak256_word_cost(code.len()));
-    if gas.remaining() < regular {
-        let before = gas.remaining();
-        gas.tracker_mut().record_failed_charge(before, regular);
-        return Err(InstrStop::OutOfGas.into());
-    }
-    // Empty code prices nothing and reads no bucket (Satin prices no empty deposit).
-    let price = if code.is_empty() && !crate::off("empty_deposit_price") {
-        0
-    } else {
-        <MegaTypes as evm2::EvmTypesHost>::state_gas_price(
-            evm,
-            evm2::version::GasId::CodeDepositState,
-            evm2::version::StateGasSite::Account(msg.destination),
-        )
-        .map_err(|_| evm2::HostError::from(InstrStop::OutOfGas))?
-    };
-    let state_cost = price.saturating_mul(code.len() as u64);
-    let spill = state_cost.saturating_sub(gas.reservoir());
-    let ext = evm.ext_mut();
-    if let Some(frame) = ext.detention.frames.last_mut() {
-        let loan = spill.min(frame.withheld);
-        frame.withheld -= loan;
-        gas.erase_cost(loan);
-        // An admission refusal restores evm2's pre-hook snapshot of the frame's gas, which does
-        // not hold this loan: the side ledger takes it back then (`admit_code_deposit`).
-        ext.deposit_loan = loan;
-    }
-    Ok(())
-}
+//
+// A code deposit's regular charge is the hash of its code alone (Satin's schedule has no per-byte
+// deposit cost), which evm2 debits once and records when it fails, so `before_commit` classifies
+// it as any other charge; its state spill draws the withheld gas through the gas reserve, and the
+// admission settles that draw (`DepositLoan`).
 
 fn det_built(det: &DetentionState, msg: &Message<MegaTypes>) -> bool {
     det.frames.len() == msg.depth as usize + 1
@@ -570,19 +487,6 @@ pub fn hold_precompile(
     })
 }
 
-/// A halt that attempts no debit (the SSTORE sentry, a skipped cold load) leaves no failed-charge
-/// record, and
-/// evm2's inspected path zeroes `remaining` on every out-of-gas-class halt (`inspect_step_end`),
-/// so what the frame had is lost there. Record it as a failed charge no gas could pay: never a
-/// crossing, and the burn reads it on both paths.
-pub fn no_debit_halt(gas: &mut Gas) {
-    if crate::off("no_debit_record") {
-        return;
-    }
-    let before = gas.remaining();
-    gas.tracker_mut().record_failed_charge(before, u64::MAX);
-}
-
 /// The full price catalogue. An entry with an input-only quote (`precompile_price`) is priced by
 /// it; every other entry of the Satin set (ModExp on the Osaka schedule, the BN254 pairing and the
 /// BLS12-381 MSMs and pairing behind op-evm2's Karst size caps, BLAKE2F, the other BLS12-381
@@ -612,4 +516,17 @@ pub fn precompile_price_of(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes
         return Some(first + probe.failed_charge().map_or(0, |(_, cost)| cost));
     }
     Some(first)
+}
+
+#[cfg(test)]
+mod tests {
+    use evm2::version::GasId;
+
+    /// The engine runs no deposit precheck of its own: Satin checks the hash and the per-byte
+    /// deposit cost as one regular charge against the spendable gas, which is evm2's hash debit
+    /// only while the per-byte cost is zero.
+    #[test]
+    fn test_code_deposit_regular_charge_is_the_hash_alone() {
+        assert_eq!(crate::satin_version().gas_params.get(GasId::CodeDepositCost), 0);
+    }
 }
