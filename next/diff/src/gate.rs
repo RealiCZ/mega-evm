@@ -314,6 +314,7 @@ pub fn error_kind(s: &str) -> String {
             "system_shape",
         ),
         (&["SALT bucket lookup failed"][..], "salt_lookup"),
+        (&["MissingChainId", "missing chain id"][..], "missing_chain_id"),
         (&["InvalidChainId", "invalid chain id"][..], "chain_id"),
         (&["NonceOverflow", "nonce overflow"][..], "nonce_overflow"),
     ] {

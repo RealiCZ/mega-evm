@@ -512,11 +512,15 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         let mut a = state.host().state_mut().account(&me)?;
         let eligible = a.is_created() && !a.is_destructed();
         let len = if eligible { a.load_code()?.original_byte_slice().len() } else { 0 };
-        // Satin gives the leaf's write record back only for an account the transaction
-        // found absent at its start (`Accounts::was_absent_at_start`); a pre-funded address
-        // created onto keeps its record ("a part that existed at the start ... its write record
-        // stands").
-        let absent_at_start = a.original().is_none_or(|o| o.is_empty());
+        // Satin gives the leaf back only for an account the transaction found absent at its
+        // start (`Accounts::was_absent_at_start`); a pre-funded address created onto, or an
+        // account that existed empty, keeps its leaf ("a part that existed at the start ... its
+        // write record stands").
+        let absent_at_start = if off("sd_absent_leaf") {
+            a.original().is_none_or(|o| o.is_empty())
+        } else {
+            a.original().is_none()
+        };
         Ok((a.balance(), eligible, len as u64, absent_at_start))
     })();
     let (balance, eligible, code_len, absent_at_start) =

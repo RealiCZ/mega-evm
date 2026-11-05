@@ -219,10 +219,14 @@ impl<'a> BlockExecutor<'a> {
                 Bytes::from(keccak256("applyPendingChanges()")[..4].to_vec()),
             )?;
         }
+        // Satin `read_l1_block_info`: the account, then its slots when it exists. A read the
+        // database cannot serve fails the block.
         let state = self.evm.state_mut();
-        let _ = state.account_info_untracked(&L1_BLOCK_CONTRACT);
-        for s in L1_BLOCK_INFO_SLOTS {
-            let _ = state.storage_slot_untracked(&L1_BLOCK_CONTRACT, &U256::from(s));
+        let failed = |e: evm2::DatabaseError| format!("L1 block info read: {e:?}");
+        if state.account_info_untracked(&L1_BLOCK_CONTRACT).map_err(failed)?.is_some() {
+            for s in L1_BLOCK_INFO_SLOTS {
+                state.storage_slot_untracked(&L1_BLOCK_CONTRACT, &U256::from(s)).map_err(failed)?;
+            }
         }
         Ok(())
     }

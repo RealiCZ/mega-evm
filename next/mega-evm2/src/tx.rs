@@ -131,12 +131,8 @@ pub(crate) fn admits_body(host: &mut Evm<'_, MegaTypes>, entries: u64) -> Handle
 fn host_error(error: evm2::HostError) -> evm2::registry::HandlerError {
     match error {
         evm2::HostError::Execution(error) => error.into(),
-        evm2::HostError::Halt(stop) => evm2::registry::HandlerError::Fatal(evm2::AnyError::new(
-            crate::satin_ext::Refusal(if stop == InstrStop::OutOfGas {
-                "registry read halted: out of gas"
-            } else {
-                "registry read halted"
-            }),
+        evm2::HostError::Halt(_) => evm2::registry::HandlerError::Fatal(evm2::AnyError::new(
+            crate::satin_ext::Refusal("registry read halted"),
         )),
     }
 }
@@ -243,7 +239,7 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         // slots. Read the account so the read set matches (no gas effect).
         let number = host.block().number;
         if host.ext().l1.l2_block != Some(number) {
-            let _ = host.state_mut().account_info_untracked(&op_evm2::constants::L1_BLOCK_CONTRACT);
+            host.state_mut().account_info_untracked(&op_evm2::constants::L1_BLOCK_CONTRACT)?;
         }
         <OpHandlerHooks as TxHandlerHooks<MegaTypes>>::before_execution(
             host,
@@ -332,6 +328,9 @@ fn prepare_legacy(
     let (to, len, value) = (tx.to, tx.input.len(), tx.value);
     if classify(req.host, caller, 0, to)? {
         // Satin `validate_and_promote`: the chain id must be present and right.
+        if tx.chain_id.is_none() && !crate::off("system_missing_chain_id") {
+            return Err(evm2::registry::HandlerError::MissingChainId);
+        }
         if tx.chain_id != Some(req.host.version().chain_id) {
             return Err(evm2::registry::HandlerError::InvalidChainId {
                 expected: req.host.version().chain_id,

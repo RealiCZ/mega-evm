@@ -1,11 +1,12 @@
 //! Every transaction reads the live system address out of the `SequencerRegistry` before anything
 //! else, and a block reads it to decide whether a transaction is a Mega System Transaction and
-//! whether a role change is due. A read the database cannot serve fails the transaction (or the
-//! block) with the database's error, whatever the envelope; it is never taken for an absent
-//! registry.
+//! whether a role change is due; a block reads the L1 block info before its transactions, and a
+//! transaction other than a deposit reads the L1Block account before it is priced. A read the
+//! database cannot serve fails the transaction (or the block) with the database's error, whatever
+//! the envelope; it is never taken for an absent account.
 //!
 //! The differential gates run on infallible databases, so this file covers the error path with a
-//! database adapter that fails the registry's reads.
+//! database adapter that fails those reads.
 
 use alloy_consensus::{TxEip1559, TxEip2930, TxEip7702, TxLegacy, transaction::Recovered};
 use alloy_eips::eip7702::{Authorization, SignedAuthorization};
@@ -25,7 +26,7 @@ use mega_evm2::{
     precompiles, satin_version,
     tx::{SEQUENCER_REGISTRY_CODE_HASH, registry},
 };
-use op_evm2::{OpTxEnvelope, TxDeposit};
+use op_evm2::{OpTxEnvelope, TxDeposit, constants::L1_BLOCK_CONTRACT};
 
 const SENDER: Address = Address::with_last_byte(0x50);
 /// Stores 1 in slot 0.
@@ -45,16 +46,18 @@ impl core::fmt::Display for Unavailable {
 
 impl std::error::Error for Unavailable {}
 
-/// Which of the registry's reads fail.
+/// Which reads fail: the registry's account or storage, or the L1Block account's or storage.
 #[derive(Clone, Copy, Debug)]
 enum Fail {
     Nothing,
     Account,
     Storage,
+    L1Account,
+    L1Storage,
 }
 
-/// A chain whose registry names [`SYSTEM`], over a backend that fails the registry's reads as
-/// `fail` says and serves every other read.
+/// A chain whose registry names [`SYSTEM`], over a backend that fails the reads `fail` names and
+/// serves every other read.
 #[derive(Debug)]
 struct RegistryBackend {
     inner: InMemoryDB,
@@ -88,6 +91,7 @@ impl RegistryBackend {
         // A role change pending since block 1, so the block's due check reads both its slots.
         inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::from(0x77));
         inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::from(1));
+        inner.insert_account_info(&L1_BLOCK_CONTRACT, AccountInfo::default().with_nonce(1));
         Self { inner, fail }
     }
 
@@ -100,7 +104,9 @@ impl Database for RegistryBackend {
     type Error = DatabaseError;
 
     fn get_account(&mut self, address: &Address) -> Result<Option<AccountInfo>, Self::Error> {
-        if matches!(self.fail, Fail::Account) && *address == SEQUENCER_REGISTRY {
+        if matches!(self.fail, Fail::Account) && *address == SEQUENCER_REGISTRY ||
+            matches!(self.fail, Fail::L1Account) && *address == L1_BLOCK_CONTRACT
+        {
             return Err(Self::unavailable());
         }
         self.inner.get_account(address)
@@ -111,7 +117,9 @@ impl Database for RegistryBackend {
     }
 
     fn get_storage(&mut self, address: &Address, key: &Word) -> Result<Word, Self::Error> {
-        if matches!(self.fail, Fail::Storage) && *address == SEQUENCER_REGISTRY {
+        if matches!(self.fail, Fail::Storage) && *address == SEQUENCER_REGISTRY ||
+            matches!(self.fail, Fail::L1Storage) && *address == L1_BLOCK_CONTRACT
+        {
             return Err(Self::unavailable());
         }
         self.inner.get_storage(address, key)
@@ -222,12 +230,12 @@ fn every_envelope() -> Vec<(&'static str, Recovered<OpTxEnvelope>)> {
     .collect()
 }
 
-fn assert_registry_unavailable(name: &str, error: &HandlerError) {
+fn assert_unavailable(name: &str, error: &HandlerError) {
     match error {
         HandlerError::Database(e) => {
             assert!(e.downcast_ref::<Unavailable>().is_some(), "{name}: {e:?}");
         }
-        other => panic!("{name}: expected the registry's database error, got {other:?}"),
+        other => panic!("{name}: expected the database error, got {other:?}"),
     }
 }
 
@@ -248,7 +256,7 @@ fn test_unreadable_registry_slot_fails_every_envelope() {
     for (name, tx) in every_envelope() {
         let mut evm = satin_evm(Fail::Storage);
         let error = evm.transact(&tx).err().unwrap_or_else(|| panic!("{name}: executed"));
-        assert_registry_unavailable(name, &error);
+        assert_unavailable(name, &error);
     }
 }
 
@@ -257,7 +265,7 @@ fn test_unreadable_registry_account_fails_every_envelope() {
     for (name, tx) in every_envelope() {
         let mut evm = satin_evm(Fail::Account);
         let error = evm.transact(&tx).err().unwrap_or_else(|| panic!("{name}: executed"));
-        assert_registry_unavailable(name, &error);
+        assert_unavailable(name, &error);
     }
 }
 
@@ -285,4 +293,33 @@ fn test_pre_block_step_fails_on_an_unreadable_registry() {
     }
     let mut block = BlockExecutor::new(satin_evm(Fail::Nothing), B256::ZERO, None);
     assert_eq!(block.registry_due(), Ok(true), "the control: a change is due");
+}
+
+/// A transaction other than a deposit reads the L1Block account, then its slots, before it is
+/// priced: an unreadable L1Block fails it. A deposit pays no L1 fee and reads neither.
+#[test]
+fn test_unreadable_l1_block_fails_every_envelope_but_a_deposit() {
+    for fail in [Fail::L1Account, Fail::L1Storage] {
+        for (name, tx) in every_envelope() {
+            let mut evm = satin_evm(fail);
+            let outcome = evm.transact(&tx);
+            if name == "deposit" {
+                assert!(outcome.is_ok(), "{fail:?} {name}: {:?}", outcome.err());
+                continue;
+            }
+            let error = outcome.err().unwrap_or_else(|| panic!("{fail:?} {name}: executed"));
+            assert_unavailable(name, &error);
+        }
+    }
+}
+
+/// The pre-block step reads the L1 block info: an unreadable L1Block account or slot fails the
+/// block.
+#[test]
+fn test_pre_block_step_fails_on_an_unreadable_l1_block() {
+    for fail in [Fail::L1Account, Fail::L1Storage] {
+        let mut block = BlockExecutor::new(satin_evm(fail), B256::ZERO, None);
+        let error = block.apply_pre_execution_changes().expect_err("an unreadable L1 block info");
+        assert!(error.contains("Unavailable"), "{fail:?}: {error}");
+    }
 }

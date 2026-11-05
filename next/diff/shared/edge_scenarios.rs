@@ -3,11 +3,13 @@
 //! - the live system address (the `SequencerRegistry`'s trusted code names it): only a legacy call
 //!   to a whitelisted contract from it is a system-address transaction; every other envelope from
 //!   it — a call off the whitelist, a creation, a typed transaction — is refused, and a deposit
-//!   from it is a failed deposit. Its sender check is EIP-3607's with the EIP-7702 exception (a
-//!   delegated sender is accepted), the code checked before the nonce;
+//!   from it is a failed deposit. A permitted envelope must carry the chain id; its sender check is
+//!   EIP-3607's with the EIP-7702 exception (a delegated sender is accepted), the code checked
+//!   before the nonce;
 //! - a contract created onto an address an earlier transfer of the same transaction materialized,
 //!   then destroyed: its leaf was absent at the transaction's start, so the destruction gives back
 //!   the leaf's state gas, its unit of state growth and its write record, whichever charge made it;
+//!   an account that existed empty at the start keeps its leaf;
 //! - a transaction-level precompile call detained from the start (sender or recipient is the
 //!   beneficiary): priced and held as a child call is;
 //! - a SALT bucket that reports a capacity below the minimum bucket: the transaction fails;
@@ -81,6 +83,12 @@ fn system_address() -> Vec<Scenario> {
         from_system("edge_system_legacy_oracle_promoted", system_account(vec![], 0), ORACLE);
     s.chain_id = Some(1);
     v.push(s);
+    // The permitted shape without a chain id is refused for the missing chain id.
+    v.push(from_system(
+        "edge_system_legacy_oracle_without_chain_id",
+        system_account(vec![], 0),
+        ORACLE,
+    ));
     // Every other envelope from the live system address is refused.
     v.push(from_system("edge_system_legacy_off_whitelist", system_account(vec![], 0), A));
     let mut s = from_system("edge_system_creation", system_account(vec![], 0), A);
@@ -90,6 +98,12 @@ fn system_address() -> Vec<Scenario> {
     v.push(s);
     for (name, ty) in [("edge_system_eip2930_oracle", 1u8), ("edge_system_eip1559_oracle", 2)] {
         let mut s = from_system(name, system_account(vec![], 0), ORACLE);
+        s.tx_type = ty;
+        v.push(s);
+    }
+    // The same typed envelopes from an ordinary sender run (controls).
+    for (name, ty) in [("edge_eip2930_ordinary_call", 1u8), ("edge_eip1559_ordinary_call", 2)] {
+        let mut s = edge(name, vec![acct(A, store_one())], BELOW_CAP, Limits::default());
         s.tx_type = ty;
         v.push(s);
     }
@@ -166,6 +180,18 @@ fn destroyed_leaf() -> Vec<Scenario> {
         BELOW_CAP,
         Limits::default(),
     ));
+    // The address of A's creation holds an account with no balance, nonce or code but a slot: it
+    // existed at the transaction's start, so its leaf stands when the creation onto it is
+    // destroyed.
+    let t = A.create(1);
+    let existing_empty = Account { address: t, storage: vec![(5, 9)], ..Account::default() };
+    let code = Asm::new().create(&destroys_to_a, 0).op(op::POP).stop().build();
+    v.push(edge(
+        "edge_existing_empty_account_then_create_destroyed",
+        vec![a(code), existing_empty],
+        BELOW_CAP,
+        Limits::default(),
+    ));
     v
 }
 
@@ -179,7 +205,19 @@ fn top_level_precompile() -> Vec<Scenario> {
     let mut s =
         edge("edge_top_blake2f_sender_is_beneficiary", vec![], 100_000_000, Limits::default());
     s.to = BLAKE2F;
+    s.data = input.clone();
+    s.beneficiary = SENDER;
+    v.push(s);
+    // The same call priced past its forward: not held, it runs out of gas.
+    let mut s = edge("edge_top_blake2f_price_above_forward", vec![], BELOW_CAP, Limits::default());
+    s.to = BLAKE2F;
     s.data = input;
+    s.beneficiary = SENDER;
+    v.push(s);
+    // RIPEMD160 of one word (720) within the default cap: not held, it runs.
+    let mut s = edge("edge_top_ripemd160_within_allowance", vec![], BELOW_CAP, Limits::default());
+    s.to = RIPEMD160;
+    s.data = vec![0; 32];
     s.beneficiary = SENDER;
     v.push(s);
     // RIPEMD160 of one word (720) under a cap of 10.

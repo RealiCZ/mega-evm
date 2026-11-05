@@ -358,7 +358,7 @@ switch = "sd_absent_leaf"
 gate = "main"
 scenario = "edge_transfer_then_create_destroyed"
 scope = "sample"
-why = "A destroyed account created in the transaction gives back its leaf's state gas, unit of state growth and write record when the transaction found the address absent at its start, at the new-account price, whichever charge materialized it; off, only a leaf the creation itself charged comes back, so a leaf an earlier transfer materialized keeps 183,600 state gas and its growth."
+why = "A destroyed account created in the transaction gives back its leaf's state gas, unit of state growth and write record when the transaction found the address absent at its start (an account that existed empty is not absent), at the new-account price, whichever charge materialized it; off, only a leaf the creation itself charged comes back, so a leaf an earlier transfer materialized keeps 183,600 state gas and its growth."
 
 [[control]]
 switch = "sd_existing_record"
@@ -387,6 +387,13 @@ gate = "main"
 scenario = "p7_sstore_sentry_sees_total_read"
 scope = "sample"
 why = "SSTORE's EIP-2200 stipend sentry sees spendable plus withheld gas, through the fork's gas reserve (BudgetUse::SstoreSentry); off, spendable gas only, so a store Satin makes halts on the sentry."
+
+[[control]]
+switch = "system_missing_chain_id"
+gate = "main"
+scenario = "edge_system_legacy_oracle_without_chain_id"
+scope = "sample"
+why = "A system-address transaction without a chain id is refused for the missing chain id, as the reference refuses it; off, it is refused as carrying the wrong chain id."
 
 [[control]]
 switch = "system_nonce"
