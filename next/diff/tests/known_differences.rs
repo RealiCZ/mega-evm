@@ -164,7 +164,7 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     }
     let text = include_str!("../known-differences.toml");
     assert_eq!(text.matches(HALTED_FIRST_FRAME).count(), 4);
-    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 4);
+    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 5);
 }
 
 #[test]

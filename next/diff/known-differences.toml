@@ -10,15 +10,13 @@
 # revm labels a DUP whose operand is deeper than the stack as `StackOverflow`: its
 # `dup` returns false for both underflow and overflow, and `dupn_enabled` maps every false to
 # overflow. evm2 tells them apart and reports `StackUnderflow`. Gas, output and state are equal.
-#
-# STATUS: the owner has NOT yet signed off on accepting evm2's label. This entry records an open
-# question, not a decision; when it is resolved (fix the reference, or accept evm2's label), this
-# entry is removed or confirmed.
+# The owner accepted evm2's `StackUnderflow` label on 2026-11-05.
 [[difference]]
 scenario = "p6_dupn"
 field = "halt"
 reference = "StackOverflow"
 candidate = "StackUnderflow"
+signoff = "owner sign-off 2026-11-05"
 
 # The four transactions whose runtime gas phase cannot pay a SALT-priced state charge (a value
 # call's new account, a creation's account) on the sample and the full corpus.
