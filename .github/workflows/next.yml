@@ -7,8 +7,9 @@ name: next
 #
 # check     — every pull request and push that touches next/** or this file.
 #             The commands are next/diff/scripts/ci-local.sh (with the check that
-#             regen-reference.sh deletes and writes nothing in the corpus, the
-#             sample gate, its negative controls and the gate fault injection).
+#             regen-reference.sh refuses an output directory or archive path in
+#             the corpus, the sample gate, its negative controls and the gate
+#             fault injection).
 # reference — daily, and pulls or pushes that touch what the reference check
 #             reads: next/reference/**, next/diff/data/**, next/diff/shared/**,
 #             next/diff/scripts/**, next/scripts/**, next/rust-toolchain.toml, or
