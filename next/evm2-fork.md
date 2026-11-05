@@ -143,7 +143,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 
 ## Dropped from the earlier series
 
-- The rebase of open upstream PR [#523](https://github.com/alloy-rs/evm2/pull/523) (native precompile message dispatch): the engine answers `MegaLimitControl` and `MegaAccessControl` from `MessageHooks::before`, which runs before dispatch.
+- The rebase of open upstream PR [#523](https://github.com/alloy-rs/evm2/pull/523) (native precompile calls): the engine answers `MegaLimitControl` and `MegaAccessControl` from `MessageHooks::before`, which runs before dispatch.
 - Input-only precompile gas quotes: the engine prices the fixed-formula entries itself (`precompile_price`) and probes the others (`precompile_price_of`).
 - Formatting and call-site glue: folded into the commits it repaired.
 - The pre-state-charge closures `call_with_state_charge` and `create_with_state_charge`: the state spills draw the gas reserve inside evm2's own bodies, and the engine calls `call_with` and `create_with`.
@@ -172,7 +172,7 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
 - **Halted messages reach no hook.**
   A first frame whose runtime gas phase runs out of gas is reported through `Evm::execute_halted_message`, which runs no message hook on either path; keep `halted_messages_run_no_hooks_on_either_path` passing, and decide any new message path upstream adds against it.
 - **Every result decided after a message's checkpoint reaches `before_commit`.**
-  Read every early return of `execute_call_message`, `execute_create_message` and their helpers in `crates/evm2/src/evm/mod.rs`: one after `self.state.checkpoint()` must run `hook_before_commit` before its commit or rollback, as the out-of-funds and collision answers do; detention counts a halting unbuilt message's forward as burned only there.
+  Read every early return of `execute_call_message`, `execute_create_message` and their helpers in `crates/evm2/src/evm/mod.rs`: one after `self.state.checkpoint()`, other than an answer of the `started` hook (the family's own), must run `hook_before_commit` before its commit or rollback, as the out-of-funds and collision answers do; detention counts a halting unbuilt message's forward as burned only there.
 - **Instructions that run a child message are `hooked`.**
   The engine's CALL and CREATE family and its keyless dispatcher are declared with `hooked` in `#[instruction(...)]`; an inspected run panics at the first message otherwise.
 - **Every account load of an instruction offers the account-load hook first.**
