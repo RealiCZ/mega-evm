@@ -498,3 +498,34 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
     }
     Value::Object(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{run, scenarios};
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    /// Fuzz mode 7 reaches its class: of the depth-0 precompile calls whose gas limit the
+    /// generator draws around what the call needs plus the price (not one of its ample limits),
+    /// some run the precompile and some run out of gas in it, for several precompiles.
+    #[test]
+    fn test_precompile_mode_straddles_the_price() {
+        let ample = [100_000u64, scenarios::BELOW_CAP, 100_000_000];
+        let (mut ran, mut ran_out) = (BTreeSet::new(), BTreeSet::new());
+        for s in scenarios::fz::generate(7, 1, 300) {
+            if ample.contains(&s.gas_limit) || s.deposit.is_some() {
+                continue;
+            }
+            let o = run(&s, false);
+            if o.get("error").is_some() || !o["limit_exceeded"].is_null() {
+                continue;
+            }
+            if o["status"] == "success" {
+                ran.insert(s.to);
+            } else if crate::gate::halt(&o["halt"]) == json!("PrecompileOOG") {
+                ran_out.insert(s.to);
+            }
+        }
+        assert!(ran.len() >= 5 && ran_out.len() >= 5, "ran {ran:?}, ran out {ran_out:?}");
+    }
+}

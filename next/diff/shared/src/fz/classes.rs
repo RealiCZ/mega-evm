@@ -13,7 +13,8 @@
 //!   creation after it.
 //! - 7 (`fxp`), a precompile called at depth 0 by a transaction whose sender or recipient is the
 //!   block beneficiary (or neither: control): every precompile, inputs of several sizes, the
-//!   detention cap and the gas limit drawn around the precompile's price where it is fixed.
+//!   detention cap and the gas limit drawn around the precompile's price where it is fixed (the gas
+//!   limit at what the call needs before the precompile runs, plus the price).
 //! - 8 (`fxl`), limits and SALT capacities: a random composition (modes 1 to 4) whose data-size,
 //!   KV, state-growth and detention limits and gas limit are drawn from small values up to
 //!   `u64::MAX`, and whose touched buckets report capacities in entries, invalid ones (below the
@@ -399,12 +400,15 @@ fn top_precompile(r: &mut Rng) -> Scenario {
         Some(p) if r.chance(60) => Some(r.pick(&[p.saturating_sub(1), p, p + 1, p / 2, 2 * p + 1])),
         _ => r.pick(&[None, Some(1), Some(10), Some(720), Some(5_000), Some(100_000)]),
     };
-    // The gas limit around the intrinsic gas (calldata at its EIP-7623 floor or above) plus the
-    // price, or ample.
+    // The gas limit around what the call needs before the precompile runs plus its price, or
+    // ample. What it needs: Satin's intrinsic gas, the EIP-2780 base of 15,000 and 4 gas per
+    // calldata token, with the history of the body (310 bytes of envelope and the calldata, at
+    // 88 gas a byte); the calldata floor lies below it. The window is a few dozen gas wide each
+    // way, so that the transaction's other small charges (a chain id) do not move it off.
     let tokens: u64 = input.iter().map(|b| if *b == 0 { 1 } else { 4 }).sum();
-    let intrinsic = (21_000 + 4 * tokens).max(21_000 + 10 * tokens);
+    let needs = 15_000 + 4 * tokens + (310 + input.len() as u64) * 88;
     s.gas_limit = match price {
-        Some(p) if r.chance(65) => (intrinsic + p + r.below(41)).saturating_sub(20),
+        Some(p) if r.chance(65) => (needs + p + r.below(81)).saturating_sub(40),
         _ => r.pick(&[100_000u64, BELOW_CAP, 100_000_000]),
     };
     s.data = input;
@@ -504,6 +508,12 @@ fn wide_limits(r: &mut Rng) -> Scenario {
             _ => (r.pick(&[A, B, C]), None),
         };
         s.salt_capacity.push((address, slot, r.pick(&CAPACITIES)));
+    }
+    // Often enough to be reached, a capacity below the minimum bucket on every slot the
+    // composition's first account may write: its first fresh write fails the lookup.
+    if r.chance(10) {
+        let capacity = r.pick(&[0u64, 1, 255]);
+        s.salt_capacity.extend((1..=6).map(|k| (A, Some(k), capacity)));
     }
     s
 }
@@ -628,7 +638,7 @@ fn fund_create_destroy(r: &mut Rng) -> Scenario {
     if r.chance(15) {
         limits.block_env_cap = Some(r.pick(&[5_000u64, 50_000]));
     }
-    let gas = r.pick(&[300_000u64, BELOW_CAP, BELOW_CAP, 5_000_000]);
+    let gas = r.pick(&[2_000_000u64, BELOW_CAP, BELOW_CAP, 5_000_000]);
     let mut s = scenario("", accounts, gas, limits);
     if r.chance(40) {
         s.salt.push((target, None, r.pick(&[1u64, 2, 8])));

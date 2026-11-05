@@ -896,7 +896,8 @@ pub fn remaining_compute_gas_selector() -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     /// A deposit carries no gas price: the engine's deposit envelope has none, so a scenario that
-    /// gave one would run as a different transaction on each side.
+    /// gave one would run as a different transaction on each side. Likewise a scenario has one
+    /// envelope: a deposit, an EIP-7702 list or a typed transaction.
     #[test]
     fn test_no_deposit_carries_a_gas_price() {
         let mut all = super::hand_written();
@@ -909,5 +910,18 @@ mod tests {
             .map(|s| s.name)
             .collect();
         assert!(priced.is_empty(), "{priced:?}");
+        // One envelope each (`Scenario::tx_type`: not with `auths` or `deposit`).
+        let mixed: Vec<_> = all
+            .iter()
+            .filter(|s| {
+                [s.deposit.is_some(), !s.auths.is_empty(), s.tx_type != 0]
+                    .iter()
+                    .filter(|e| **e)
+                    .count() >
+                    1
+            })
+            .map(|s| s.name)
+            .collect();
+        assert!(mixed.is_empty(), "{mixed:?}");
     }
 }

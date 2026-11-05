@@ -126,6 +126,11 @@ pub fn parse_line(line: &str, number: usize) -> Result<Scenario, String> {
     if s.deposit.is_some() && s.gas_price != 0 {
         return Err(at("a deposit carries no gas price (`gas_price` must be 0)".into()));
     }
+    // One envelope each: the harnesses would each pick a different one from a combination.
+    let envelopes = [s.deposit.is_some(), !s.auths.is_empty(), s.tx_type != 0];
+    if envelopes.iter().filter(|e| **e).count() > 1 {
+        return Err(at("`deposit`, `auths` and a `tx_type` other than 0 exclude each other".into()));
+    }
     add_chain_accounts(&mut s);
     Ok(s)
 }
@@ -387,6 +392,11 @@ mod tests {
             (r#"{"salt": [["0x0000000000000000000000000000000000000001", 0]]}"#, "a list of 3"),
             (r#"[1]"#, "a JSON object"),
             (r#"{"deposit": 0, "gas_price": 1}"#, "no gas price"),
+            (r#"{"tx_type": 1, "deposit": 5}"#, "exclude each other"),
+            (
+                r#"{"deposit": 0, "auths": [{"chain_id": 1, "address": "0x0000000000000000000000000000000000000001", "nonce": 0, "authority": null}]}"#,
+                "exclude each other",
+            ),
         ] {
             let e = parse_line(line, 9).unwrap_err();
             assert!(e.starts_with("line 9: ") && e.contains(needle), "{line}: {e}");
