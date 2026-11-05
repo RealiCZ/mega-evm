@@ -414,7 +414,8 @@ fn gas_check_order() -> Vec<Scenario> {
 }
 
 /// Deposits: one whose body is over the data-size limit (from a caller it creates, with a value
-/// for an account that exists), and ones from an account with a delegation and with code.
+/// for an account that exists), and ones from an account with a delegation (with an admitted body
+/// and with one over the limit) and with code.
 fn deposit_rules() -> Vec<Scenario> {
     let depositor = super::q2::DEPOSITOR;
     let mut v = Vec::new();
@@ -428,16 +429,19 @@ fn deposit_rules() -> Vec<Scenario> {
     s.deposit = Some(1_000_000);
     s.value = U256::from(1);
     v.push(s);
-    for (name, code) in [
-        ("edge_deposit_delegated_sender", delegation(A)),
-        ("edge_deposit_sender_with_code", vec![op::STOP]),
+    // The same delegated caller with its body over the limit: it is not validated, its code is
+    // not read.
+    for (name, code, limits) in [
+        ("edge_deposit_delegated_sender", delegation(A), Limits::default()),
+        ("edge_deposit_sender_with_code", vec![op::STOP], Limits::default()),
+        (
+            "edge_deposit_delegated_sender_body_over_limit",
+            delegation(A),
+            Limits { data: Some(100), ..Limits::default() },
+        ),
     ] {
-        let mut s = edge(
-            name,
-            vec![acct(A, store_one()), funded(depositor, code, 5)],
-            BELOW_CAP,
-            Limits::default(),
-        );
+        let mut s =
+            edge(name, vec![acct(A, store_one()), funded(depositor, code, 5)], BELOW_CAP, limits);
         s.sender = depositor;
         s.deposit = Some(0);
         v.push(s);

@@ -93,8 +93,6 @@ pub(crate) fn first_frame_start(
     }
 }
 
-/// Satin `admits_tx_body`: the body, with one write record per authorization entry, against the
-/// transaction's data-size limit, before any gas check (the protocol's own work is exempt).
 /// Checks the body where Satin does, after the environment's rules (the chain id, the gas limit
 /// against the cap and the block, the fees, the init code): the intrinsic-gas hook runs it
 /// ([`TxHandlerHooks::adjust_intrinsic_gas`]).
@@ -106,6 +104,8 @@ pub(crate) fn defer_body_check(host: &mut Evm<'_, MegaTypes>, entries: u64) -> H
     Ok(())
 }
 
+/// Satin `admits_tx_body`: the body, with one write record per authorization entry, against the
+/// transaction's data-size limit, before any gas check (the protocol's own work is exempt).
 pub(crate) fn admits_body(host: &mut Evm<'_, MegaTypes>, entries: u64) -> HandlerResult<()> {
     let ext = host.ext();
     if !crate::off("body_records") &&
@@ -452,19 +452,20 @@ fn prepare_deposit_inner(
 ) -> HandlerResult<PreparedDeposit> {
     let info = host.state_mut().account_info_untracked(&tx.from).ok().flatten();
     let created = info.as_ref().is_none_or(|i| i.is_empty());
-    // op-revm loads the caller with its code (no EIP-3607 check for a deposit): its code is read.
-    if info.is_some_and(|i| !i.is_empty_code_hash()) && !crate::off("deposit_caller_code") {
-        host.state_mut().code_untracked(&tx.from)?;
-    }
     // A deposit whose body is over the data-size limit is a failed deposit (Satin), refused
-    // before anything of it runs: its first frame's start is not even predicted (no read of its
-    // recipient), and no start settles.
+    // before anything of it runs: its caller is not validated, its first frame's start is not
+    // even predicted (no read of its recipient), and no start settles.
     host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, false, true);
     if system {
         host.ext_mut().set_system_originated();
     }
     let body_refused = admits_body(host, 0).is_err();
-    if !body_refused || crate::off("body_refused_start") {
+    let runs = !body_refused || crate::off("body_refused_start");
+    // op-revm loads the caller with its code (no EIP-3607 check for a deposit): its code is read.
+    if runs && info.is_some_and(|i| !i.is_empty_code_hash()) && !crate::off("deposit_caller_code") {
+        host.state_mut().code_untracked(&tx.from)?;
+    }
+    if runs {
         first_frame_start(host, tx.from, tx.to, tx.value, tx.mint);
     }
     if created {
