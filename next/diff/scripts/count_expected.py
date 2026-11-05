@@ -13,7 +13,7 @@ reference refused is `refused` (replay: an `error` in its `satin` outcome; block
 starts with `refused`), every pre-block call is one `pre`. An applied transaction that a
 `[[replay_difference]]` entry lists (by set, block and index, with its hash) is `known` instead of
 `match`. An entry of a listed block whose transaction is missing, has another hash or was refused
-is an error.
+is an error, and so is a row of a kind the gates do not read.
 """
 import json, os, subprocess, sys
 
@@ -49,6 +49,8 @@ for path in files(replay_dir):
     for r in rows(path):
         if r["kind"] == "pre_block":
             pre += len(r["calls"])
+        elif r["kind"] == "block_end":
+            pass
         elif r["kind"] == "tx":
             key = (block_set, block, r["index"])
             if "error" in r["satin"]:
@@ -62,6 +64,8 @@ for path in files(replay_dir):
                 known += 1
             else:
                 match += 1
+        else:
+            raise SystemExit("count_expected.py: unknown row kind %r in %s" % (r.get("kind"), path))
     if pending:
         raise SystemExit("count_expected.py: listed transactions not in their block: %s" % sorted(pending))
 print(f'EXPECT_REPLAY="blocks={blocks} match={match} pre={pre} refused={refused} known={known}"')
@@ -79,4 +83,6 @@ for path in files(block_dir):
             counters += 1
         elif r["kind"] == "post_state":
             post += 1
+        else:
+            raise SystemExit("count_expected.py: unknown row kind %r in %s" % (r.get("kind"), path))
 print(f'EXPECT_BLOCK="blocks={blocks} included={included} refused={refused} counters={counters} post={post}"')

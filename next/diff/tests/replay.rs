@@ -280,7 +280,8 @@ fn test_replay_matches_reference_plain_and_inspected() {
                     }
                     writeln!(out, "{rec}").unwrap();
                 }
-                _ => {}
+                Some("block_end") => {}
+                other => panic!("unknown row kind {other:?} in {set}:{n}"),
             }
         }
         // A listed transaction of a processed block that was never compared fails the gate.

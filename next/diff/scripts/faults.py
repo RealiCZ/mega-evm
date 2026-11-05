@@ -265,6 +265,10 @@ def drop_tx(rows):
 def has_txs(n):
     return lambda rows: sum(1 for r in rows if is_tx(r)) >= n
 
+def unknown_row(rows):
+    """Appends a row of a kind the replay gate does not read, every other row kept."""
+    rows.append({"kind": "unexpected_result", "block": rows[0].get("block"), "status": "halt", "gas_used": 999999})
+
 # --- the list -------------------------------------------------------------------------------------
 
 M, F = "main.json", "fuzz/mode4.json"
@@ -308,6 +312,7 @@ FAULTS = [
     ("replay-pre-reference-inspected", "replay", r'"pre_block:differ": 1', pre_call(lambda c: True, lambda c: c.update(inspected_equal=False), "pre-block call")),
     ("replay-pre-registry-due", "replay", r'"registry_due:differ": 1', row_edit("replay", lambda r: r.get("kind") == "pre_block", lambda r: r.update(registry_due=not r["registry_due"]), "pre-block entry")),
     ("replay-missing-tx", "replay", r"oracle transaction count", file_edit("replay", has_txs(2), drop_tx, "block with two transactions")),
+    ("replay-unknown-row", "replay", r"unknown row kind", file_edit("replay", has_txs(1), unknown_row, "block with a transaction")),
     ("replay-expected-counts", "replay", SUMMARY, expect("EXPECT_REPLAY", count("match", 1))),
     # replay: an accepted difference that no longer occurs, occurs otherwise, or names another transaction
     ("replay-known-stale", "replay", r"stale known difference: [a-z0-9]+:[0-9]+:[0-9]+ no longer differs", stale_replay_known),
