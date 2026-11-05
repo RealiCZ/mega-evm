@@ -14,6 +14,7 @@
 
 #[path = "../../diff/shared/blockdb.rs"]
 pub mod blockdb;
+pub mod synthetic;
 
 use alloy_consensus::{Signed, TxEip1559, TxEip2930, TxEip7702, TxLegacy};
 use alloy_eips::{

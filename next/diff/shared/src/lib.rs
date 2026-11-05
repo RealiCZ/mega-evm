@@ -1,13 +1,16 @@
-//! The synthetic scenarios, shared verbatim by the reference (`next/reference`) and the Satin
-//! engine on evm2. Only `alloy_primitives` and `std` are used.
-//! `all()` is the base scenario list (group "p5"); the sibling files included below add the
-//! regression sets (`p6`, `p7`), the interaction scenarios (`q2`), the fuzz generator (`fz`) and
-//! the scenarios of the later mechanisms (`q8`: EIP-7702, keyless deployment, access control,
-//! Oracle hints, the precompile catalogue), the gas limits above the EIP-8037 total cap
-//! (`cap`) and the edge inputs of single rules (`edge`: the live system address's envelopes, a
-//! destroyed leaf a transfer created, a transaction-level detained precompile, SALT capacities
-//! below the minimum bucket, limits at or above 2^63, deposits whose first frame cannot start)
-//! and the refusal boundaries (`bd`). Group names are part of the reference outputs.
+//! The synthetic scenarios of the Satin differential gates, engine-neutral: the reference
+//! (`next/reference`, on revm) and the Satin engine on evm2 (`next/diff`) run the same inputs and
+//! render the same outcome record ([`record`]). Only `alloy_primitives` and `std` are used.
+//!
+//! `all()` is the base scenario list (group "p5"); the modules add the regression sets (`p6`,
+//! `p7`), the interaction scenarios (`q2`), the fuzz generator (`fz`) and the scenarios of the
+//! later mechanisms (`q8`: EIP-7702, keyless deployment, access control, Oracle hints, the
+//! precompile catalogue), the gas limits above the EIP-8037 total cap (`cap`) and the edge inputs
+//! of single rules (`edge`: the live system address's envelopes, a destroyed leaf a transfer
+//! created, a transaction-level detained precompile, SALT capacities below the minimum bucket,
+//! limits at or above 2^63, deposits whose first frame cannot start) and the refusal boundaries
+//! (`bd`). Group names are part of the reference outputs. [`probe`] reads a single input (a
+//! scenario by name with overrides, or a whole scenario) from a line of JSON.
 
 #![allow(dead_code)]
 
@@ -233,7 +236,7 @@ pub fn init_returning(n: u64) -> Vec<u8> {
     Asm::new().push(n).push(0).op(op::RETURN).build()
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Account {
     pub address: Address,
     pub code: Vec<u8>,
@@ -244,7 +247,7 @@ pub struct Account {
 }
 
 /// Per-transaction limits; `None` keeps the Satin default.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
     pub data: Option<u64>,
     pub kv: Option<u64>,
@@ -255,7 +258,7 @@ pub struct Limits {
     pub oracle_cap: Option<u64>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Scenario {
     pub name: &'static str,
     pub accounts: Vec<Account>,
@@ -276,6 +279,9 @@ pub struct Scenario {
     pub deposit: Option<u64>,
     /// SALT bucket capacities, in minimum buckets: `(address, slot or account leaf, m)`.
     pub salt: Vec<(Address, Option<u64>, u64)>,
+    /// SALT bucket capacities in entries, set after `salt`: `(address, slot or account leaf,
+    /// capacity)`; any value, also one below the minimum bucket or between two multiples of it.
+    pub salt_capacity: Vec<(Address, Option<u64>, u64)>,
     /// Non-zero L1 block info `(l1 base fee, base fee scalar)` and enveloped bytes for the L1 fee.
     pub l1_fee: Option<(u64, u64, Vec<u8>)>,
     /// Gas price (base fee is 0).
@@ -338,6 +344,7 @@ pub fn scenario(
         create: false,
         deposit: None,
         salt: Vec::new(),
+        salt_capacity: Vec::new(),
         l1_fee: None,
         gas_price: 0,
         oracle: Vec::new(),
@@ -357,8 +364,42 @@ pub fn three_writes() -> Vec<u8> {
     Asm::new().sstore(1, 1).sstore(2, 1).sstore(3, 1).stop().build()
 }
 
-/// Every scenario of the run: the base list, then the `p6`, `p7`, `q2`, `fz`, `q8`, `cap`, `edge`
-/// and `bd` groups.
+/// The hand-written scenarios: the base list, then the `p6`, `p7`, `q2`, `q8`, `cap`, `edge` and
+/// `bd` groups, each with the chain's accounts ([`add_chain_accounts`]).
+pub fn hand_written() -> Vec<Scenario> {
+    let mut v = all();
+    v.extend(p6::all());
+    v.extend(p7::all());
+    v.extend(q2::all());
+    v.extend(q8::all());
+    v.extend(cap::all());
+    v.extend(edge::all());
+    v.extend(bd::all());
+    v.iter_mut().for_each(add_chain_accounts);
+    v
+}
+
+/// The scenario named `name`: a hand-written one, or a fuzz seed of any generator mode
+/// ([`fz::find`]).
+pub fn by_name(name: &str) -> Option<Scenario> {
+    hand_written().into_iter().find(|s| s.name == name).or_else(|| fz::find(name))
+}
+
+/// Gives `s` the accounts a real chain has: the L1Block predeploy and the SequencerRegistry, each
+/// with a code byte so that their slots are read below the journal on both engines (an absent
+/// account's slots are not read by evm2). An account `s` already holds at either address stays.
+pub fn add_chain_accounts(s: &mut Scenario) {
+    for a in [L1_BLOCK, SEQUENCER_REGISTRY] {
+        if !s.accounts.iter().any(|x| x.address == a) {
+            s.accounts.push(Account { address: a, code: vec![0xfe], ..Account::default() });
+        }
+    }
+}
+
+/// Every scenario of a gate run, as the environment selects them: the base list, the `p6`, `p7`
+/// and `q2` groups, the fuzz seeds of `MEGA_EVM2_FUZZ_MODE` and `MEGA_EVM2_FUZZ` ([`fz::all`]),
+/// then the `q8`, `cap`, `edge` and `bd` groups, each with the chain's accounts. `MEGA_EVM2_ONLY`
+/// (a comma-separated list of names) keeps the named ones, `MEGA_EVM2_FUZZ_ONLY=1` the fuzz seeds.
 pub fn everything() -> Vec<Scenario> {
     let mut v = all();
     v.extend(p6::all());
@@ -369,16 +410,7 @@ pub fn everything() -> Vec<Scenario> {
     v.extend(cap::all());
     v.extend(edge::all());
     v.extend(bd::all());
-    // The L1Block predeploy and the SequencerRegistry exist on a real chain: give both a code
-    // byte so their slots are read below the journal on both engines (an absent account's slots
-    // are not read by evm2).
-    for s in &mut v {
-        for a in [L1_BLOCK, SEQUENCER_REGISTRY] {
-            if !s.accounts.iter().any(|x| x.address == a) {
-                s.accounts.push(Account { address: a, code: vec![0xfe], ..Account::default() });
-            }
-        }
-    }
+    v.iter_mut().for_each(add_chain_accounts);
     if let Ok(only) = std::env::var("MEGA_EVM2_ONLY") {
         v.retain(|s| only.split(',').any(|name| name == s.name));
     }
@@ -395,22 +427,17 @@ pub const L1_BLOCK: Address =
 pub const SEQUENCER_REGISTRY: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x06]);
 
-#[path = "boundary_scenarios.rs"]
 pub mod bd;
-#[path = "cap_scenarios.rs"]
 pub mod cap;
-#[path = "edge_scenarios.rs"]
 pub mod edge;
-#[path = "fuzz_scenarios.rs"]
 pub mod fz;
-#[path = "p6_scenarios.rs"]
+mod json;
 pub mod p6;
-#[path = "p7_scenarios.rs"]
 pub mod p7;
-#[path = "q2_scenarios.rs"]
+pub mod probe;
 pub mod q2;
-#[path = "q8_scenarios.rs"]
 pub mod q8;
+pub mod record;
 
 /// The base scenarios (group "p5").
 pub fn all() -> Vec<Scenario> {

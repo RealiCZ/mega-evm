@@ -35,7 +35,8 @@ run cargo clippy -p mega-evm2 --all-targets --locked -- -D warnings
 run cargo clippy -p mega-evm2 --all-targets --features compare --locked -- -D warnings
 run cargo clippy -p op-evm2 --all-targets --locked -- -D warnings
 run cargo clippy -p mega-evm2-diff --all-targets --locked -- -D warnings
-run cargo test --locked -p mega-evm2 -p op-evm2
+run cargo clippy -p mega-evm2-scenarios --all-targets --locked -- -D warnings
+run cargo test --locked -p mega-evm2 -p op-evm2 -p mega-evm2-scenarios
 run cargo test --locked -p mega-evm2-diff --lib
 run cargo test --locked -p mega-evm2-diff --test known_differences
 run cargo bench --locked -p mega-evm2-diff --bench engine --no-run

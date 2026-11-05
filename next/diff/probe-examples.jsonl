@@ -1,0 +1,11 @@
+# Inputs for `diff/scripts/probe.sh`: one JSON object per line; the keys are documented in
+# `diff/shared/src/probe.rs`. Each line names a scenario as its `base` and overrides some fields,
+# or is a whole scenario.
+{"name": "ctl_sstore_growth_limit_u64_max", "base": "ctl_sstore", "growth_limit": 18446744073709551615}
+{"name": "ctl_sstore_kv_limit_one_cap_ten", "base": "ctl_sstore", "kv_limit": 1, "cap": 10}
+{"name": "top_ripemd160_cap_at_its_price", "base": "edge_top_ripemd160_sender_is_beneficiary", "cap": 720}
+{"name": "salt_sstore_capacity_zero", "base": "p6_salt_sstore_set_m1", "salt": [["0x00000000000000000000000000000000000000bb", 0, 0]]}
+{"name": "salt_sstore_capacity_between_multiples", "base": "p6_salt_sstore_set_m1", "salt_capacity": [["0x00000000000000000000000000000000000000bb", 0, 700]]}
+{"name": "fund_then_create_then_destroy", "base": "ctl_sstore", "accounts": [{"address": "0x10000000000000000000000000000000000000a0", "code": "0x5f5f5f5f600173e1f6e702e6ecb72736b0be3faa0694c685cfb8365af1507f7310000000000000000000000000000000000000a0ff000000000000000000005f5260165f5ff05000", "balance": 10, "nonce": 1}]}
+{"name": "fuzz_seed_sender_is_beneficiary", "base": "fqh0042", "beneficiary": "0x5050505050505050505050505050505050505050"}
+{"name": "identity_from_beneficiary", "to": "0x0000000000000000000000000000000000000004", "data": "0x00ff", "beneficiary": "0x5050505050505050505050505050505050505050", "cap": 10}

@@ -93,16 +93,10 @@ impl fmt::Display for Case {
     }
 }
 
-/// The scenario name of fuzz `mode`'s seed `seed`, as `shared/fuzz_scenarios.rs` names it (a
-/// control selects its one scenario by this name; a different name selects nothing, and the
-/// control's baseline fails).
+/// The scenario name of fuzz `mode`'s seed `seed`, as the generator names it (a control selects its
+/// one scenario by this name; a different name selects nothing, and the control's baseline fails).
 pub fn fuzz_name(mode: u8, seed: u64) -> String {
-    match mode {
-        1 => format!("fz{seed:03}"),
-        2 => format!("fh{seed:04}"),
-        3 => format!("fq{seed:04}"),
-        _ => format!("fqh{seed:04}"),
-    }
+    mega_evm2_scenarios::fz::name(mode, seed)
 }
 
 /// Parses the manifest, the `[[control]]` tables first. Fails on an unknown table, a missing or
@@ -161,8 +155,8 @@ fn control(kind: Kind, t: &toml::Table) -> Result<Control, String> {
         Gate::Fuzz => {
             let mode = int("mode")?;
             let seed = int("seed")?;
-            if !(1..=4).contains(&mode) {
-                return Err(format!("fuzz `mode` {mode} is not 1..=4"));
+            if !mega_evm2_scenarios::fz::MODES.iter().any(|m| i64::from(m.0) == mode) {
+                return Err(format!("fuzz `mode` {mode} is not a mode of the generator"));
             }
             if seed < 1 {
                 return Err(format!("fuzz `seed` {seed} is not positive"));

@@ -1,8 +1,17 @@
-//! Seeded random compositions (group "fz"): programs built from mechanism fragments (fresh and
+//! The fuzz generator (group "fz"): seeded random inputs, the same bytes on both engines.
+//!
+//! Modes 1 to 4 are random compositions: programs built from mechanism fragments (fresh and
 //! restoring writes, logs, value/zero-value calls of every scheme to code, empty accounts and
 //! precompiles, creations with deposits, block-environment reads, memory, account opcodes,
 //! reverts, halts, loops, self-destruction), random caps, limits, SALT multipliers, gas
-//! (below/above the execution cap, thin reservoirs) and deposits. Same bytes on both engines.
+//! (below/above the execution cap, thin reservoirs) and deposits. Mode 2 is harsher (tighter caps
+//! and gas, deeper calls), mode 3 adds the later mechanisms (EIP-7702 lists, keyless deployments,
+//! `MegaAccessControl`, Oracle hints and reads, the precompile catalogue), mode 4 both. Modes 1
+//! and 2 stay byte-identical to the original generator's.
+//!
+//! A gate selects a mode with `MEGA_EVM2_FUZZ_MODE` (default 1) and the seeds with
+//! `MEGA_EVM2_FUZZ=first..=last` (default `1..=400`); a seed's scenario name ([`name`]) states
+//! both.
 #![allow(dead_code)]
 use super::{
     A, Account, Asm, Auth, B, C, D, EMPTY, IDENTITY, KEYLESS, Limits, ORACLE, Scenario,
@@ -12,10 +21,14 @@ use super::{
 };
 use alloy_primitives::{Address, U256};
 
-struct Rng(u64);
+pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    /// The generator of seed `seed`.
+    pub(crate) fn for_seed(seed: u64) -> Self {
+        Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1)
+    }
+    pub(crate) fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -23,13 +36,13 @@ impl Rng {
         self.0 = x;
         x
     }
-    fn below(&mut self, n: u64) -> u64 {
+    pub(crate) fn below(&mut self, n: u64) -> u64 {
         self.next() % n
     }
-    fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+    pub(crate) fn pick<T: Copy>(&mut self, v: &[T]) -> T {
         v[self.below(v.len() as u64) as usize]
     }
-    fn chance(&mut self, pct: u64) -> bool {
+    pub(crate) fn chance(&mut self, pct: u64) -> bool {
         self.below(100) < pct
     }
 }
@@ -38,16 +51,94 @@ const SHA256: Address = Address::with_last_byte(2);
 const EMPTY2: Address =
     Address::new([0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe2]);
 
-/// One stack-neutral fragment. `depth` 0 = A, 1 = B, 2 = C (C makes no calls).
-fn harsh() -> bool {
-    std::env::var("MEGA_EVM2_FUZZ_MODE").is_ok_and(|m| m == "2" || m == "4")
+/// The generator modes: `(mode, name prefix, seed digits)`. A seed's name is the prefix and the
+/// seed, zero-padded to the digits; the names are part of the reference outputs.
+pub const MODES: [(u8, &str, usize); 4] = [(1, "fz", 3), (2, "fh", 4), (3, "fq", 4), (4, "fqh", 4)];
+
+/// The scenario name of seed `seed` of mode `mode`.
+pub fn name(mode: u8, seed: u64) -> String {
+    let (_, prefix, digits) =
+        MODES.iter().find(|m| m.0 == mode).unwrap_or_else(|| panic!("unknown fuzz mode {mode}"));
+    format!("{prefix}{seed:0digits$}")
 }
 
-/// `MEGA_EVM2_FUZZ_MODE=3` (default generator) and `4` (harsh) add the later mechanisms: EIP-7702
-/// lists, keyless deployments, `MegaAccessControl`, Oracle hints and reads, the precompile
-/// catalogue. Modes 1 and 2 stay byte-identical to the original generator's.
-fn mechanisms_mode() -> bool {
-    std::env::var("MEGA_EVM2_FUZZ_MODE").is_ok_and(|m| m == "3" || m == "4")
+/// The mode and seed a fuzz scenario name states, if it is one.
+pub fn parse_name(name: &str) -> Option<(u8, u64)> {
+    let mut modes = MODES;
+    // The longest prefix first: "fqh" before "fq".
+    modes.sort_by_key(|m| core::cmp::Reverse(m.1.len()));
+    modes.iter().find_map(|(mode, prefix, _)| {
+        let digits = name.strip_prefix(prefix)?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let seed = digits.parse().ok()?;
+        (self::name(*mode, seed) == name).then_some((*mode, seed))
+    })
+}
+
+/// The mode `MEGA_EVM2_FUZZ_MODE` selects: 1 when unset; a value that names no mode panics.
+pub fn mode_from_env() -> u8 {
+    match std::env::var("MEGA_EVM2_FUZZ_MODE") {
+        Err(_) => 1,
+        Ok(m) => m
+            .parse()
+            .ok()
+            .filter(|m| MODES.iter().any(|x| x.0 == *m))
+            .unwrap_or_else(|| panic!("MEGA_EVM2_FUZZ_MODE={m} names no fuzz mode")),
+    }
+}
+
+/// The seeds `MEGA_EVM2_FUZZ=first..=last` selects; `1..=400` when unset or malformed.
+pub fn seeds_from_env() -> (u64, u64) {
+    std::env::var("MEGA_EVM2_FUZZ")
+        .ok()
+        .and_then(|v| {
+            let (a, b) = v.split_once("..=")?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        })
+        .unwrap_or((1u64, 400u64))
+}
+
+/// The scenarios of seeds `first..=last` of mode `mode`.
+pub fn generate(mode: u8, first: u64, last: u64) -> Vec<Scenario> {
+    (first..=last).map(|seed| seed_scenario(mode, seed)).collect()
+}
+
+/// The scenario of seed `seed` of mode `mode`.
+pub fn seed_scenario(mode: u8, seed: u64) -> Scenario {
+    let mut s = match mode {
+        1 => composition(Gen { harsh: false, mechanisms: false }, seed),
+        2 => composition(Gen { harsh: true, mechanisms: false }, seed),
+        3 => composition(Gen { harsh: false, mechanisms: true }, seed),
+        4 => composition(Gen { harsh: true, mechanisms: true }, seed),
+        _ => panic!("unknown fuzz mode {mode}"),
+    };
+    s.name = Box::leak(name(mode, seed).into_boxed_str());
+    s.group = "fz";
+    s
+}
+
+/// The fuzz scenario named `name`, of any mode ([`parse_name`]), with the chain's accounts.
+pub fn find(name: &str) -> Option<Scenario> {
+    let (mode, seed) = parse_name(name)?;
+    let mut s = seed_scenario(mode, seed);
+    super::add_chain_accounts(&mut s);
+    Some(s)
+}
+
+/// The seeds of `MEGA_EVM2_FUZZ` of the mode of `MEGA_EVM2_FUZZ_MODE`.
+pub fn all() -> Vec<Scenario> {
+    let (first, last) = seeds_from_env();
+    generate(mode_from_env(), first, last)
+}
+
+/// What a composition mode adds: harsh caps, gas and call depth (modes 2 and 4), the later
+/// mechanisms (modes 3 and 4).
+#[derive(Clone, Copy)]
+struct Gen {
+    harsh: bool,
+    mechanisms: bool,
 }
 
 /// A later-mechanism fragment (stack-neutral).
@@ -130,9 +221,10 @@ fn mechanism_fragment(r: &mut Rng) -> Asm {
     }
 }
 
-fn fragment(r: &mut Rng, depth: u8) -> Asm {
+/// One stack-neutral fragment. `depth` 0 = A, 1 = B, 2 = C (C makes no calls).
+fn fragment(g: Gen, r: &mut Rng, depth: u8) -> Asm {
     let a = Asm::new();
-    if mechanisms_mode() && r.chance(25) {
+    if g.mechanisms && r.chance(25) {
         return mechanism_fragment(r);
     }
     match r.below(if depth >= 2 { 9 } else { 13 }) {
@@ -169,7 +261,7 @@ fn fragment(r: &mut Rng, depth: u8) -> Asm {
             }
             let to = if depth == 0 {
                 r.pick(&[B, B, C, EMPTY, EMPTY2, IDENTITY, SHA256])
-            } else if harsh() {
+            } else if g.harsh {
                 // deeper: B and C may call each other (and A), bounded by gas and depth
                 r.pick(&[A, B, C, C, EMPTY, IDENTITY, SHA256])
             } else {
@@ -191,10 +283,10 @@ fn fragment(r: &mut Rng, depth: u8) -> Asm {
     }
 }
 
-fn program(r: &mut Rng, depth: u8) -> Vec<u8> {
+fn program(g: Gen, r: &mut Rng, depth: u8) -> Vec<u8> {
     let mut a = Asm::new();
     for _ in 0..(r.below(6) + 1) {
-        a = a.ops(&fragment(r, depth).build());
+        a = a.ops(&fragment(g, r, depth).build());
     }
     let mut code = a.build();
     match r.below(12) {
@@ -215,104 +307,83 @@ fn program(r: &mut Rng, depth: u8) -> Vec<u8> {
     code
 }
 
-pub fn all() -> Vec<Scenario> {
-    let mut v = Vec::new();
-    // `MEGA_EVM2_FUZZ=first..=last` selects other seeds (both engines read it); default 1..=400.
-    let (first, last) = std::env::var("MEGA_EVM2_FUZZ")
-        .ok()
-        .and_then(|v| {
-            let (a, b) = v.split_once("..=")?;
-            Some((a.parse().ok()?, b.parse().ok()?))
-        })
-        .unwrap_or((1u64, 400u64));
-    for seed in first..=last {
-        let mut r = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
-        let h = harsh();
-        let gas = if h {
-            r.pick(&[300_000u64, 1_000_000, 3_000_000, 200_020_000, 200_060_000, 200_300_000])
+/// A random composition (modes 1 to 4) of seed `seed`; [`seed_scenario`] names it.
+fn composition(g: Gen, seed: u64) -> Scenario {
+    let mut r = Rng::for_seed(seed);
+    let h = g.harsh;
+    let gas = if h {
+        r.pick(&[300_000u64, 1_000_000, 3_000_000, 200_020_000, 200_060_000, 200_300_000])
+    } else {
+        r.pick(&[1_000_000u64, 3_000_000, 210_000_000, 200_100_000, 200_500_000])
+    };
+    let mut limits = Limits::default();
+    if r.chance(if h { 75 } else { 40 }) {
+        limits.block_env_cap = Some(if h {
+            r.pick(&[500u64, 1_200, 3_000, 8_000, 25_000, 90_000])
         } else {
-            r.pick(&[1_000_000u64, 3_000_000, 210_000_000, 200_100_000, 200_500_000])
-        };
-        let mut limits = Limits::default();
-        if r.chance(if h { 75 } else { 40 }) {
-            limits.block_env_cap = Some(if h {
-                r.pick(&[500u64, 1_200, 3_000, 8_000, 25_000, 90_000])
-            } else {
-                r.pick(&[2_000u64, 15_000, 60_000, 250_000, 1_000_000])
-            });
-        }
-        if r.chance(if h { 30 } else { 15 }) {
-            limits.growth = Some(r.below(4));
-        }
-        if r.chance(if h { 25 } else { 10 }) {
-            limits.kv = Some(r.below(5) + 1);
-        }
-        if r.chance(if h { 25 } else { 10 }) {
-            limits.data = Some(310 + r.pick(&[100u64, 400, 1000]));
-        }
-        let name: &'static str = Box::leak(
-            match (mechanisms_mode(), h) {
-                (true, true) => format!("fqh{seed:04}"),
-                (true, false) => format!("fq{seed:04}"),
-                (false, true) => format!("fh{seed:04}"),
-                (false, false) => format!("fz{seed:03}"),
-            }
-            .into_boxed_str(),
-        );
-        let mut s = scenario(
-            name,
-            vec![
-                Account {
-                    address: A,
-                    code: program(&mut r, 0),
-                    balance: U256::from(r.pick(&[0u64, 10])),
-                    ..Account::default()
-                },
-                Account {
-                    address: B,
-                    code: program(&mut r, 1),
-                    balance: U256::from(r.pick(&[0u64, 10])),
-                    ..Account::default()
-                },
-                Account {
-                    address: C,
-                    code: program(&mut r, if h { 1 } else { 2 }),
-                    storage: vec![(1, 1), (2, 5)],
-                    ..Account::default()
-                },
-            ],
-            gas,
-            limits,
-        );
-        s.group = "fz";
-        if r.chance(15) {
-            s.value = U256::from(1);
-        }
-        for _ in 0..r.below(4) {
-            let site = match r.below(4) {
-                0 => (A, Some(r.below(6) + 1)),
-                1 => (B, Some(r.below(6) + 1)),
-                2 => (r.pick(&[EMPTY, EMPTY2]), None),
-                _ => (r.pick(&[A.create(0), B.create(0), A.create(1)]), None),
-            };
-            s.salt.push((site.0, site.1, r.pick(&[1u64, 2, 8])));
-        }
-        if r.chance(if h { 20 } else { 10 }) {
-            s.deposit = Some(r.pick(&[0u64, 1_000_000]));
-            s.sender = Address::new([0x7e; 20]);
-        }
-        if mechanisms_mode() {
-            mechanism_transaction(&mut r, &mut s, h);
-        }
-        v.push(s);
+            r.pick(&[2_000u64, 15_000, 60_000, 250_000, 1_000_000])
+        });
     }
-    v
+    if r.chance(if h { 30 } else { 15 }) {
+        limits.growth = Some(r.below(4));
+    }
+    if r.chance(if h { 25 } else { 10 }) {
+        limits.kv = Some(r.below(5) + 1);
+    }
+    if r.chance(if h { 25 } else { 10 }) {
+        limits.data = Some(310 + r.pick(&[100u64, 400, 1000]));
+    }
+    let mut s = scenario(
+        "",
+        vec![
+            Account {
+                address: A,
+                code: program(g, &mut r, 0),
+                balance: U256::from(r.pick(&[0u64, 10])),
+                ..Account::default()
+            },
+            Account {
+                address: B,
+                code: program(g, &mut r, 1),
+                balance: U256::from(r.pick(&[0u64, 10])),
+                ..Account::default()
+            },
+            Account {
+                address: C,
+                code: program(g, &mut r, if h { 1 } else { 2 }),
+                storage: vec![(1, 1), (2, 5)],
+                ..Account::default()
+            },
+        ],
+        gas,
+        limits,
+    );
+    if r.chance(15) {
+        s.value = U256::from(1);
+    }
+    for _ in 0..r.below(4) {
+        let site = match r.below(4) {
+            0 => (A, Some(r.below(6) + 1)),
+            1 => (B, Some(r.below(6) + 1)),
+            2 => (r.pick(&[EMPTY, EMPTY2]), None),
+            _ => (r.pick(&[A.create(0), B.create(0), A.create(1)]), None),
+        };
+        s.salt.push((site.0, site.1, r.pick(&[1u64, 2, 8])));
+    }
+    if r.chance(if h { 20 } else { 10 }) {
+        s.deposit = Some(r.pick(&[0u64, 1_000_000]));
+        s.sender = Address::new([0x7e; 20]);
+    }
+    if g.mechanisms {
+        mechanism_transaction(g, &mut r, &mut s, h);
+    }
+    s
 }
 
 /// the transaction-level mechanisms on top of a random composition: the Oracle (code that
 /// reads slot 5 and logs, an answer or none, its own cap), an EIP-7702 list, or a keyless
 /// deployment as the transaction itself.
-fn mechanism_transaction(r: &mut Rng, s: &mut Scenario, h: bool) {
+fn mechanism_transaction(g: Gen, r: &mut Rng, s: &mut Scenario, h: bool) {
     let oracle_code =
         Asm::new().push(5).op(op::SLOAD).op(op::POP).push(0).push(0).op(op::LOG0).stop().build();
     s.accounts.push(Account {
@@ -340,7 +411,7 @@ fn mechanism_transaction(r: &mut Rng, s: &mut Scenario, h: bool) {
             ..Account::default()
         });
         if !s.accounts.iter().any(|a| a.address == D) {
-            s.accounts.push(Account { address: D, code: program(r, 2), ..Account::default() });
+            s.accounts.push(Account { address: D, code: program(g, r, 2), ..Account::default() });
         }
     }
     if r.chance(10) {
@@ -356,7 +427,7 @@ fn mechanism_transaction(r: &mut Rng, s: &mut Scenario, h: bool) {
             // An EIP-7702 list: 1-3 entries over X1, X2, B and the sender, delegating to B, C, D
             // (D's code is random too) or clearing; nonces mostly right; another chain, an
             // invalid signature; the transaction may call an authority.
-            s.accounts.push(Account { address: D, code: program(r, 1), ..Account::default() });
+            s.accounts.push(Account { address: D, code: program(g, r, 1), ..Account::default() });
             for _ in 0..r.below(3) + 1 {
                 let authority =
                     r.pick(&[Some(X1), Some(X1), Some(X2), Some(B), Some(s.sender), None]);

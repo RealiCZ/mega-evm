@@ -1,8 +1,7 @@
 //! Runs a shared scenario through `Evm::transact` on the Satin engine and renders the outcome
 //! in the oracle's JSON shape, with the read set recorded below the journal.
 
-#[path = "../shared/scenarios.rs"]
-pub mod scenarios;
+pub use mega_evm2_scenarios as scenarios;
 
 use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
@@ -16,35 +15,27 @@ use evm2::{
 };
 use mega_evm2::{MegaSpec, MegaTypes, ledger::*};
 use op_evm2::{OpTxEnvelope, TxDeposit};
-use scenarios::Scenario;
+use scenarios::{Scenario, record, record::hex};
 use serde_json::{Map, Value, json};
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
 pub const DEFAULT_LIMITS: [u64; 3] = [13_107_200, 500_000, 1_000];
 pub const DEFAULT_DETENTION_CAP: u64 = 20_000_000;
 
-fn hex(b: &[u8]) -> String {
-    let mut s = String::from("0x");
-    for x in b {
-        s.push_str(&format!("{x:02x}"));
-    }
-    s
-}
-
 pub fn status_of(stop: InstrStop) -> String {
     if stop.is_success() {
-        "success".into()
+        record::SUCCESS.into()
     } else if stop.is_frame_revert() {
-        "revert".into()
+        record::REVERT.into()
     } else {
-        "halt".into()
+        record::HALT.into()
     }
 }
 
 /// The `status` and `halt` fields of an outcome. op-revm reports every failed deposit as
 /// `Halt(FailedDeposit)`.
 pub fn status_halt(r: &TxResult<MegaTypes>) -> (Value, Value) {
-    let status = if r.ext.failed_deposit { json!("halt") } else { json!(status_of(r.stop)) };
+    let status = if r.ext.failed_deposit { json!(record::HALT) } else { json!(status_of(r.stop)) };
     let halt = if r.ext.failed_deposit {
         json!("FailedDeposit")
     } else if r.stop.is_halt() {
@@ -101,11 +92,11 @@ pub fn changed_json(changes: &[Change]) -> (Map<String, Value>, Map<String, Valu
             } else {
                 (cur.balance, cur.nonce, cur.code_hash)
             };
-            accounts.insert(format!("{}", c.address), json!(format!("{b}/n{n}/{h}")));
+            accounts.insert(format!("{}", c.address), json!(record::account(b, n, h)));
         }
         if !c.selfdestructed {
             for (k, v) in &c.slots {
-                storage.insert(format!("{}:{k:#x}", c.address), json!(format!("{v:#x}")));
+                storage.insert(record::slot_key(c.address, *k), json!(record::slot_value(*v)));
             }
         }
     }
@@ -348,6 +339,13 @@ pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
         };
         ext.cfg.buckets.insert(id, MIN_BUCKET_SIZE * m);
     }
+    for (a, k, capacity) in &s.salt_capacity {
+        let id = match k {
+            Some(k) => bucket_for(evm2::version::StateGasSite::Storage(*a, U256::from(*k))),
+            None => bucket_for(evm2::version::StateGasSite::Account(*a)),
+        };
+        ext.cfg.buckets.insert(id, *capacity);
+    }
     evm
 }
 
@@ -472,7 +470,7 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
     let rd = reads.borrow();
     let read_set = json!({
         "accounts": rd.accounts.iter().map(|a| format!("{a}")).collect::<Vec<_>>(),
-        "storage": rd.storage.iter().map(|(a, k)| format!("{a}:{k:#x}")).collect::<Vec<_>>(),
+        "storage": rd.storage.iter().map(|(a, k)| record::slot_key(*a, *k)).collect::<Vec<_>>(),
         "codes": rd.codes.iter().map(|h| format!("{h}")).collect::<Vec<_>>(),
         "block_hashes": rd.block_hashes.iter().collect::<Vec<_>>(),
         "buckets": ext.bucket_reads.iter().collect::<Vec<_>>(),

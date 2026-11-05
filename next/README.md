@@ -8,7 +8,11 @@ The existing engine in `crates/` (REX1–REX6, built on revm) is frozen: it keep
 
 - `mega-evm2` — the Satin engine: Satin and later specs, resource metering, system contracts and block execution.
 - `op-evm2` — a vendored OP Stack execution layer for evm2, so the engine does not depend on `op-revm`; `op-evm2/VENDORED.md` records its upstream base and every local change.
-- `diff` — the shared scenarios and the strict differential gates that compare the engine with the Satin implementation under review; `diff/data/README.md` describes the in-repo sample and the full corpus.
+- `diff` — the strict differential gates that compare the engine with the Satin implementation under review, and the engine side of the two-sided probe; `diff/data/README.md` describes the in-repo sample and the full corpus.
+- `diff/shared` — `mega-evm2-scenarios`, engine-neutral: the scenarios (the hand-written groups and the fuzz generator), the outcome record both harnesses render (`src/record.rs`) and the probe's input format (`src/probe.rs`).
+  It depends on `alloy-primitives` only; `diff` and `reference` depend on it by path.
+  It sits under `diff/shared` because CI's reference check runs on changes there.
+  `diff/shared/blockdb.rs`, the recorded-block reader of both replay harnesses, is not part of it: both include it by `#[path]`, since it parses blocks with `serde_json`.
 - `reference` — its own workspace (separate lockfile): generates the reference outputs from the Satin implementation under review, mega-evm `5e3f30ad`, which stays reachable through `refs/pull/409/head` because the repository forbids force-pushes; the pin moves only when the reference itself changes, with `regen-reference.sh`.
 - `scripts` — CI setup: `fetch-evm2-fork.sh` checks the pinned evm2 fork out next to the repository, `install-zstd.sh`.
 - `evm2-fork.env`, [`evm2-fork.md`](evm2-fork.md) — the evm2 fork pin, and what each fork patch adds, why, and when it goes.
@@ -25,6 +29,7 @@ MEGA_EVM2_CORPUS_DIR=<corpus> bash diff/scripts/gate.sh full   # the gates on th
 bash diff/scripts/controls.sh sample|full                      # negative controls
 bash diff/scripts/faults.sh                                    # fault injection
 bash diff/scripts/check-reference.sh sample                    # rebuild the reference, compare the sample
+bash diff/scripts/probe.sh diff/probe-examples.jsonl           # inputs of your own, on both sides
 cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads, plain and inspected
 ```
 
@@ -38,6 +43,14 @@ The gates run every scenario, fuzz seed and recorded transaction on both sides, 
 A difference fails a gate unless `diff/known-differences.toml` lists it: by scenario for the synthetic gate, and by set, block, transaction index and hash for the engine replay gate.
 A listed entry that differs otherwise, or no longer differs, fails too; the replay summary counts the accepted ones as `known=`.
 Each entry states its reason and whether the owner has signed it off.
+
+## Probing an input on both sides
+
+`diff/scripts/probe.sh <file.jsonl>` runs inputs no gate holds on the reference and on the engine, and judges each as the synthetic gate does (`gate::scenario_verdict`, accepted differences included).
+Each line of the file is a scenario by name (`base`: a hand-written scenario or a fuzz seed of any mode) with fields overridden, or a whole scenario; the keys are listed in `diff/shared/src/probe.rs`, and `diff/probe-examples.jsonl` has examples.
+Per input it prints both records and `MATCH`, `KNOWN` or `DIFFER [<fields>]` with each differing field's two values; the exit status is non-zero when an input differs.
+`MEGA_EVM2_DISABLE` turns engine switches off, as in the gates.
+An input that finds a difference belongs in a scenario of the gates once the difference is understood.
 
 ## Switches and negative controls
 

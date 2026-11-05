@@ -2604,10 +2604,18 @@ dependencies = [
  "alloy-op-evm",
  "alloy-primitives",
  "mega-evm",
+ "mega-evm2-scenarios",
  "op-alloy-consensus",
  "op-revm",
  "revm",
  "serde_json",
+]
+
+[[package]]
+name = "mega-evm2-scenarios"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
 ]
 
 [[package]]

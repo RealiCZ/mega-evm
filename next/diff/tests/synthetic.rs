@@ -4,7 +4,7 @@
 //!
 //! Environment: `MEGA_EVM2_ORACLE` (the reference output file), `MEGA_EVM2_GATE_NAME` (the name in
 //! the summary line, default `main`), `MEGA_EVM2_EXPECT` (the expected scenario count), and the
-//! scenario selectors of `shared/scenarios.rs` (`MEGA_EVM2_FUZZ*`, `MEGA_EVM2_ONLY`).
+//! scenario selectors of `mega_evm2_scenarios::everything` (`MEGA_EVM2_FUZZ*`, `MEGA_EVM2_ONLY`).
 //! Output: the `GATE` summary line; `MEGA_EVM2_OUT` additionally writes every comparison.
 //! Every reference entry must belong to a selected scenario: an extra one is a difference. A run
 //! that selects scenarios by name (`MEGA_EVM2_ONLY`) leaves the others out on purpose; it is a
@@ -52,24 +52,8 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
         };
         let plain = run(&s, false);
         let insp = run(&s, true);
-        let mut diffs = gate::differences(o, &plain);
-        if o["inspected_equal"] != true {
-            diffs.push("reference_plain_vs_inspected".into());
-        }
-        diffs.extend(
-            gate::same_engine_differences(&plain, &insp)
-                .into_iter()
-                .map(|k| format!("candidate_inspected:{k}")),
-        );
-        if o.get("error").is_none() &&
-            insp.get("error").is_none() &&
-            let Some(d) = gate::frames_diff(&o["frames"], &insp["frames"])
-        {
-            diffs.push(d);
-        }
         let group = groups.entry(s.group).or_default();
-        let verdict =
-            gate::classify(&known, s.name, diffs, o, &plain, (&o["frames"], &insp["frames"]));
+        let verdict = gate::scenario_verdict(&known, s.name, o, &plain, &insp);
         match &verdict {
             Verdict::Match => {
                 matched += 1;

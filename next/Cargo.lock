@@ -2347,9 +2347,17 @@ dependencies = [
  "codspeed-criterion-compat",
  "evm2",
  "mega-evm2",
+ "mega-evm2-scenarios",
  "op-evm2",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "mega-evm2-scenarios"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
 ]
 
 [[package]]

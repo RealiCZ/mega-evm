@@ -1,0 +1,15 @@
+[package]
+name = "mega-evm2-scenarios"
+description = "Engine-neutral differential scenarios, fuzz generator and probe inputs for the Satin engine and its reference."
+# Not inherited from the `next/` workspace: `next/reference` (its own workspace) depends on this
+# crate too, and an inherited dependency would carry `next/`'s requirements into its lockfile.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# alloy
+# "1.6": the version `next/reference`'s lockfile holds; `next/` resolves a later 1.x.
+alloy-primitives = { version = "1.6", default-features = false, features = ["rlp", "std"] }

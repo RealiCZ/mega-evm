@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["mega-evm2", "op-evm2", "diff"]
+members = ["mega-evm2", "op-evm2", "diff", "diff/shared"]
 exclude = ["reference"]
 
 [workspace.package]

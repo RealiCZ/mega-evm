@@ -9,6 +9,7 @@
 //! Account lifecycle flags cover changed accounts, not journal-internal touched-only entries.
 //! Block net state compares changed account info and slots, not internal bundle/wipe encodings.
 //! Every other emitted semantic field is compared; missing fields and unknown kinds fail closed.
+use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -179,6 +180,54 @@ pub fn classify(
         }
     }
     if remaining.is_empty() { Verdict::Known } else { Verdict::Differ(remaining) }
+}
+
+/// The differences of one scenario of the synthetic gate: a record without exactly the fields
+/// its harness renders (`record_fields:<harness>:<what>`, [`record::check_fields`]), between the
+/// reference's record `reference` and the engine's plain record `plain` ([`differences`]), the
+/// reference's own plain and inspected runs disagreeing (`reference_plain_vs_inspected`), the
+/// engine's plain and inspected records disagreeing (`candidate_inspected:<field>`,
+/// [`same_engine_differences`]) and the frames the reference and the inspected engine recorded
+/// ([`frames_diff`], when neither refused the transaction).
+pub fn scenario_differences(reference: &Value, plain: &Value, inspected: &Value) -> Vec<String> {
+    let mut diffs = Vec::new();
+    for (harness, r) in
+        [(Harness::Reference, reference), (Harness::Engine, plain), (Harness::Engine, inspected)]
+    {
+        let keys = r.as_object().expect("outcome object").keys().map(String::as_str);
+        if let Err(e) = record::check_fields(harness, keys) {
+            diffs.push(format!("record_fields:{harness:?}:{e}"));
+        }
+    }
+    diffs.extend(differences(reference, plain));
+    if reference["inspected_equal"] != true {
+        diffs.push("reference_plain_vs_inspected".into());
+    }
+    diffs.extend(
+        same_engine_differences(plain, inspected)
+            .into_iter()
+            .map(|k| format!("candidate_inspected:{k}")),
+    );
+    if reference.get("error").is_none() &&
+        inspected.get("error").is_none() &&
+        let Some(d) = frames_diff(&reference["frames"], &inspected["frames"])
+    {
+        diffs.push(d);
+    }
+    diffs
+}
+
+/// The verdict of the synthetic gate on scenario `name`: its [`scenario_differences`],
+/// [`classify`]d against the accepted differences `known`.
+pub fn scenario_verdict(
+    known: &[Known],
+    name: &str,
+    reference: &Value,
+    plain: &Value,
+    inspected: &Value,
+) -> Verdict {
+    let diffs = scenario_differences(reference, plain, inspected);
+    classify(known, name, diffs, reference, plain, (&reference["frames"], &inspected["frames"]))
 }
 
 /// The counts of a gate's summary line, when `MEGA_EVM2_EXPECT` names them (the summary line
@@ -371,18 +420,8 @@ pub fn same_engine_differences(a: &Value, b: &Value) -> Vec<String> {
     keys.into_iter().filter(|k| a.get(*k) != b.get(*k)).cloned().collect()
 }
 
-/// The frame keys [`frames_diff`] compares.
-const FRAME_KEYS: [&str; 9] = [
-    "kind",
-    "level",
-    "gas_limit",
-    "reservoir",
-    "value",
-    "status",
-    "output",
-    "gas_left",
-    "reservoir_left",
-];
+/// The frame keys [`frames_diff`] compares: every key of a recorded frame.
+const FRAME_KEYS: [&str; 9] = mega_evm2_scenarios::record::FRAME;
 
 /// Whether `d` is a difference [`frames_diff`] reported.
 fn is_frames_difference(d: &str) -> bool {

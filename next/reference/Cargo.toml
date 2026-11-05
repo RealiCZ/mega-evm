@@ -21,6 +21,9 @@ publish = false
 # diff/scripts/regen-reference.sh then.
 mega-evm = { git = "https://github.com/megaeth-labs/mega-evm", rev = "5e3f30ad4692f3815105dea1368f789f032ddd2b", features = ["test-utils"] }
 
+# The shared scenarios and outcome record (`next/diff/shared`).
+mega-evm2-scenarios = { path = "../diff/shared" }
+
 # revm: the crates.io version the megaeth fork is based on; the patch below redirects it.
 revm = { version = "=40.0.3" }
 op-revm = { git = "https://github.com/ethereum-optimism/optimism", rev = "f67d87cd5c9992b62d215c043917b94e3f019629" }
