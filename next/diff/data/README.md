@@ -23,7 +23,7 @@ Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q
 
 Corpus `d4` holds blocks sampled across the whole history of the chain, so it covers the early specs; corpus `p9` is 200 consecutive blocks of the current spec.
 The sample takes 14 blocks of `d4` and 6 of `p9`.
-It leaves out the huge `d4` block 6780842 (21,153 transactions, 24 MiB); it is the only block with block data-size refusals, so the sample has none of those.
+It leaves out the huge `d4` block 6780842 (21,153 transactions, 23 MiB); it is the only block with block data-size refusals, so the sample has none of those.
 
 | Block (set:number)                          | Why                                                                                                                            |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
