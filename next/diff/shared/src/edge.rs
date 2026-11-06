@@ -1018,6 +1018,78 @@ fn value_returned_to_sender() -> Vec<Scenario> {
     v
 }
 
+/// A ModExp call after a read of volatile data (the default cap), a counted loop spending compute
+/// first: the lengths (base, exponent, modulus) and the forward, from the code
+/// `TIMESTAMP POP <loop> <lengths> CALL(forward, 0x05, 0, 0, 0x60, 0, 0) POP STOP`.
+fn modexp_over_bound() -> Vec<Scenario> {
+    let detained = |iterations: u32, base: u16, forward: u32| {
+        let mut code = hex::decode("4250").unwrap();
+        code.push(op::PUSH1 + 2);
+        code.extend_from_slice(&iterations.to_be_bytes()[1..]);
+        code.extend(hex::decode("5b600190038061000657507f").unwrap());
+        let mut word = [0u8; 32];
+        word[30..].copy_from_slice(&base.to_be_bytes());
+        code.extend_from_slice(&word);
+        code.extend(hex::decode("5f527f").unwrap());
+        word = [0u8; 32];
+        word[31] = 1;
+        code.extend_from_slice(&word);
+        code.extend(hex::decode("6020527f").unwrap());
+        code.extend_from_slice(&word);
+        code.extend(
+            hex::decode("6040525f5f60605f5f730000000000000000000000000000000000000005").unwrap(),
+        );
+        code.push(op::PUSH1 + 2);
+        code.extend_from_slice(&forward.to_be_bytes()[1..]);
+        code.extend(hex::decode("f15000").unwrap());
+        code
+    };
+    let mut v = Vec::new();
+    for (name, iterations, base, forward, gas) in [
+        (
+            "edge_modexp_over_bound_detained_allowance_above_500",
+            0x0b_b9f4u32,
+            1_025u16,
+            1_000_000u32,
+            30_000_000u64,
+        ),
+        (
+            "edge_modexp_over_bound_detained_allowance_below_500",
+            0x0b_bcbf,
+            1_025,
+            20_000,
+            30_000_000,
+        ),
+        ("edge_modexp_at_bound_detained", 0x0b_b9f4, 1_024, 1_000_000, 30_000_000),
+        ("edge_modexp_over_bound_base_20000_detained", 0x04_b1ec, 20_000, 15_000_000, 60_000_000),
+    ] {
+        v.push(edge(
+            name,
+            vec![acct(A, detained(iterations, base, forward))],
+            gas,
+            Limits::default(),
+        ));
+    }
+    let lengths = |base: u8| {
+        let mut input = vec![0u8; 96];
+        input[30] = 0x04;
+        input[31] = base;
+        input[63] = 1;
+        input[95] = 1;
+        input
+    };
+    for (name, data, gas) in [
+        ("edge_modexp_over_bound_undetained", lengths(0x01), 200_000u64),
+        ("edge_modexp_huge_lengths_forward_below_formula", vec![0x12, 0x34, 0x56, 0x78], 152_696),
+    ] {
+        let mut s = edge(name, vec![], gas, Limits::default());
+        s.to = Address::with_last_byte(5);
+        s.data = data;
+        v.push(s);
+    }
+    v
+}
+
 pub fn all() -> Vec<Scenario> {
     let mut v = system_address();
     v.extend(destroyed_leaf());
@@ -1042,5 +1114,6 @@ pub fn all() -> Vec<Scenario> {
     v.extend(first_frame_over_limit());
     v.extend(dupn_deeper_than_stack());
     v.extend(value_returned_to_sender());
+    v.extend(modexp_over_bound());
     v
 }

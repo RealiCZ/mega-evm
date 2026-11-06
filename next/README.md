@@ -45,9 +45,10 @@ A fix on the reference's side is a change to the Satin implementation itself; un
 A difference fails a gate unless `diff/known-differences.toml` lists it: by scenario for the synthetic gate, and by set, block, transaction index and hash for the engine replay gate.
 A listed entry that differs otherwise, or no longer differs, fails too; the summaries count the accepted ones as `known=`.
 Each entry states its reason and whether the owner has signed it off.
-Two classes of differences are accepted by their shape instead of case by case (`[[class]]` tables), because generated and probed inputs reach them under any name.
+Three classes of differences are accepted by their shape instead of case by case (`[[class]]` tables), because generated and probed inputs reach them under any name.
 `halted_first_frame` (`gate::halted_first_frame`) is evm2 #871's halted first frame: a case without an entry of its own whose only difference is that the reference recorded no frame and the engine one halted level-0 frame, of a transaction that ran out of gas or is a failed deposit.
 `invalid_immediate_label` (`gate::invalid_immediate_label`) is the halt label of DUPN, SWAPN and EXCHANGE with an immediate EIP-8024 rejects: a case whose only difference is `halt`, `OpcodeNotFound` against `InvalidImmediateEncoding`.
+`dupn_depth_label` (`gate::dupn_depth_label`) is the halt label of a DUPN whose operand is deeper than the stack: a case whose only difference is `halt`, `StackOverflow` against `StackUnderflow`.
 Such a case is accepted and counted as `class=`; any other field that differs, or any other shape, fails it.
 The `class=` counts are pinned like the others: `MAIN_EXPECT`, `SAMPLE_FUZZ_CLASS` and `FULL_FUZZ_CLASS` in `diff/scripts/common.sh`, and `count_expected.py` for the replay gate (an applied transaction no entry lists whose reference recorded no frame).
 

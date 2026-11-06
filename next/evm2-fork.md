@@ -7,7 +7,7 @@ The earlier series, branch `cz/feat/thin-fork` at `91576d1e`, is left as it was,
 
 A patch exists only when the engine needs something evm2 cannot give it from outside: data from inside evm2's own flow, or a hook point.
 Every patch keeps stock behavior as its default, and each says what upstream change would let it go.
-One patch, `04f0e24f`, is a stock fix instead: it moves an instruction to revm's order, which evm2 follows, and is written to be proposed upstream as it is.
+Two patches, `04f0e24f` and `de8c5cd0`, are stock fixes instead: each moves a check to revm's order, which evm2 follows, and is written to be proposed upstream as it is.
 The engine also uses two upstream changes that are already in the base: `call_with` / `create_with` ([#887](https://github.com/alloy-rs/evm2/pull/887)) and reservoir-funded state gas in `system_call` totals ([#842](https://github.com/alloy-rs/evm2/pull/842)).
 
 | Patch                                                                               | Adds                                                             | Size     | Upstream                                                                                                                  | Drop when upstream                                                                         |
@@ -22,14 +22,16 @@ The engine also uses two upstream changes that are already in the base: `call_wi
 | `82427081` make the EIP-8037 total transaction gas cap configurable                 | `Version::tx_total_gas_cap`                                      | +51/−2   | PR [#1023](https://github.com/alloy-rs/evm2/pull/1023), open                                                              | lets a chain set or disable the total cap, default unchanged                               |
 | `2789b9e5` let a type family refuse an instruction's account load                   | `EvmTypesHost::before_account_load`, `AccountLoadSite`           | +395/−5  | none yet                                                                                                                  | lets a type family stop an instruction at its own account load                             |
 | `04f0e24f` pop CREATE2's salt after the init-code and memory charges                | none (instruction order)                                         | +33/−1   | not yet proposed                                                                                                          | pops CREATE2's salt after the init-code charge and the memory expansion                    |
+| `de8c5cd0` check ModExp's EIP-7823 bound before its formula price                   | none (precompile order)                                          | +32/−22  | not yet proposed                                                                                                          | checks the EIP-7823 bound before the formula price                                         |
+| `91518705` let a type family act on the transaction before its first frame          | `TxHandlerHooks::before_initial_frame`                           | +375/−45 | not yet proposed                                                                                                          | has a handler hook before the first frame that can charge the transaction or settle it     |
 
-Size is the commit's own stat against its parent; most of the insertions of `09965c55`, `9df29b6a`, `2789b9e5` and `04f0e24f` are tests.
-Upstream order, smallest and least contested first: `2227aa3c`, `82427081` (both filed), `04f0e24f`, `68547bdf`, `f623a776`, `099810ca` with the halt record of `09965c55`, `9df29b6a`, the rest of `09965c55`, `2789b9e5`, and `70bbeb67` last, because it runs on every message.
+Size is the commit's own stat against its parent; most of the insertions of `09965c55`, `9df29b6a`, `2789b9e5`, `04f0e24f` and `91518705` are tests.
+Upstream order, smallest and least contested first: `2227aa3c`, `82427081` (both filed), `04f0e24f`, `de8c5cd0`, `91518705`, `68547bdf`, `f623a776`, `099810ca` with the halt record of `09965c55`, `9df29b6a`, the rest of `09965c55`, `2789b9e5`, and `70bbeb67` last, because it runs on every message.
 
 ## The patches
 
 Each engine rule a patch serves sits behind a named switch with a negative control in `diff/negative-controls.toml` (a harness switch for `68547bdf`); turning the switch off makes the control's case differ from the reference.
-`82427081`'s setting is a version constant, proved by tests instead, and `04f0e24f` changes evm2's own instruction, which the `edge_create2_*` scenarios show.
+`82427081`'s setting is a version constant, proved by tests instead; `04f0e24f` and `de8c5cd0` change evm2's own instruction and precompile, which the `edge_create2_*` scenarios and the ModExp probes show; `91518705` carries the start-record charge, whose switches (`start_at_runtime`, `tx_spill_unwind`) have their controls.
 
 ### `70bbeb67` static message hooks
 
@@ -156,6 +158,30 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   evm2 follows revm's control flow and gas accounting, so the change can be proposed as it is.
 - **Drop** when upstream pops CREATE2's salt after the init-code charge and the memory expansion.
 
+### `de8c5cd0` ModExp's EIP-7823 bound order
+
+- **API.** None: `run_inner` charges the minimum price, reads the three lengths, refuses an Osaka input over EIP-7823's 1,024-byte bound with `ModexpEip7823LimitSize`, and only then prices the input by its formula, as revm-precompile's `run_inner` does (the same order in revm-precompile 43.0.3, which `next/` locks, and in the reference's revm `4c8f0d43`: minimum gas, the length casts, the EIP-7823 bound, the formula price, the zero-length case).
+  An over-bound input costs the minimum price whatever its formula, and gas below the minimum is still out of gas (`oversized_lengths_are_rejected_after_the_minimum_price`, which replaces upstream's test of the old order).
+- **Why.** Satin decides a precompile call under detention from its price (the engine's `precompile_price_of` probes the failed charges): with the formula first, an over-bound input was priced at the cost of a computation that is never made, so a detained call the reference runs and burns was stopped, and one the reference stops ran.
+  Without detention only the error of an over-bound input whose gas lies between the minimum and the formula price changes, from out of gas to the EIP-7823 error; the call's gas is burned either way.
+  revm also refuses a base or modulus length that does not fit a `usize` with the EIP-7823 error on every fork; evm2 charges it out of gas before Osaka (the same gas), which this patch leaves.
+  No switch: the order is evm2's own.
+- **Upstream.** Not yet proposed; written to be proposed as it is.
+- **Drop** when upstream checks the EIP-7823 bound before the formula price.
+
+### `91518705` the first-frame hook
+
+- **API.** `TxHandlerHooks::before_initial_frame(host, envelope, tx_gas) -> HandlerResult<Option<MessageResult<T>>>` runs in every standard `execute_prepared` (legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702) after the pre-execution changes and the transaction environment, immediately before `prepare_initial_frame`, on the transaction-level gas tracker; EIP-7702 runs it after its authorizations are applied.
+  A family may charge `tx_gas` (the charge is the transaction's, kept whatever the first frame's execution does; its spill is unwound by a reservoir the first frame returns), or return a result that `settle_transaction` settles without a frame (an EIP-7702 transaction then keeps none of its delegations).
+  The default returns `Ok(None)`, inlined and statically dispatched like the other hooks.
+  Tests cover the default's placement (after the environment, the nonce bump and the delegations, once, on the gas the first frame starts from) and both non-default uses on every envelope (`tests::before_initial_frame`).
+- **Why.** Satin validates a transaction's gas against the intrinsic gas and the body's history and charges the first frame's start record after validation, before the first frame; a transaction that cannot pay it is included as an out-of-gas that runs no frame.
+  The engine charges it in `MegaHooks::before_initial_frame` and runs types 0, 1 and 2 through evm2's own `execute_prepared`; it used to restate that function, and the restatement took a creation's nonce from the envelope instead of the prepared state nonce (`nonce_check_off` tests).
+  Charging on the transaction's tracker also records the record's spill where evm2's merge unwinds it, which replaced the engine's special case for a creation destroyed in its constructor.
+  Controls: `start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`.
+- **Upstream.** Not yet proposed.
+- **Drop** when upstream has a handler hook before the first frame that can charge the transaction's gas or settle it without a frame.
+
 ## Dropped from the earlier series
 
 - The rebase of open upstream PR [#523](https://github.com/alloy-rs/evm2/pull/523) (native precompile calls): the engine answers `MegaLimitControl` and `MegaAccessControl` from `MessageHooks::before`, which runs before dispatch.
@@ -168,6 +194,8 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 
 The engine's mirrored EIP-7702 path (`mega-evm2/src/eip7702.rs`) settles a runtime-gas-phase out-of-gas without a frame, unlike upstream's `eip7702::execute_prepared`, which reports a halted first frame.
 It is left as a follow-up; the reference opens no frame there either, so no gate shows it.
+The first-frame hook does not let that path go: Satin decides the list rule before the list is applied (a list it skips is never applied), needs the accepted authorities for their records and growth, and detains a transaction whose applied authority is the beneficiary; evm2's `execute_prepared` applies the list with its own accounting and offers no seam for those three.
+Its first frame takes no nonce from the envelope that matters: an EIP-7702 transaction cannot create.
 
 ## Rules for the next rebase
 
@@ -197,10 +225,11 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
   Give a new site its engine decision in `refuses_load`; the controls `refuse_at_load`, `refusal_gas` and `delegate_refusal` show the rule.
 - **Every `EvmTypesHost` impl sets `MessageHooks`**, including the JIT host tests in `crates/jit/runtime/src/evm2_evm.rs`.
   Build the JIT crate after the rebase: the interpreter can build while the runtime tests do not.
-- **The engine restates `execute_prepared`.**
-  Types 0, 1 and 2 (`execute_user` in `mega-evm2/src/tx.rs`) and EIP-7702 (`mega-evm2/src/eip7702.rs`) run their own copy of evm2's `execute_prepared`, so that the first frame's start record is charged after validation and before the first frame, and a transaction that cannot pay it runs out of gas without a frame.
-  Compare both with upstream's `legacy`, `eip2930`, `eip1559` and `eip7702::execute_prepared` after a rebase, as a clean merge does not; `execute_user` takes the intrinsic gas, the initial state gas and the floor from what `adjust_intrinsic_gas` recorded, not from `PreparedTx`.
-  A handler hook between validation and the first frame that can make a charge, or end the transaction as an out-of-gas without a frame, would let `execute_user` go.
+- **Every `execute_prepared` calls the first-frame hook.**
+  Read every `execute_prepared` upstream has (and any new one): each must call `before_initial_frame` after the transaction environment and the pre-execution changes, immediately before `prepare_initial_frame`, settle the result it returns without a frame, and recompute nothing from the envelope that `PreparedTx` holds (the creation nonce is the prepared state nonce); keep `tests::before_initial_frame` covering every envelope.
+  Types 0, 1 and 2 run evm2's `execute_prepared` with `MegaHooks`, so the start record moves with that call.
+- **The engine restates EIP-7702's `execute_prepared`.**
+  `mega-evm2/src/eip7702.rs` runs its own copy (see Known follow-up for why the hook does not replace it); compare it with upstream's `eip7702::execute_prepared` after a rebase, as a clean merge does not, and check that it takes nothing from the envelope that the prepared state holds.
 - **Run the negative controls, not only the gates.**
   A fix the new upstream code no longer reaches shows up as a missed control while every gate still passes; `diff/scripts/ci-local.sh` runs the sample controls, `controls.sh full` the rest.
 
