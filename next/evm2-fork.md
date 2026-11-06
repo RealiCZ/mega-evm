@@ -7,6 +7,7 @@ The earlier series, branch `cz/feat/thin-fork` at `91576d1e`, is left as it was,
 
 A patch exists only when the engine needs something evm2 cannot give it from outside: data from inside evm2's own flow, or a hook point.
 Every patch keeps stock behavior as its default, and each says what upstream change would let it go.
+One patch, `04f0e24f`, is a stock fix instead: it moves an instruction to revm's order, which evm2 follows, and is written to be proposed upstream as it is.
 The engine also uses two upstream changes that are already in the base: `call_with` / `create_with` ([#887](https://github.com/alloy-rs/evm2/pull/887)) and reservoir-funded state gas in `system_call` totals ([#842](https://github.com/alloy-rs/evm2/pull/842)).
 
 | Patch                                                                               | Adds                                                             | Size     | Upstream                                                                                                                  | Drop when upstream                                                                         |
@@ -20,9 +21,10 @@ The engine also uses two upstream changes that are already in the base: `call_wi
 | `68547bdf` optionally read uncached storage of accounts the database reports absent | `CacheDB::read_absent_storage`, `State::set_read_absent_storage` | +61/−3   | none yet                                                                                                                  | reads that storage as revm does, or offers this switch                                     |
 | `82427081` make the EIP-8037 total transaction gas cap configurable                 | `Version::tx_total_gas_cap`                                      | +51/−2   | PR [#1023](https://github.com/alloy-rs/evm2/pull/1023), open                                                              | lets a chain set or disable the total cap, default unchanged                               |
 | `2789b9e5` let a type family refuse an instruction's account load                   | `EvmTypesHost::before_account_load`, `AccountLoadSite`           | +395/−5  | none yet                                                                                                                  | lets a type family stop an instruction at its own account load                             |
+| `04f0e24f` pop CREATE2's salt after the init-code and memory charges                | none (instruction order)                                         | +33/−1   | not yet proposed                                                                                                          | pops CREATE2's salt after the init-code charge and the memory expansion                    |
 
-Size is the commit's own stat against its parent; most of the insertions of `09965c55`, `9df29b6a` and `2789b9e5` are tests.
-Upstream order, smallest and least contested first: `2227aa3c`, `82427081` (both filed), `68547bdf`, `f623a776`, `099810ca` with the halt record of `09965c55`, `9df29b6a`, the rest of `09965c55`, `2789b9e5`, and `70bbeb67` last, because it runs on every message.
+Size is the commit's own stat against its parent; most of the insertions of `09965c55`, `9df29b6a`, `2789b9e5` and `04f0e24f` are tests.
+Upstream order, smallest and least contested first: `2227aa3c`, `82427081` (both filed), `04f0e24f`, `68547bdf`, `f623a776`, `099810ca` with the halt record of `09965c55`, `9df29b6a`, the rest of `09965c55`, `2789b9e5`, and `70bbeb67` last, because it runs on every message.
 
 ## The patches
 
@@ -140,6 +142,19 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Controls: `refuse_at_load`, `refusal_gas`, `delegate_refusal`; the `bd` scenarios run every refusable instruction through the gas windows around each charge before its load.
 - **Upstream.** None filed.
 - **Drop** when upstream lets a type family stop an instruction at each of its account loads, after the instruction's charges before the load and before its skip-cold check.
+
+### `04f0e24f` CREATE2's salt order
+
+- **API.** None: `create_with` (and so CREATE2) pops `value`, `offset` and `len`, makes the EIP-3860 init-code charge and the memory expansion, and only then pops the salt and charges the CREATE2 cost, as revm's `create` does.
+  A CREATE2 whose salt is missing now fails on the first of those charges it cannot pay, and otherwise underflows with both paid (`create2_pops_its_salt_after_the_init_code_and_memory_charges`).
+  The JIT checks a section's stack before the section runs and is unchanged.
+- **Why.** Under detention a charge the frame cannot pay is a crossing: the frame stops at the compute limit and keeps its gas, while a stack underflow halts and burns it.
+  With the salt popped first, a detained frame running CREATE2 on three stack items halted where the reference reverts at the crossing (the `edge_create2_*` scenarios).
+  Under Ethereum's rules both halts consume the frame's gas, so on a stock family the change is the halt reason and the gas a halted frame reports.
+  No switch: the order is evm2's own, so the engine has nothing to turn off; the scenarios show it.
+- **Upstream.** Not yet proposed.
+  evm2 follows revm's control flow and gas accounting, so the change can be proposed as it is.
+- **Drop** when upstream pops CREATE2's salt after the init-code charge and the memory expansion.
 
 ## Dropped from the earlier series
 

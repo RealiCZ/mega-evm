@@ -143,9 +143,9 @@ why = "The guard on a CALL's EIP-7702 delegation charge and the delegate's skip-
 [[control]]
 switch = "deposit_caller"
 gate = "main"
-scenario = "p6_deposit_new_caller_m1"
+scenario = "edge_deposit_new_caller_value_new_recipient_runtime_oog"
 scope = "sample"
-why = "A deposit whose caller account does not exist yet counts the new account on state growth and charges its new-account state gas; off, the creation is free."
+why = "A deposit whose caller account does not exist yet counts the new account on state growth and charges its new-account state gas; off, the creation is free. The case is of the accepted class halted_first_frame (its first frame cannot pay its value's new account): on, the gate accepts it by the class's shape; off, its gas, state and status differ as well, which the class does not take."
 
 [[control]]
 switch = "deposit_loan_back"

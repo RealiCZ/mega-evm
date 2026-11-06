@@ -23,11 +23,15 @@ SAMPLE_FUZZ_BATCHES=(
 )
 
 # The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, five of
-# them known differences (`known-differences.toml`). This is the one place that states them.
-# Adding a scenario or a known difference means changing it here (and the data under
-# `next/diff/data`, see `data/README.md`); `gate-lib.sh`, `check-reference.sh` and
-# `regen-reference.sh` read it.
-MAIN_EXPECT="total=1055 match=1050 known=5"
+# them listed differences and four accepted by the class `halted_first_frame`
+# (`known-differences.toml`). This is the one place that states them. Adding a scenario or a known
+# difference means changing it here (and the data under `next/diff/data`, see `data/README.md`);
+# `gate-lib.sh`, `check-reference.sh` and `regen-reference.sh` read it.
+MAIN_EXPECT="total=1064 match=1055 known=5 class=4"
+# The fuzz seeds the class `halted_first_frame` accepts, summed over the batches of the sample and
+# of the full gate; every other seed must match.
+SAMPLE_FUZZ_CLASS=0
+FULL_FUZZ_CLASS=0
 # The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
 MAIN_TOTAL=${MAIN_EXPECT#total=}
 MAIN_TOTAL=${MAIN_TOTAL%% *}

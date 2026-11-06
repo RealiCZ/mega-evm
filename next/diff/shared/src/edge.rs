@@ -583,6 +583,63 @@ fn creation_destroyed_in_constructor() -> Vec<Scenario> {
     v
 }
 
+/// `CREATE2` with three operands, its salt missing: the init-code charge and the memory expansion
+/// come before the salt is popped. In a frame detained by `TIMESTAMP` (cap 100, in a child, and at
+/// Satin's default cap after 19.99M of compute) the expansion is the crossing, so the frame stops
+/// at the compute limit and keeps its gas; with four operands (the control) it crosses the same
+/// way. Undetained, an expansion of 1 MiB cannot be paid: the frame halts out of gas, not on the
+/// stack.
+fn create2_salt_order() -> Vec<Scenario> {
+    // TIMESTAMP POP; PUSH2 0x8000 PUSH0 PUSH0 (len, offset, value); CREATE2.
+    let missing_salt = hex!("42506180005f5ff5").to_vec();
+    let mut v = Vec::new();
+    let detained = Limits { block_env_cap: Some(100), ..Limits::default() };
+    v.push(edge(
+        "edge_create2_missing_salt_detained",
+        vec![acct(A, missing_salt.clone())],
+        BELOW_CAP,
+        detained,
+    ));
+    // TIMESTAMP POP; PUSH0 (the salt) PUSH2 0x8000 PUSH0 PUSH0; CREATE2.
+    v.push(edge(
+        "edge_create2_with_salt_detained",
+        vec![acct(A, hex!("42505f6180005f5ff5").to_vec())],
+        BELOW_CAP,
+        detained,
+    ));
+    // A calls C with 100,000 gas, then stores the call's result, RETURNDATASIZE and GAS.
+    let a = Asm::new()
+        .call_with(op::CALL, super::C, 0, 100_000, 0)
+        .record_call(1)
+        .op(op::GAS)
+        .push(3)
+        .op(op::SSTORE)
+        .stop()
+        .build();
+    v.push(edge(
+        "edge_create2_missing_salt_detained_child",
+        vec![acct(A, a), acct(super::C, missing_salt)],
+        BELOW_CAP,
+        detained,
+    ));
+    // TIMESTAMP POP; burns compute up to 19.99M after the read (GAS loop), then the 1 MiB CREATE2
+    // with its salt missing.
+    v.push(edge(
+        "edge_create2_missing_salt_default_cap",
+        vec![acct(A, hex!("42505a63013105f090035b805a11600a5750621000005f5ff5").to_vec())],
+        150_000_000,
+        Limits::default(),
+    ));
+    // PUSH3 0x100000 PUSH0 PUSH0; CREATE2.
+    v.push(edge(
+        "edge_create2_missing_salt_unpayable",
+        vec![acct(A, hex!("621000005f5ff5").to_vec())],
+        BELOW_CAP,
+        Limits::default(),
+    ));
+    v
+}
+
 pub fn all() -> Vec<Scenario> {
     let mut v = system_address();
     v.extend(destroyed_leaf());
@@ -597,5 +654,6 @@ pub fn all() -> Vec<Scenario> {
     v.extend(after_destruction());
     v.extend(creator_stopped_on_resume());
     v.extend(creation_destroyed_in_constructor());
+    v.extend(create2_salt_order());
     v
 }

@@ -606,8 +606,9 @@ pub fn all() -> Vec<Scenario> {
     let l1 = super::Account {
         address: super::L1_BLOCK,
         code: vec![0xfe],
-        storage: vec![(1, 1_000_000_000), (7, 1)],
-        // slot 3 (Ecotone scalars) is set by the drivers from `l1_fee.1` (it needs 256 bits).
+        storage: vec![(7, 1)],
+        // Slots 1 (the L1 base fee) and 3 (the Ecotone scalars, which need 256 bits) are set by
+        // the drivers from `l1_fee`.
         ..super::Account::default()
     };
     let mut s = q(

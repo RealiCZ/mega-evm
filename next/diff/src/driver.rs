@@ -16,6 +16,9 @@ use evm2::{
 use mega_evm2::{MegaSpec, MegaTypes, ledger::*};
 use op_evm2::{OpTxEnvelope, TxDeposit};
 use scenarios::{Scenario, record, record::hex};
+
+// The scenarios' SALT unit is the engine's minimum bucket.
+const _: () = assert!(scenarios::MIN_BUCKET == MIN_BUCKET_SIZE);
 use serde_json::{Map, Value, json};
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
@@ -288,7 +291,10 @@ pub fn db(s: &Scenario) -> InMemoryDB {
             db.insert_account_storage(&a.address, &U256::from(*k), &U256::from(*v));
         }
     }
-    if let Some((_, scalar, _)) = &s.l1_fee {
+    // The L1 block info: slot 1 is the L1 base fee, slot 3 holds the Ecotone base fee scalar in
+    // bits 96..128. Written after the accounts' own storage, so `l1_fee` decides both slots.
+    if let Some((base_fee, scalar, _)) = &s.l1_fee {
+        db.insert_account_storage(&scenarios::L1_BLOCK, &U256::from(1), &U256::from(*base_fee));
         db.insert_account_storage(
             &scenarios::L1_BLOCK,
             &U256::from(3),
@@ -337,7 +343,9 @@ pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
             Some(k) => bucket_for(evm2::version::StateGasSite::Storage(*a, U256::from(*k))),
             None => bucket_for(evm2::version::StateGasSite::Account(*a)),
         };
-        ext.cfg.buckets.insert(id, MIN_BUCKET_SIZE * m);
+        let capacity = scenarios::salt_capacity(*m)
+            .unwrap_or_else(|| panic!("{}: {m} minimum buckets is not a u64 capacity", s.name));
+        ext.cfg.buckets.insert(id, capacity);
     }
     for (a, k, capacity) in &s.salt_capacity {
         let id = match k {
@@ -504,6 +512,27 @@ mod tests {
     use super::{run, scenarios};
     use serde_json::json;
     use std::collections::BTreeSet;
+
+    /// The L1 fee vault's balance after `q45_l1_fee_nonzero` with an L1 base fee of `base_fee`: the
+    /// fixture writes `l1_fee`'s base fee into the L1Block's slot 1.
+    fn l1_fee_paid(base_fee: u64) -> u128 {
+        let mut s = scenarios::by_name("q45_l1_fee_nonzero").expect("q45");
+        s.l1_fee.as_mut().expect("an L1 fee").0 = base_fee;
+        scenarios::add_chain_accounts(&mut s);
+        let o = run(&s, false);
+        o["accounts"].get("0x420000000000000000000000000000000000001A").map_or(0, |a| {
+            a.as_str().unwrap().split('/').next().unwrap().parse().expect("a balance")
+        })
+    }
+
+    /// The L1 fee follows the L1 base fee `l1_fee` states: 1,600 times it for this transaction's
+    /// 100 enveloped bytes at a scalar of 1,000,000, nothing at 0.
+    #[test]
+    fn test_the_l1_base_fee_sets_the_l1_fee() {
+        assert_eq!(l1_fee_paid(0), 0);
+        assert_eq!(l1_fee_paid(1_000_000_000), 1_600_000_000_000);
+        assert_eq!(l1_fee_paid(1_000_000_000_000), 1_600_000_000_000_000);
+    }
 
     /// Fuzz mode 7 reaches its class: of the depth-0 precompile calls whose gas limit the
     /// generator draws around what the call needs plus the price (not one of its ample limits),

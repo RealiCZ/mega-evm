@@ -6,6 +6,8 @@
 #
 # A `frames` entry lists the inspector's frames on both sides as JSON, each frame cut to the keys
 # the frame comparison reads (a halted frame: kind, level, gas_limit, reservoir, value, status).
+# A `[[class]]` table enables a class of differences whose shape the gate checks in full; a case
+# with an entry of its own is held to that entry and never to a class.
 
 # revm labels a DUP whose operand is deeper than the stack as `StackOverflow`: its
 # `dup` returns false for both underflow and overflow, and `dupn_enabled` maps every false to
@@ -18,47 +20,53 @@ reference = "StackOverflow"
 candidate = "StackUnderflow"
 signoff = "owner sign-off 2026-11-05"
 
-# evm2 #871's halted first frame: a transaction whose runtime gas phase cannot pay a SALT-priced
-# state charge (a value call's new account, a creation's account). The engine follows upstream
-# evm2 for this class (owner decision of 2026-11-05); the entries are the cases the gates
-# exercise, each signed off: two scenarios, two deposit scenarios and two recorded transactions
-# (`d4:8064067` is in the sample, `d4:6780842` only in the full corpus).
+# DUPN and SWAPN with an immediate EIP-8024 rejects, and EXCHANGE with one: revm reports
+# `OpcodeNotFound`, evm2 `InvalidImmediateEncoding`. Gas, output and state are equal. The owner
+# accepted evm2's label for these shapes on 2026-11-05; each shape has its scenario.
 
 [[difference]]
-scenario = "p6_salt_first_value_call_m8"
-field = "frames"
-reference = '[]'
-candidate = '[{"kind": "Call", "level": 0, "gas_limit": 948200, "reservoir": 0, "value": "1", "status": "halt"}]'
-class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
-why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
+scenario = "p6_dupn_invalid_immediate"
+field = "halt"
+reference = "OpcodeNotFound"
+candidate = "InvalidImmediateEncoding"
 signoff = "owner sign-off 2026-11-05"
 
 [[difference]]
-scenario = "p6_salt_code_deposit_m8"
-field = "frames"
-reference = '[]'
-candidate = '[{"kind": "Create", "level": 0, "gas_limit": 944782, "reservoir": 0, "value": "0", "status": "halt"}]'
-class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
-why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
+scenario = "p6_swapn_invalid_immediate"
+field = "halt"
+reference = "OpcodeNotFound"
+candidate = "InvalidImmediateEncoding"
 signoff = "owner sign-off 2026-11-05"
 
 [[difference]]
-scenario = "edge_deposit_value_new_recipient_runtime_oog"
-field = "frames"
-reference = '[]'
-candidate = '[{"kind": "Call", "level": 0, "gas_limit": 129000, "reservoir": 0, "value": "5", "status": "halt"}]'
-class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
-why = "A deposit's first frame runs on evm2's path: evm2 #871 reports a first frame whose runtime gas phase cannot pay its value's new-account state gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. The outcome is a failed deposit on both sides; gas, state and read set are equal."
+scenario = "p6_swapn_invalid_immediate_7f"
+field = "halt"
+reference = "OpcodeNotFound"
+candidate = "InvalidImmediateEncoding"
 signoff = "owner sign-off 2026-11-05"
 
 [[difference]]
-scenario = "edge_deposit_new_caller_value_new_recipient_runtime_oog"
-field = "frames"
-reference = '[]'
-candidate = '[{"kind": "Call", "level": 0, "gas_limit": 95400, "reservoir": 0, "value": "5", "status": "halt"}]'
-class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
-why = "A deposit's first frame runs on evm2's path, after its created caller's account state gas: evm2 #871 reports a first frame whose runtime gas phase cannot pay its value's new-account state gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. The outcome is a failed deposit on both sides; gas, state and read set are equal."
+scenario = "p6_exchange_invalid_immediate"
+field = "halt"
+reference = "OpcodeNotFound"
+candidate = "InvalidImmediateEncoding"
 signoff = "owner sign-off 2026-11-05"
+
+# evm2 #871's halted first frame, accepted as a class: a transaction whose first frame's runtime
+# gas phase cannot pay its gas (a SALT-priced state charge: a value call's new account, a
+# creation's account; a deposit's first frame after its created caller). evm2 reports that frame
+# to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens
+# no frame. The gate accepts a case without an entry of its own when its differences are exactly
+# that shape (`gate::halted_first_frame`): the reference has no frame, the engine one halted
+# level-0 `Call` or `Create` frame, the transaction ran and failed (out of gas, or a failed
+# deposit), and nothing else differs. The gates' summaries count these cases as `class`.
+[[class]]
+name = "halted_first_frame"
+why = "The engine follows upstream evm2 for this class (owner decision of 2026-11-05): evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame; the reference opens no frame. Outcome, gas, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"
+
+# Two recorded transactions of that class stay listed by identity, with their frames:
+# `d4:8064067` is in the sample, `d4:6780842` only in the full corpus.
 
 [[replay_difference]]
 set = "d4"

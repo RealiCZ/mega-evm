@@ -5,7 +5,8 @@
 //! Environment: `MEGA_EVM2_ORACLE` (the reference output file), `MEGA_EVM2_GATE_NAME` (the name in
 //! the summary line, default `main`), `MEGA_EVM2_EXPECT` (the expected scenario count), and the
 //! scenario selectors of `mega_evm2_scenarios::everything` (`MEGA_EVM2_FUZZ*`, `MEGA_EVM2_ONLY`).
-//! Output: the `GATE` summary line; `MEGA_EVM2_OUT` additionally writes every comparison.
+//! Output: the `GATE` summary line (`known`: listed entries; `class`: cases accepted by an
+//! accepted class's shape); `MEGA_EVM2_OUT` additionally writes every comparison.
 //! Every reference entry must belong to a selected scenario: an extra one is a difference. A run
 //! that selects scenarios by name (`MEGA_EVM2_ONLY`) leaves the others out on purpose; it is a
 //! debugging run, does not check for extra entries, and prints `PARTIAL GATE ...`.
@@ -29,9 +30,11 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
         oracle.into_iter().map(|o| (o["name"].as_str().unwrap().to_owned(), o)).collect();
     assert_eq!(by_name.len(), oracle_count, "duplicate oracle names");
     let known = gate::known_differences();
+    let classes = gate::known_classes();
     let partial = std::env::var_os("MEGA_EVM2_ONLY").is_some();
     let mut report = Vec::new();
-    let (mut matched, mut accepted, mut differ, mut missing) = (0u64, 0u64, 0u64, 0u64);
+    let (mut matched, mut accepted, mut class, mut differ, mut missing) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut groups = BTreeMap::<&str, (u64, u64)>::new();
     let selected = scenarios::everything();
     let mut extra: Vec<&String> = if partial {
@@ -53,7 +56,7 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
         let plain = run(&s, false);
         let insp = run(&s, true);
         let group = groups.entry(s.group).or_default();
-        let verdict = gate::scenario_verdict(&known, s.name, o, &plain, &insp);
+        let verdict = gate::scenario_verdict(&known, &classes, s.name, o, &plain, &insp);
         match &verdict {
             Verdict::Match => {
                 matched += 1;
@@ -64,6 +67,11 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
                 accepted += 1;
                 group.0 += 1;
                 println!("KNOWN {}", s.name);
+            }
+            Verdict::Class(c) => {
+                class += 1;
+                group.0 += 1;
+                println!("CLASS {} {c}", s.name);
             }
             Verdict::Differ(d) => {
                 differ += 1;
@@ -83,7 +91,7 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
     // the hand-written scenarios); one that was selected and does not differ is `Differ` above.
     let total = report.len() as u64;
     println!(
-        "{}GATE {name} total={total} match={matched} known={accepted} differ={}",
+        "{}GATE {name} total={total} match={matched} known={accepted} class={class} differ={}",
         if partial { "PARTIAL " } else { "" },
         differ + missing + extra.len() as u64
     );

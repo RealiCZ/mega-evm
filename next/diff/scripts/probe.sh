@@ -9,8 +9,9 @@
 # `next/diff/probe-examples.jsonl` has examples). The reference (`next/reference`, binary `probe`)
 # writes its record of every input, then the engine side (`mega-evm2-diff`, binary `probe`) runs
 # the same inputs and prints, per input, both records and the gate's verdict: `MATCH`, `KNOWN` (an
-# accepted difference of `known-differences.toml`, by name) or `DIFFER [<fields>]` with each
-# differing field's two values; last, `PROBE total=<n> match=<n> known=<n> differ=<n>`.
+# accepted difference of `known-differences.toml`, by name), `CLASS <class>` (an accepted class of
+# that file, by its shape) or `DIFFER [<fields>]` with each differing field's two values; last,
+# `PROBE total=<n> match=<n> known=<n> class=<n> differ=<n>`.
 #
 # Exit status: 0 when no input differs, 1 when one does, 2 on unreadable input or a failed build.
 # The reference's build fetches its pinned revisions from GitHub, as `check-reference.sh` does.

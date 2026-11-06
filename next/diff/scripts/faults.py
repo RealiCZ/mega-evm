@@ -249,6 +249,21 @@ def replay_known_entry(edit):
         return known_toml(f)(work)
     return apply
 
+def unlist_replay_known(work):
+    """Runs the replay gate with a copy of `known-differences.toml` without the first entry of a
+    sample block: its transaction, of the class `halted_first_frame`, is then the class's."""
+    e, rel = sample_replay_known(work)
+    NOTE.append("%s#%d" % (rel, e["index"]))
+    def f(t):
+        head = "[[replay_difference]]\n"
+        starts = [i for i in range(len(t)) if t.startswith(head, i)]
+        for a, b in zip(starts, starts[1:] + [len(t)]):
+            table = t[a:b]
+            if ("\nblock = %d\n" % e["block"]) in table and ("\nindex = %d\n" % e["index"]) in table:
+                return t[:a] + t[b:]
+        raise SystemExit("faults.py: entry %s:%d:%d not found" % (e["set"], e["block"], e["index"]))
+    return known_toml(f)(work)
+
 def other_hash(e, part):
     h = e["hash"]
     return part.replace(h, h[:-1] + ("0" if h[-1] != "0" else "1"))
@@ -273,6 +288,18 @@ def unknown_row(rows):
 
 M, F = "main.json", "fuzz/mode4.json"
 ok = lambda o: o.get("status") == "success"
+
+def frameless_halt(o):
+    """A scenario of the class `halted_first_frame` on the reference's side: it ran out of gas
+    without opening a frame."""
+    return o.get("frames") == [] and "error" not in o and o.get("halt") == "Base(OutOfGas(Basic))"
+
+def drop_class(t):
+    """`known-differences.toml` without its `[[class]]` table."""
+    a = t.index("[[class]]\n")
+    b = t.index("\n\n", a) + 1
+    return t[:a] + t[b:]
+
 
 def diff(field):
     """Evidence: a synthetic DIFFER line that names `field`."""
@@ -300,10 +327,16 @@ FAULTS = [
     ("known-stale", "main", r"^DIFFER p6_dupn .*stale known difference", scen_edit(M, named("p6_dupn", lambda o: o.update(halt="Base(StackUnderflow)")))),
     ("known-toml-wrong-field", "main", r"^DIFFER p6_dupn .*did not occur as listed", known_toml(lambda t: t.replace('field = "halt"', 'field = "gas_used"'))),
     ("known-toml-wrong-case", "main", r'^DIFFER p6_dupn \["halt"\]', known_toml(lambda t: t.replace('scenario = "p6_dupn"', 'scenario = "p6_add"'))),
+    # main: the class `halted_first_frame` takes exactly its shape, only while the file enables it
+    ("class-other-field", "main", r'^DIFFER [^ ]+ \["gas_used", "frame count 0 vs 1"\]', scen_field(M, "gas_used", frameless_halt)),
+    ("class-reference-frame", "main", r'^DIFFER [^ ]+ \["frame 0 ', scen_field(M, "frames", frameless_halt, lambda v: [{"kind": "Call", "level": 0, "gas_limit": 1, "reservoir": 0, "value": "0", "status": "halt", "output": "0x", "gas_left": 0, "reservoir_left": 0}])),
+    ("class-not-enabled", "main", r'^DIFFER [^ ]+ \["frame count 0 vs 1"\]$', known_toml(drop_class)),
+    ("main-expected-class", "main", SUMMARY, expect("EXPECT_MAIN", count("class", 1))),
     # fuzz
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),
     ("fuzz-duplicate-entry", "fuzz", r"duplicate oracle names", scen_edit(F, dup_entry)),
     ("fuzz-expected-count", "fuzz", r"MEGA_EVM2_EXPECT", expect("FUZZ_BATCHES", lambda v: v.replace(":2000", ":2001"))),
+    ("fuzz-expected-class", "fuzz", SUMMARY, expect("FUZZ_CLASS", lambda v: str(int(v) + 1))),
     # replay
     ("replay-gas-used", "replay", cmp("gas_used"), satin_field("gas_used")),
     ("replay-reference-inspected", "replay", cmp("satin_plain_vs_inspected"), row_edit("replay", is_tx, lambda r: r.update(inspected_equal=False), "transaction")),
@@ -318,6 +351,8 @@ FAULTS = [
     ("replay-known-stale", "replay", r"stale known difference: [a-z0-9]+:[0-9]+:[0-9]+ no longer differs", stale_replay_known),
     ("replay-known-other-frame", "replay", r"known difference [a-z0-9]+:[0-9]+:[0-9]+\.frames did not occur as listed", replay_known_entry(other_frame_gas)),
     ("replay-known-other-hash", "replay", r"known replay difference [a-z0-9]+:[0-9]+:[0-9]+: hash", replay_known_entry(other_hash)),
+    # replay: a listed transaction of the class, unlisted, is counted as `class`, not `known`
+    ("replay-class-unlisted", "replay", SUMMARY, unlist_replay_known),
     # block
     ("block-gas-used", "block", cmp("gas_used"), block_row("tx", "gas_used")),
     ("block-reference-inspected", "block", cmp("satin_plain_vs_inspected"), block_row("tx", "inspected_equal", change=lambda v: False)),

@@ -73,7 +73,8 @@ fuzz_batch() {
 }
 
 # The verdict of one run of a control, from its log and exit status:
-#   pass     exit 0 with the case's clean partial summary
+#   pass     exit 0 with the case's clean partial summary (a scenario: matched, or accepted by
+#            the class rule with its CLASS line)
 #   differ   a failure on the gate's difference assertion, after a summary that counts the
 #            difference (and, for a scenario, its DIFFER line)
 #   other <reason>   anything else
@@ -83,10 +84,13 @@ verdict() {
   panics=$(grep -c 'panicked at' "$log" || true)
   case "$gate" in
     main | fuzz)
-      if [ "$status" = 0 ] && [ "$line" = "PARTIAL GATE $gate total=1 match=1 known=0 differ=0" ] &&
+      if [ "$status" = 0 ] && [ "$line" = "PARTIAL GATE $gate total=1 match=1 known=0 class=0 differ=0" ] &&
         grep -q "^MATCH $scenario\$" "$log"; then
         echo pass
-      elif [ "$status" != 0 ] && [ "$line" = "PARTIAL GATE $gate total=1 match=0 known=0 differ=1" ] &&
+      elif [ "$status" = 0 ] && [ "$line" = "PARTIAL GATE $gate total=1 match=0 known=0 class=1 differ=0" ] &&
+        grep -q "^CLASS $scenario " "$log"; then
+        echo pass
+      elif [ "$status" != 0 ] && [ "$line" = "PARTIAL GATE $gate total=1 match=0 known=0 class=0 differ=1" ] &&
         grep -q "^DIFFER $scenario " "$log" && [ "$panics" = 1 ] &&
         grep -q 'differential mismatches' "$log"; then
         echo differ

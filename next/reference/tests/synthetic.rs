@@ -11,6 +11,27 @@ use mega_evm2_reference::synthetic::run;
 use mega_evm2_scenarios as scenarios;
 use serde_json::Value;
 
+/// The L1 fee vault's balance after `q45_l1_fee_nonzero` with an L1 base fee of `base_fee`: the
+/// fixture writes `l1_fee`'s base fee into the L1Block's slot 1.
+fn l1_fee_paid(base_fee: u64) -> u128 {
+    let mut s = scenarios::by_name("q45_l1_fee_nonzero").expect("q45");
+    s.l1_fee.as_mut().expect("an L1 fee").0 = base_fee;
+    scenarios::add_chain_accounts(&mut s);
+    let o = run(&s);
+    o["accounts"]
+        .get("0x420000000000000000000000000000000000001A")
+        .map_or(0, |a| a.as_str().unwrap().split('/').next().unwrap().parse().expect("a balance"))
+}
+
+/// The L1 fee follows the L1 base fee `l1_fee` states: 1,600 times it for this transaction's 100
+/// enveloped bytes at a scalar of 1,000,000, nothing at 0 (the engine's fixture has the same test).
+#[test]
+fn test_the_l1_base_fee_sets_the_l1_fee() {
+    assert_eq!(l1_fee_paid(0), 0);
+    assert_eq!(l1_fee_paid(1_000_000_000), 1_600_000_000_000);
+    assert_eq!(l1_fee_paid(1_000_000_000_000), 1_600_000_000_000_000);
+}
+
 #[test]
 fn test_reference_synthetic() {
     let results: Vec<Value> = scenarios::everything().iter().map(run).collect();

@@ -10,8 +10,9 @@
 #   main.json                               reference, hand-written and default fuzz scenarios
 #   fuzz/<name>.json                        reference, fuzz batches
 #   expect.env                              what the summaries must be (written by `gate_inputs`):
-#     EXPECT_MAIN    the counts of the main summary, `total=<n> match=<n> known=<n>`
+#     EXPECT_MAIN    the counts of the main summary, `total=<n> match=<n> known=<n> class=<n>`
 #     FUZZ_BATCHES   the fuzz batches, space-separated `name:mode:first..=last:count`
+#     FUZZ_CLASS     the seeds of all fuzz batches the class rule accepts
 #     EXPECT_REPLAY  the counts of the replay summary before `differ=0`
 #     EXPECT_BLOCK   the counts of the block summary before `differ=0`
 #
@@ -25,10 +26,11 @@ gate_lib_next=$(cd "$gate_lib_diff/.." && pwd)
 # full corpus ($MEGA_EVM2_CORPUS_DIR) into <work> and writes <work>/expect.env. <work> is emptied
 # first, so an interrupted extraction or a stale input never survives into a run.
 gate_inputs() {
-  local mode=$1 work=$2 corpus archive batches blocks=""
+  local mode=$1 work=$2 corpus archive batches fuzz_class blocks=""
   fresh_dir "$work" > /dev/null
   if [ "$mode" = sample ]; then
     batches="${SAMPLE_FUZZ_BATCHES[*]}"
+    fuzz_class=$SAMPLE_FUZZ_CLASS
   else
     : "${MEGA_EVM2_CORPUS_DIR:?set MEGA_EVM2_CORPUS_DIR to the full corpus}"
     corpus=$(cd -P "$MEGA_EVM2_CORPUS_DIR" && pwd -P)
@@ -38,6 +40,7 @@ gate_inputs() {
     # The corpus directory may move between runs of the same archive: the link follows it.
     blocks=$corpus/real-blocks
     batches="${FULL_FUZZ_BATCHES[*]}"
+    fuzz_class=$FULL_FUZZ_CLASS
   fi
   gate_extract "$mode" "$work" "${archive:-}"
   [ -z "$blocks" ] || ln -s "$blocks" "$work/blocks"
@@ -47,7 +50,7 @@ gate_inputs() {
     replay=$EXPECT_REPLAY block=$EXPECT_BLOCK
     [ "$mode" = full ] && replay=$EXPECT_FULL_REPLAY block=$EXPECT_FULL_BLOCK
     printf '%s="%s"\n' EXPECT_MAIN "$MAIN_EXPECT" FUZZ_BATCHES "$batches" \
-      EXPECT_REPLAY "$replay" EXPECT_BLOCK "$block"
+      FUZZ_CLASS "$fuzz_class" EXPECT_REPLAY "$replay" EXPECT_BLOCK "$block"
   ) > "$work/expect.env"
 }
 
@@ -159,8 +162,9 @@ gate_run() {
       [ "$line" = "GATE main $EXPECT_MAIN differ=0" ]
       ;;
     fuzz)
-      # The batches summed into one line; a failed batch counts as one difference.
-      local spec total=0 matched=0 differ=0 expected=0 t m k d
+      # The batches summed into one line; a failed batch counts as one difference, and so does a
+      # known difference (no fuzz seed has an entry).
+      local spec total=0 matched=0 class=0 differ=0 expected=0 t m k c d
       for spec in $FUZZ_BATCHES; do
         gate_env "$work" fuzz "$spec"
         expected=$((expected + ${spec##*:}))
@@ -168,16 +172,19 @@ gate_run() {
           t=$(sed -E 's/.* total=([0-9]+) .*/\1/' <<< "$line")
           m=$(sed -E 's/.* match=([0-9]+) .*/\1/' <<< "$line")
           k=$(sed -E 's/.* known=([0-9]+) .*/\1/' <<< "$line")
+          c=$(sed -E 's/.* class=([0-9]+) .*/\1/' <<< "$line")
           d=$(sed -E 's/.* differ=([0-9]+).*/\1/' <<< "$line")
           total=$((total + t))
           matched=$((matched + m))
+          class=$((class + c))
           differ=$((differ + d + k))
         else
           differ=$((differ + 1))
         fi
       done
-      echo "GATE fuzz total=$total match=$matched differ=$differ"
-      [ "$total" = "$expected" ] && [ "$matched" = "$total" ] && [ "$differ" = 0 ]
+      echo "GATE fuzz total=$total match=$matched class=$class differ=$differ"
+      [ "$total" = "$expected" ] && [ "$class" = "$FUZZ_CLASS" ] &&
+        [ "$((matched + class))" = "$total" ] && [ "$differ" = 0 ]
       ;;
     replay | block)
       local expect=$EXPECT_REPLAY

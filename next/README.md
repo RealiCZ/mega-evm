@@ -41,14 +41,17 @@ Each script extracts its inputs afresh into its own directory under `<target>/me
 
 The gates run every scenario, fuzz seed and recorded transaction on both sides, plain and inspected, and compare every emitted field outside the exclusion list in `diff/src/gate.rs`, which states a reason for each entry.
 A difference fails a gate unless `diff/known-differences.toml` lists it: by scenario for the synthetic gate, and by set, block, transaction index and hash for the engine replay gate.
-A listed entry that differs otherwise, or no longer differs, fails too; the replay summary counts the accepted ones as `known=`.
+A listed entry that differs otherwise, or no longer differs, fails too; the summaries count the accepted ones as `known=`.
 Each entry states its reason and whether the owner has signed it off.
+One class of differences is accepted by its shape instead of case by case, because the generators draw it: evm2 #871's halted first frame (`[[class]]` `halted_first_frame`, `gate::halted_first_frame`).
+A case without an entry of its own whose only difference is that the reference recorded no frame and the engine one halted level-0 frame, of a transaction that ran out of gas or is a failed deposit, is accepted and counted as `class=`; any other field that differs, or any other frame shape, fails the case.
+The `class=` counts are pinned like the others: `MAIN_EXPECT`, `SAMPLE_FUZZ_CLASS` and `FULL_FUZZ_CLASS` in `diff/scripts/common.sh`, and `count_expected.py` for the replay gate (an applied transaction no entry lists whose reference recorded no frame).
 
 ## Probing an input on both sides
 
 `diff/scripts/probe.sh <file.jsonl>` runs inputs no gate holds on the reference and on the engine, and judges each as the synthetic gate does (`gate::scenario_verdict`, accepted differences included).
 Each line of the file is a scenario by name (`base`: a hand-written scenario or a fuzz seed of any mode) with fields overridden, or a whole scenario; the keys are listed in `diff/shared/src/probe.rs`, and `diff/probe-examples.jsonl` has examples.
-Per input it prints both records and `MATCH`, `KNOWN` or `DIFFER [<fields>]` with each differing field's two values; the exit status is non-zero when an input differs.
+Per input it prints both records and `MATCH`, `KNOWN`, `CLASS <class>` or `DIFFER [<fields>]` with each differing field's two values; the exit status is non-zero when an input differs.
 `MEGA_EVM2_DISABLE` turns engine switches off, as in the gates.
 An input that finds a difference belongs in a scenario of the gates once the difference is understood.
 

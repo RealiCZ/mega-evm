@@ -9,6 +9,9 @@
 //! Account lifecycle flags cover changed accounts, not journal-internal touched-only entries.
 //! Block net state compares changed account info and slots, not internal bundle/wipe encodings.
 //! Every other emitted semantic field is compared; missing fields and unknown kinds fail closed.
+//! Accepted differences are listed by case (`[[difference]]`, `[[replay_difference]]`) or, for a
+//! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
+//! [`HALTED_FIRST_FRAME`]).
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -119,6 +122,66 @@ pub fn known_replay_differences() -> Vec<KnownReplay> {
         .collect()
 }
 
+/// The class of evm2 #871: a transaction whose first frame's runtime gas phase runs out of gas.
+/// The reference opens no frame; evm2 reports one halted level-0 frame to the inspector
+/// (go-ethereum's `haltTopFrame`). Its shape, all of which [`halted_first_frame`] checks:
+/// - the reference's frame list is empty;
+/// - the engine's inspected frame list is one frame: level 0, status `halt`, kind `Call` or
+///   `Create`;
+/// - the only difference of the case is that frame count (`frame count 0 vs 1`): every other
+///   compared field is equal, and so are each side's plain and inspected runs;
+/// - the transaction ran (no refusal) and failed: status `halt` with `OutOfGas`, or a failed
+///   deposit.
+pub const HALTED_FIRST_FRAME: &str = "halted_first_frame";
+
+/// The classes the gate knows the shape of; a `[[class]]` table names one of them.
+const CLASSES: [&str; 1] = [HALTED_FIRST_FRAME];
+
+/// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
+/// [`CLASSES`] and states its `why` and `signoff`. A class not enabled there is not accepted.
+pub fn known_classes() -> Vec<String> {
+    let mut out = Vec::new();
+    for e in entries(&known_table(), "class") {
+        let name = text(&e, "name");
+        assert!(CLASSES.contains(&name.as_str()), "known class {name}: no such class");
+        for key in ["why", "signoff"] {
+            assert!(!text(&e, key).trim().is_empty(), "known class {name}: empty `{key}`");
+        }
+        assert!(!out.contains(&name), "known class {name}: listed twice");
+        out.push(name);
+    }
+    out
+}
+
+/// Whether the differences `diffs` of one case, whose outcomes are `reference` and `candidate`
+/// (not normalized) and whose recorded frames are `frames` (reference, inspected engine), are
+/// exactly the shape of [`HALTED_FIRST_FRAME`].
+pub fn halted_first_frame(
+    diffs: &[String],
+    reference: &Value,
+    candidate: &Value,
+    frames: (&Value, &Value),
+) -> bool {
+    let [only] = diffs else { return false };
+    if only != "frame count 0 vs 1" {
+        return false;
+    }
+    let (Some(r), Some([frame])) = (frames.0.as_array(), frames.1.as_array().map(Vec::as_slice))
+    else {
+        return false;
+    };
+    let root_halt = frame["level"] == 0 &&
+        frame["status"] == "halt" &&
+        matches!(frame["kind"].as_str(), Some("Call" | "Create"));
+    let failed = |o: &Value| {
+        let o = canonical(o);
+        o.get("error").is_none() &&
+            o["status"] == "halt" &&
+            matches!(o["halt"].as_str(), Some("OutOfGas" | "FailedDeposit"))
+    };
+    r.is_empty() && root_halt && failed(reference) && failed(candidate)
+}
+
 /// How one scenario's differences relate to the accepted list.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -126,6 +189,9 @@ pub enum Verdict {
     Match,
     /// The differences are exactly the scenario's accepted entry.
     Known,
+    /// The scenario has no entry, and its differences are exactly the shape of an accepted class
+    /// (`[[class]]`), named here.
+    Class(&'static str),
     /// Anything else: an unlisted difference, a listed entry that differs differently, or a
     /// listed entry that no longer differs (stale).
     Differ(Vec<String>),
@@ -134,9 +200,12 @@ pub enum Verdict {
 /// Classifies the differences `diffs` of scenario `name`, where `reference` and `candidate` are
 /// the two outcomes (not normalized) and `frames` the frames the reference and the inspected
 /// candidate recorded. Only a difference in exactly the listed field, with exactly the listed
-/// normalized values (for `frames`, exactly the listed frames), is accepted.
+/// normalized values (for `frames`, exactly the listed frames), is accepted; a scenario without an
+/// entry is accepted as a class of `classes` only when its differences are exactly that class's
+/// shape. A listed scenario is held to its entries alone.
 pub fn classify(
     known: &[Known],
+    classes: &[String],
     name: &str,
     diffs: Vec<String>,
     reference: &Value,
@@ -145,7 +214,15 @@ pub fn classify(
 ) -> Verdict {
     let entries: Vec<&Known> = known.iter().filter(|k| k.scenario == name).collect();
     if entries.is_empty() {
-        return if diffs.is_empty() { Verdict::Match } else { Verdict::Differ(diffs) };
+        if diffs.is_empty() {
+            return Verdict::Match;
+        }
+        if classes.iter().any(|c| c == HALTED_FIRST_FRAME) &&
+            halted_first_frame(&diffs, reference, candidate, frames)
+        {
+            return Verdict::Class(HALTED_FIRST_FRAME);
+        }
+        return Verdict::Differ(diffs);
     }
     if diffs.is_empty() {
         return Verdict::Differ(vec![format!("stale known difference: {name} no longer differs")]);
@@ -221,13 +298,22 @@ pub fn scenario_differences(reference: &Value, plain: &Value, inspected: &Value)
 /// [`classify`]d against the accepted differences `known`.
 pub fn scenario_verdict(
     known: &[Known],
+    classes: &[String],
     name: &str,
     reference: &Value,
     plain: &Value,
     inspected: &Value,
 ) -> Verdict {
     let diffs = scenario_differences(reference, plain, inspected);
-    classify(known, name, diffs, reference, plain, (&reference["frames"], &inspected["frames"]))
+    classify(
+        known,
+        classes,
+        name,
+        diffs,
+        reference,
+        plain,
+        (&reference["frames"], &inspected["frames"]),
+    )
 }
 
 /// The counts of a gate's summary line, when `MEGA_EVM2_EXPECT` names them (the summary line
@@ -261,12 +347,13 @@ fn differing(totals: &BTreeMap<String, u64>) -> u64 {
 /// The summary line of the engine replay gate.
 pub fn replay_line(totals: &BTreeMap<String, u64>) -> String {
     format!(
-        "GATE replay blocks={} match={} pre={} refused={} known={} differ={}",
+        "GATE replay blocks={} match={} pre={} refused={} known={} class={} differ={}",
         sum(totals, |k| k == "blocks"),
         sum(totals, |k| k == "match"),
         sum(totals, |k| k == "pre_block:match"),
         sum(totals, |k| k.starts_with("refused_both")),
         sum(totals, |k| k == "known"),
+        sum(totals, |k| k == "class"),
         differing(totals),
     )
 }
@@ -368,6 +455,7 @@ pub fn error_kind(s: &str) -> String {
         (&["MissingChainId", "missing chain id"][..], "missing_chain_id"),
         (&["InvalidChainId", "invalid chain id"][..], "chain_id"),
         (&["NonceOverflow", "nonce overflow"][..], "nonce_overflow"),
+        (&["CreateInitCodeSizeLimit"][..], "initcode_size"),
     ] {
         if needles.iter().any(|n| s.contains(n)) {
             return kind.into();
@@ -501,6 +589,11 @@ mod tests {
                 "Transaction(OpTxError(Base(CallGasCostMoreThanGasLimit { initial_gas: 15852, gas_limit: 15000 })))",
                 "IntrinsicGasTooLow { required: 61876, got: 15000 }",
                 "intrinsic_gas",
+            ),
+            (
+                "Transaction(OpTxError(Base(CreateInitCodeSizeLimit)))",
+                "CreateInitCodeSizeLimit { limit: 1048576, got: 1048577 }",
+                "initcode_size",
             ),
         ] {
             assert_eq!(error_kind(reference), kind, "{reference}");

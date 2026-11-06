@@ -34,7 +34,7 @@
 use crate::{
     Account, Auth, BELOW_CAP, Limits, Scenario, add_chain_accounts, by_name,
     json::{self, Json},
-    scenario,
+    salt_capacity, scenario,
 };
 use alloy_primitives::{Address, U256, hex};
 
@@ -162,7 +162,14 @@ fn apply(s: &mut Scenario, key: &str, v: &Json) -> Result<(), String> {
             })?
         }
         "beneficiary" => s.beneficiary = address(v)?,
-        "salt" => s.salt = list(v, bucket)?,
+        "salt" => {
+            s.salt = list(v, bucket)?;
+            if let Some((_, _, m)) = s.salt.iter().find(|(_, _, m)| salt_capacity(*m).is_none()) {
+                return Err(format!(
+                    "{m} minimum buckets is a capacity above the largest u64 (use `salt_capacity`)"
+                ));
+            }
+        }
         "salt_capacity" => s.salt_capacity = list(v, bucket)?,
         "oracle" => {
             s.oracle = list(v, |v| {
@@ -390,6 +397,10 @@ mod tests {
             (r#"{"tx_type": 3}"#, "not 0, 1 or 2"),
             (r#"{"accounts": [{"code": "0x00"}]}"#, "needs an `address`"),
             (r#"{"salt": [["0x0000000000000000000000000000000000000001", 0]]}"#, "a list of 3"),
+            (
+                r#"{"salt": [["0x0000000000000000000000000000000000000001", 0, 72057594037927936]]}"#,
+                "72057594037927936 minimum buckets is a capacity above the largest u64",
+            ),
             (r#"[1]"#, "a JSON object"),
             (r#"{"deposit": 0, "gas_price": 1}"#, "no gas price"),
             (r#"{"tx_type": 1, "deposit": 5}"#, "exclude each other"),

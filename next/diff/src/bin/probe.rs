@@ -11,13 +11,13 @@
 //! PROBE <name>
 //!   reference <its record>
 //!   engine    <its plain run's record, with its inspected run's frames>
-//! MATCH <name> | KNOWN <name> | DIFFER <name> [<differences>]
+//! MATCH <name> | KNOWN <name> | CLASS <name> <class> | DIFFER <name> [<differences>]
 //!   <field>: reference <value> | engine <value>     (each differing field, normalized)
 //! ```
 //!
-//! and last `PROBE total=<n> match=<n> known=<n> differ=<n>`. Exit status 0 when nothing differs, 1
-//! when an input differs, 2 on unreadable input. `MEGA_EVM2_DISABLE` turns engine switches off as
-//! in the gates.
+//! and last `PROBE total=<n> match=<n> known=<n> class=<n> differ=<n>`. Exit status 0 when nothing
+//! differs, 1 when an input differs, 2 on unreadable input. `MEGA_EVM2_DISABLE` turns engine
+//! switches off as in the gates.
 
 use mega_evm2_diff::{
     driver::run,
@@ -60,7 +60,8 @@ fn main() {
 /// Runs and judges every probe; whether any differs.
 fn judge(probes: &[mega_evm2_scenarios::Scenario], records: &[Value]) -> bool {
     let known = gate::known_differences();
-    let (mut matched, mut accepted, mut differ) = (0, 0, 0);
+    let classes = gate::known_classes();
+    let (mut matched, mut accepted, mut class, mut differ) = (0, 0, 0, 0);
     for (s, reference) in probes.iter().zip(records) {
         let plain = run(s, false);
         let inspected = run(s, true);
@@ -71,7 +72,7 @@ fn judge(probes: &[mega_evm2_scenarios::Scenario], records: &[Value]) -> bool {
         println!("PROBE {}", s.name);
         println!("  reference {reference}");
         println!("  engine    {engine}");
-        match gate::scenario_verdict(&known, s.name, reference, &plain, &inspected) {
+        match gate::scenario_verdict(&known, &classes, s.name, reference, &plain, &inspected) {
             Verdict::Match => {
                 matched += 1;
                 println!("MATCH {}", s.name);
@@ -79,6 +80,10 @@ fn judge(probes: &[mega_evm2_scenarios::Scenario], records: &[Value]) -> bool {
             Verdict::Known => {
                 accepted += 1;
                 println!("KNOWN {}", s.name);
+            }
+            Verdict::Class(c) => {
+                class += 1;
+                println!("CLASS {} {c}", s.name);
             }
             Verdict::Differ(d) => {
                 differ += 1;
@@ -98,7 +103,10 @@ fn judge(probes: &[mega_evm2_scenarios::Scenario], records: &[Value]) -> bool {
             }
         }
     }
-    println!("PROBE total={} match={matched} known={accepted} differ={differ}", probes.len());
+    println!(
+        "PROBE total={} match={matched} known={accepted} class={class} differ={differ}",
+        probes.len()
+    );
     differ > 0
 }
 

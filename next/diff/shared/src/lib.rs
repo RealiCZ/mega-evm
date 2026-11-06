@@ -27,6 +27,15 @@ pub const EMPTY: Address = addr(0xe0);
 pub const IDENTITY: Address = Address::with_last_byte(0x04);
 
 pub const BELOW_CAP: u64 = 1_000_000;
+/// Satin's minimum SALT bucket size, the unit of [`Scenario::salt`]; both drivers check that
+/// their engine's constant equals it.
+pub const MIN_BUCKET: u64 = 256;
+
+/// The capacity in entries of `m` minimum buckets ([`Scenario::salt`]), or `None` when it is not
+/// a `u64`.
+pub const fn salt_capacity(m: u64) -> Option<u64> {
+    MIN_BUCKET.checked_mul(m)
+}
 /// Satin's `KeylessDeploy` (`keylessDeploy(bytes,uint256)`).
 pub const KEYLESS: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x03]);

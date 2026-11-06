@@ -1,9 +1,12 @@
 #!/bin/bash
 # Runs the strict differential gates of `next/diff` and prints one summary line per gate:
 #
-#   GATE main total=<n> match=<n> known=<n> differ=0
-#   GATE fuzz total=<n> match=<n> differ=0
-#   GATE replay blocks=<b> match=<m> pre=<p> refused=<r> differ=0
+#   GATE main total=<n> match=<n> known=<n> class=<n> differ=0
+#   GATE fuzz total=<n> match=<n> class=<n> differ=0
+#   GATE replay blocks=<b> match=<m> pre=<p> refused=<r> known=<k> class=<c> differ=0
+#
+# `known` counts the cases a `known-differences.toml` entry accepts, `class` those an accepted
+# class accepts by its shape (`gate::halted_first_frame`).
 #   GATE block blocks=<b> included=<i> refused=<r> counters=<b> post=<b> differ=0
 #
 # Usage: gate.sh sample|full

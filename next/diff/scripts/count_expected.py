@@ -5,14 +5,17 @@ Usage: count_expected.py <replay dir> <block dir> <known-differences.toml>
 Each directory holds `<set>/<n>.jsonl` (or `<n>.jsonl.zst`). Prints the two lines
 `gate.sh` compares the gates' summaries with:
 
-  EXPECT_REPLAY="blocks=<b> match=<m> pre=<p> refused=<r> known=<k>"
+  EXPECT_REPLAY="blocks=<b> match=<m> pre=<p> refused=<r> known=<k> class=<c>"
   EXPECT_BLOCK="blocks=<b> included=<i> refused=<r> counters=<b> post=<b>"
 
 The counts do not use the gate's code: a transaction the reference applied is `match`, one the
 reference refused is `refused` (replay: an `error` in its `satin` outcome; block: a status that
 starts with `refused`), every pre-block call is one `pre`. An applied transaction that a
 `[[replay_difference]]` entry lists (by set, block and index, with its hash) is `known` instead of
-`match`. An entry of a listed block whose transaction is missing, has another hash or was refused
+`match`. An applied transaction no entry lists whose reference row records no frame (`frames` is
+`[]`) is `class`: that is the reference's side of the accepted class `halted_first_frame` (the
+reference opens no frame for a first frame whose runtime gas phase fails); the engine's side, one
+halted root frame and nothing else different, is the gate's to check. An entry of a listed block whose transaction is missing, has another hash or was refused
 is an error, and so is a row of a kind the gates do not read.
 """
 import json, os, subprocess, sys
@@ -40,7 +43,7 @@ replay_dir, block_dir, known_path = sys.argv[1], sys.argv[2], sys.argv[3]
 listed = {}
 for e in known_toml.tables(known_path, "replay_difference"):
     listed[(e["set"], str(e["block"]), e["index"])] = e["hash"]
-blocks = match = pre = refused = known = 0
+blocks = match = pre = refused = known = cls = 0
 for path in files(replay_dir):
     blocks += 1
     block_set = os.path.basename(os.path.dirname(path))
@@ -62,13 +65,15 @@ for path in files(replay_dir):
                     raise SystemExit("count_expected.py: listed transaction %s:%s:%d has hash %s" % (key + (r["hash"],)))
                 pending.discard(key)
                 known += 1
+            elif r["frames"] == []:
+                cls += 1
             else:
                 match += 1
         else:
             raise SystemExit("count_expected.py: unknown row kind %r in %s" % (r.get("kind"), path))
     if pending:
         raise SystemExit("count_expected.py: listed transactions not in their block: %s" % sorted(pending))
-print(f'EXPECT_REPLAY="blocks={blocks} match={match} pre={pre} refused={refused} known={known}"')
+print(f'EXPECT_REPLAY="blocks={blocks} match={match} pre={pre} refused={refused} known={known} class={cls}"')
 
 blocks = included = refused = counters = post = 0
 for path in files(block_dir):

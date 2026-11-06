@@ -130,7 +130,10 @@ fn db(s: &Scenario) -> MemoryDatabase {
             db = db.account_storage(a.address, U256::from(*k), U256::from(*v));
         }
     }
-    if let Some((_, scalar, _)) = &s.l1_fee {
+    // The L1 block info: slot 1 is the L1 base fee, slot 3 holds the Ecotone base fee scalar in
+    // bits 96..128. Written after the accounts' own storage, so `l1_fee` decides both slots.
+    if let Some((base_fee, scalar, _)) = &s.l1_fee {
+        db = db.account_storage(scenarios::L1_BLOCK, U256::from(1), U256::from(*base_fee));
         db = db.account_storage(scenarios::L1_BLOCK, U256::from(3), U256::from(*scalar) << 96);
     }
     // A 23-byte `0xef0100 || address` is installed as an EIP-7702 delegation (the builder's
@@ -165,6 +168,9 @@ fn limits(s: &Scenario) -> EvmTxRuntimeLimits {
     l
 }
 
+// The scenarios' SALT unit is the reference's minimum bucket.
+const _: () = assert!(scenarios::MIN_BUCKET == mega_evm::MIN_BUCKET_SIZE as u64);
+
 fn envs(s: &Scenario) -> Test {
     let mut env = Test::new();
     for (a, k, m) in &s.salt {
@@ -172,7 +178,9 @@ fn envs(s: &Scenario) -> Test {
             Some(k) => <Test as SaltEnv>::bucket_id_for_slot(*a, U256::from(*k)),
             None => <Test as SaltEnv>::bucket_id_for_account(*a),
         };
-        env = env.with_bucket_capacity(id, mega_evm::MIN_BUCKET_SIZE as u64 * m);
+        let capacity = scenarios::salt_capacity(*m)
+            .unwrap_or_else(|| panic!("{}: {m} minimum buckets is not a u64 capacity", s.name));
+        env = env.with_bucket_capacity(id, capacity);
     }
     for (a, k, capacity) in &s.salt_capacity {
         let id = match k {

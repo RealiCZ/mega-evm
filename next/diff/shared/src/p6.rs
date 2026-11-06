@@ -266,5 +266,16 @@ pub fn all() -> Vec<Scenario> {
         s.data = vec![byte; 1000];
         v.push(s);
     }
+    // DUPN and SWAPN with an immediate EIP-8024 rejects (0x5b, and 0x7f at the end of that
+    // range), EXCHANGE with 0x52: evm2 halts with `InvalidImmediateEncoding`, revm with
+    // `OpcodeNotFound` (an accepted label difference); gas, output and state are equal.
+    for (name, code) in [
+        ("p6_dupn_invalid_immediate", [op::PUSH1, 1, op::DUPN, 0x5b]),
+        ("p6_swapn_invalid_immediate", [op::PUSH1, 1, op::SWAPN, 0x5b]),
+        ("p6_swapn_invalid_immediate_7f", [op::PUSH1, 1, op::SWAPN, 0x7f]),
+        ("p6_exchange_invalid_immediate", [op::PUSH1, 1, op::EXCHANGE, 0x52]),
+    ] {
+        v.push(base(name, code.to_vec(), None, 1_000_000));
+    }
     v
 }

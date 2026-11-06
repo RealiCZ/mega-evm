@@ -34,6 +34,7 @@ fn test_replay_matches_reference_plain_and_inspected() {
     let satin_dir = std::env::var("MEGA_EVM2_REPLAY_REF").expect("MEGA_EVM2_REPLAY_REF");
     let cmp_dir = std::env::var("MEGA_EVM2_OUT").ok();
     let known = gate::known_replay_differences();
+    let classes = gate::known_classes();
     let mut totals: BTreeMap<String, u64> = BTreeMap::new();
     let mut field_counts: BTreeMap<String, u64> = BTreeMap::new();
     let mut processed = Vec::new();
@@ -233,6 +234,7 @@ fn test_replay_matches_reference_plain_and_inspected() {
                         }
                         let accepted = gate::classify(
                             &listed,
+                            &classes,
                             &key,
                             d,
                             satin,
@@ -241,10 +243,13 @@ fn test_replay_matches_reference_plain_and_inspected() {
                         );
                         d = match &accepted {
                             Verdict::Differ(d) => d.clone(),
-                            Verdict::Match | Verdict::Known => Vec::new(),
+                            Verdict::Match | Verdict::Known | Verdict::Class(_) => Vec::new(),
                         };
                         verdict = if accepted == Verdict::Known {
                             "known".into()
+                        } else if let Verdict::Class(class) = accepted {
+                            o.insert("class".into(), json!(class));
+                            "class".into()
                         } else if satin.get("error").is_some() && d.is_empty() {
                             "refused_both".into()
                         } else if d.is_empty() {
