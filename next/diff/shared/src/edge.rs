@@ -30,7 +30,17 @@
 //!   first, so the detention of the transaction holds its caller as before;
 //! - a creation transaction whose constructor destroys the new contract (itself, or through a frame
 //!   it delegates to): the start record that comes back with the leaf goes back to the regular gas
-//!   the record took, the reservoir keeps the rest.
+//!   the record took, the reservoir keeps the rest;
+//! - a keyless deployment whose signer is the transaction's sender: the sender's account is never
+//!   recorded again, so the deployment charges no record of the signer's nonce and gives none back
+//!   when the nonce is set back;
+//! - a first frame that starts with the transaction already over a limit (a deposit's created
+//!   caller under a state-growth limit of 0): built or answered with a success, it is held to the
+//!   limits as its start is drawn, dimension by dimension, so the first dimension crossed in the
+//!   order data size, KV updates, state growth names the stop; an interceptor's answer is not held;
+//! - a `DUPN` deeper than the stack outside `p6_dupn`, without an entry: the class of its label;
+//! - a value the recipient returns to the sender (a call, a destruction): the start record is taken
+//!   back in the first frame, and the reservoir it returns unwinds the transaction's spill.
 #![allow(dead_code)]
 use super::{
     A, Account, Asm, Auth, B, BELOW_CAP, BLOCK_GAS_LIMIT, D, EMPTY, IDENTITY, KEYLESS, Limits,
@@ -858,6 +868,156 @@ fn failed_deposit_mint_overflow() -> Vec<Scenario> {
     v
 }
 
+/// A pre-EIP-155 creation (nonce 0, gas price 100 gwei, gas limit 200,000, value 5 wei, init code
+/// returning one byte) signed by Nick's method (`r` = `s` = 0x22..22), and its signer.
+const KEYLESS_WITH_VALUE: &str = "f8568085174876e80083030d4080058560016000f31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222";
+const KEYLESS_WITH_VALUE_SIGNER: Address =
+    alloy_primitives::address!("0xb6a4e6e5019de4b8dae955a61c926d35c8f4bcc8");
+
+/// A keyless deployment whose signer is the transaction's sender (at nonce 0, which validation
+/// bumps to 1, so the creation's bump is taken back): no record of the signer's nonce is charged,
+/// and none is given back, whether the creation succeeds, reverts or halts, carries a value or the
+/// transaction a gas price. The control: the same signer at nonce 1, from another sender, whose
+/// nonce record is charged and given back.
+fn keyless_signer_is_sender() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    for (name, tx, gas_price) in [
+        ("edge_keyless_signer_is_sender_ok", "ok", 0u64),
+        ("edge_keyless_signer_is_sender_revert", "revert", 0),
+        ("edge_keyless_signer_is_sender_halt", "halt", 0),
+        ("edge_keyless_signer_is_sender_value", "value", 0),
+        ("edge_keyless_signer_is_sender_gas_price", "ok", 1),
+        ("edge_keyless_signer_at_nonce_1_other_sender", "ok", 0),
+    ] {
+        let (raw, signer) = if tx == "value" {
+            (hex::decode(KEYLESS_WITH_VALUE).unwrap(), KEYLESS_WITH_VALUE_SIGNER)
+        } else {
+            super::q8::keyless_tx(tx)
+        };
+        let other_sender = name.ends_with("other_sender");
+        let signer_account = Account {
+            address: signer,
+            nonce: other_sender as u64,
+            balance: U256::from(ONE_ETHER),
+            ..Account::default()
+        };
+        let mut s = edge(name, vec![signer_account], 1_000_000, Limits::default());
+        s.to = KEYLESS;
+        s.data = super::q8::keyless_call_raw(&raw, 1_000_000);
+        s.gas_price = gas_price;
+        if !other_sender {
+            s.accounts.retain(|a| a.address != super::SENDER);
+            s.sender = signer;
+        }
+        v.push(s);
+    }
+    v
+}
+
+/// A deposit from an absent caller (its created caller is the transaction's one unit of state
+/// growth) under a state-growth limit of 0, whose first frame starts with the transaction already
+/// over that limit: answered with a success (a value to an account without code, the identity
+/// precompile, an absent account), the answer is replaced by the stop `3:0`; built with a start
+/// that crosses an earlier dimension (a data-size budget of 100 under a 200-byte start, a KV
+/// limit of 0), that dimension is the stop. Controls: a built frame without a value (`3:0`) and an
+/// interceptor's answer (not held).
+fn first_frame_over_limit() -> Vec<Scenario> {
+    let depositor = super::q2::DEPOSITOR;
+    let contract = || acct(A, vec![op::STOP]);
+    let growth0 = Limits { growth: Some(0), ..Limits::default() };
+    let mut v = Vec::new();
+    for (name, to, value, mint, data, accounts, limits) in [
+        (
+            "edge_first_frame_over_growth_value_to_eoa",
+            A,
+            1u64,
+            5u64,
+            vec![],
+            vec![funded(A, vec![], 1)],
+            growth0,
+        ),
+        ("edge_first_frame_over_growth_precompile", IDENTITY, 0, 0, vec![0, 0xff], vec![], growth0),
+        ("edge_first_frame_over_growth_absent", EMPTY, 0, 1, vec![], vec![], growth0),
+        (
+            "edge_first_frame_data_budget_before_growth",
+            A,
+            1,
+            1_000_000,
+            vec![],
+            vec![contract()],
+            Limits { data: Some(410), ..growth0 },
+        ),
+        (
+            "edge_first_frame_kv_before_growth",
+            A,
+            1,
+            1_000_000,
+            vec![],
+            vec![contract()],
+            Limits { kv: Some(0), ..growth0 },
+        ),
+        (
+            "edge_first_frame_over_growth_contract",
+            A,
+            0,
+            1_000_000,
+            vec![],
+            vec![contract()],
+            growth0,
+        ),
+        (
+            "edge_first_frame_over_growth_interceptor",
+            super::q8::ACCESS_CONTROL,
+            0,
+            0,
+            super::q8::sel("isVolatileDataAccessDisabled()").to_vec(),
+            vec![],
+            growth0,
+        ),
+    ] {
+        let mut s = edge(name, accounts, 1_000_000, limits);
+        s.sender = depositor;
+        s.deposit = Some(mint);
+        s.to = to;
+        s.value = U256::from(value);
+        s.data = data;
+        v.push(s);
+    }
+    v
+}
+
+/// `PUSH1 1; DUPN 0x00`: a `DUPN` deeper than the one-item stack, a case of the label class
+/// `dupn_depth_label` (it has no entry of its own).
+fn dupn_deeper_than_stack() -> Vec<Scenario> {
+    vec![edge(
+        "edge_dupn_deeper_than_stack",
+        vec![acct(A, vec![op::PUSH1, 1, op::DUPN, 0x00, op::STOP])],
+        1_000_000,
+        Limits::default(),
+    )]
+}
+
+/// A value of 1 the recipient returns to the sender, by a call or by destroying itself: the first
+/// frame's start record is taken back inside the frame and comes back as reservoir, which at the
+/// transaction's settlement unwinds the spill the record made (gas below the execution cap: the
+/// reservoir was empty). Control: above the cap the reservoir paid the record, nothing spilled.
+fn value_returned_to_sender() -> Vec<Scenario> {
+    let call_back =
+        Asm::new().call_with(op::CALL, super::SENDER, 1, 0, 0).op(op::POP).stop().build();
+    let destroy = Asm::new().push_addr(super::SENDER).op(op::SELFDESTRUCT).build();
+    let mut v = Vec::new();
+    for (name, code, gas) in [
+        ("edge_value_returned_to_sender", call_back.clone(), 1_000_000u64),
+        ("edge_value_returned_by_selfdestruct", destroy, 1_000_000),
+        ("edge_value_returned_reservoir_pays_the_record", call_back, super::ABOVE_CAP),
+    ] {
+        let mut s = edge(name, vec![acct(A, code)], gas, Limits::default());
+        s.value = U256::from(1);
+        v.push(s);
+    }
+    v
+}
+
 pub fn all() -> Vec<Scenario> {
     let mut v = system_address();
     v.extend(destroyed_leaf());
@@ -878,5 +1038,9 @@ pub fn all() -> Vec<Scenario> {
     v.extend(selfdestruct_read_after_write());
     v.extend(keyless_value_detained());
     v.extend(failed_deposit_mint_overflow());
+    v.extend(keyless_signer_is_sender());
+    v.extend(first_frame_over_limit());
+    v.extend(dupn_deeper_than_stack());
+    v.extend(value_returned_to_sender());
     v
 }

@@ -698,11 +698,6 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         return stop_frame(gas, state, stop);
     }
     if eligible {
-        // The transaction's own creation, destroyed in its constructor: its start record came
-        // back with the leaf (the settlement gives it back as Satin's spill).
-        if absent_at_start && state.host().ext().tx_start_target == Some(me) {
-            state.host().ext_mut().tx_start_returned = true;
-        }
         gas.refill_reservoir(refill_state);
         refill_history(gas, state, refill_bytes);
         let ext = state.host().ext_mut();
@@ -1106,10 +1101,13 @@ impl MessageHooks<MegaTypes> for StartHooks {
             return Ok(None);
         }
         // Every start revm decided is held to its budgets and the transaction's limits, even one
-        // that draws nothing (a deposit's created caller over a growth limit of nothing).
-        // The first frame: a transaction already over a limit before it (a deposit's created
-        // caller) is stopped before its start is counted; then the start is drawn.
-        let crossing = if msg.depth == 0 {
+        // that draws nothing (a deposit's created caller over a growth limit of nothing). The
+        // first frame's start is drawn and held in one step, dimension by dimension
+        // (`draw_first_frame`), as an answered first frame's is in `before_commit`.
+        let crossing = if msg.depth == 0 && !off("first_frame_hold") {
+            let start = evm.ext_mut().tx_start_pending.take().unwrap_or_default();
+            evm.ext_mut().draw_first_frame(start)
+        } else if msg.depth == 0 {
             let before = if off("hold_start") { None } else { evm.ext().hold_check() };
             before.or_else(|| {
                 evm.ext_mut().tx_start_pending.take().and_then(|d| evm.ext_mut().draw(d))
@@ -1149,12 +1147,20 @@ impl MessageHooks<MegaTypes> for StartHooks {
             evm.ext_mut().mechanisms.disabled_from = None;
         }
         if msg.depth == 0 {
-            // The first frame answered without running (a value transfer to an account with no
-            // code): its start is drawn now, a success giving way to the stop.
-            if let Some(d) = evm.ext_mut().tx_start_pending.take() &&
-                answered &&
+            // The first frame answered without running (a call to an account with no code, a
+            // precompile that answers): its start is drawn now and held as a built frame's is, a
+            // success giving way to the stop; a failure kept nothing and is not stopped.
+            let start = evm.ext_mut().tx_start_pending.take();
+            let held = |evm: &mut Evm<'_, MegaTypes>| {
+                if off("first_frame_hold") {
+                    start.and_then(|d| evm.ext_mut().draw(d))
+                } else {
+                    evm.ext_mut().draw_first_frame(start.unwrap_or_default())
+                }
+            };
+            if answered &&
                 stop.is_success() &&
-                let Some(cross) = evm.ext_mut().draw(d)
+                let Some(cross) = held(evm)
             {
                 evm.ext_mut().note_stop(cross);
                 *stop = InstrStop::Revert;

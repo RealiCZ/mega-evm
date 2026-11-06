@@ -53,7 +53,7 @@ pub(super) fn generate(mode: u8, seed: u64) -> Scenario {
     match mode {
         5 => system_sender(&mut r),
         6 => collision(&mut r),
-        7 => top_precompile(&mut r),
+        7 => top_precompile(&mut r, seed >= KZG_AT_PRICE_FROM),
         8 => wide_limits(&mut r),
         9 => fund_create_destroy(&mut r),
         10 => refusal(&mut r),
@@ -324,8 +324,28 @@ fn collision(r: &mut Rng) -> Scenario {
     s
 }
 
+/// The first seed of mode 7 that prices the KZG point evaluation at Satin's 100,000 and draws it
+/// more often, also with a valid proof: the seeds before it are the gated batch `pre0`, whose
+/// inputs stay as they were drawn (at 50,000).
+pub const KZG_AT_PRICE_FROM: u64 = 3_001;
+
+/// A valid KZG point evaluation: the versioned hash of the commitment at infinity, `z` = `y` = 0,
+/// and the commitment and proof at infinity (the zero polynomial).
+pub(crate) fn kzg_valid_input() -> Vec<u8> {
+    let mut input = alloy_primitives::hex::decode(
+        "010657f37554c781402a22917dee2f75def7ab966d7b770905398eba3c444014",
+    )
+    .unwrap();
+    input.extend([0u8; 64]);
+    for _ in 0..2 {
+        input.push(0xc0);
+        input.extend([0u8; 47]);
+    }
+    input
+}
+
 /// A precompile's input and, where it is fixed by the input's length, its price.
-fn precompile_input(r: &mut Rng) -> (Address, Vec<u8>, Option<u64>) {
+fn precompile_input(r: &mut Rng, kzg_at_price: bool) -> (Address, Vec<u8>, Option<u64>) {
     let pc = |b: u16| {
         let mut x = [0u8; 20];
         x[18] = (b >> 8) as u8;
@@ -333,7 +353,8 @@ fn precompile_input(r: &mut Rng) -> (Address, Vec<u8>, Option<u64>) {
         Address::new(x)
     };
     let words = |n: usize| n.div_ceil(32) as u64;
-    match r.below(13) {
+    let branch = if kzg_at_price && r.chance(40) { 9 } else { r.below(13) };
+    match branch {
         0 => (pc(1), vec![if r.chance(50) { 0 } else { 0x11 }; 128], Some(3_000)),
         1..=3 => {
             let n = r.pick(&[0usize, 1, 31, 32, 33, 64, 1_000, 4_096]);
@@ -371,6 +392,10 @@ fn precompile_input(r: &mut Rng) -> (Address, Vec<u8>, Option<u64>) {
             input.push(flag);
             (pc(9), input, Some(u64::from(rounds)))
         }
+        9 if kzg_at_price => {
+            let input = if r.chance(50) { kzg_valid_input() } else { vec![0; 192] };
+            (pc(0x0a), input, Some(100_000))
+        }
         9 => (pc(0x0a), vec![0; 192], Some(50_000)),
         10 => {
             let (addr, len) = r.pick(&[
@@ -391,8 +416,8 @@ fn precompile_input(r: &mut Rng) -> (Address, Vec<u8>, Option<u64>) {
 }
 
 /// A depth-0 precompile call with the sender or the recipient as the beneficiary.
-fn top_precompile(r: &mut Rng) -> Scenario {
-    let (pc, input, price) = precompile_input(r);
+fn top_precompile(r: &mut Rng, kzg_at_price: bool) -> Scenario {
+    let (pc, input, price) = precompile_input(r, kzg_at_price);
     let mut s = scenario("", Vec::new(), BELOW_CAP, Limits::default());
     s.to = pc;
     s.beneficiary = r.pick(&[SENDER, SENDER, pc, pc, B]);
@@ -481,7 +506,7 @@ fn limit_value(r: &mut Rng) -> u64 {
 
 /// A random composition under limits and SALT capacities drawn over the whole range.
 fn wide_limits(r: &mut Rng) -> Scenario {
-    let g = Gen { harsh: r.chance(50), mechanisms: r.chance(60) };
+    let g = Gen { harsh: r.chance(50), mechanisms: r.chance(60), signer_sender: false };
     let mut s = composition(g, r.next());
     for limit in [
         &mut s.limits.data,
@@ -781,5 +806,26 @@ mod tests {
         let five = generate(5, 3, 3);
         let six = generate(6, 3, 3);
         assert_ne!(format!("{:?}", five[0].accounts), format!("{:?}", six[0].accounts));
+    }
+
+    /// Mode 7 prices the KZG point evaluation at Satin's 100,000 from `KZG_AT_PRICE_FROM` on,
+    /// with gas limits around that price and valid proofs among its inputs; the gated seeds
+    /// before it keep their inputs (a zero input priced at 50,000).
+    #[test]
+    fn test_mode_7_draws_kzg_at_its_price_from_its_new_seeds() {
+        use super::{KZG_AT_PRICE_FROM, kzg_valid_input};
+        let kzg = alloy_primitives::Address::with_last_byte(0x0a);
+        let old = generate(7, 1, KZG_AT_PRICE_FROM - 1);
+        assert!(old.iter().filter(|s| s.to == kzg).all(|s| s.data == vec![0; 192]));
+        let new = generate(7, KZG_AT_PRICE_FROM, KZG_AT_PRICE_FROM + 999);
+        let at_price = |s: &&crate::Scenario| {
+            let needs = 15_000 +
+                4 * s.data.iter().map(|b| if *b == 0 { 1 } else { 4 }).sum::<u64>() +
+                (310 + s.data.len() as u64) * 88;
+            s.to == kzg && s.gas_limit.abs_diff(needs + 100_000) <= 40
+        };
+        let near = new.iter().filter(at_price).count();
+        let valid = new.iter().filter(|s| s.to == kzg && s.data == kzg_valid_input()).count();
+        assert!(near >= 100 && valid >= 100, "near the price {near}, valid proofs {valid}");
     }
 }

@@ -11,7 +11,7 @@
 //! Every other emitted semantic field is compared; missing fields and unknown kinds fail closed.
 //! Accepted differences are listed by case (`[[difference]]`, `[[replay_difference]]`) or, for a
 //! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
-//! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`]).
+//! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUPN_DEPTH_LABEL`]).
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -141,8 +141,16 @@ pub const HALTED_FIRST_FRAME: &str = "halted_first_frame";
 /// `InvalidImmediateEncoding` on the engine's, both runs halted.
 pub const INVALID_IMMEDIATE_LABEL: &str = "invalid_immediate_label";
 
+/// The halt label of a `DUPN` whose operand is deeper than the stack: revm reports
+/// `StackOverflow` (its `dup` returns false for both underflow and overflow, and `dupn_enabled`
+/// maps every false to overflow), evm2 `StackUnderflow` (the label only: gas, output and state are
+/// equal). Its shape, all of which [`dupn_depth_label`] checks: the only difference of the case is
+/// `halt`, normalized `StackOverflow` on the reference's side and `StackUnderflow` on the engine's,
+/// both runs halted.
+pub const DUPN_DEPTH_LABEL: &str = "dupn_depth_label";
+
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 2] = [HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL];
+const CLASSES: [&str; 3] = [HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, DUPN_DEPTH_LABEL];
 
 /// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
 /// [`CLASSES`] and states its `why` and `signoff`. A class not enabled there is not accepted.
@@ -192,13 +200,30 @@ pub fn halted_first_frame(
 /// Whether the differences `diffs` of one case, whose outcomes are `reference` and `candidate`
 /// (not normalized), are exactly the shape of [`INVALID_IMMEDIATE_LABEL`].
 pub fn invalid_immediate_label(diffs: &[String], reference: &Value, candidate: &Value) -> bool {
+    halt_label_only(diffs, reference, candidate, ("OpcodeNotFound", "InvalidImmediateEncoding"))
+}
+
+/// Whether the differences `diffs` of one case, whose outcomes are `reference` and `candidate`
+/// (not normalized), are exactly the shape of [`DUPN_DEPTH_LABEL`].
+pub fn dupn_depth_label(diffs: &[String], reference: &Value, candidate: &Value) -> bool {
+    halt_label_only(diffs, reference, candidate, ("StackOverflow", "StackUnderflow"))
+}
+
+/// Whether the only difference `diffs` holds is the halt label, normalized `labels.0` on the
+/// reference's side and `labels.1` on the engine's, both runs halted.
+fn halt_label_only(
+    diffs: &[String],
+    reference: &Value,
+    candidate: &Value,
+    labels: (&str, &str),
+) -> bool {
     let [only] = diffs else { return false };
     let (a, b) = (canonical(reference), canonical(candidate));
     only == "halt" &&
         a["status"] == "halt" &&
         b["status"] == "halt" &&
-        a["halt"] == "OpcodeNotFound" &&
-        b["halt"] == "InvalidImmediateEncoding"
+        a["halt"] == labels.0 &&
+        b["halt"] == labels.1
 }
 
 /// How one scenario's differences relate to the accepted list.
@@ -243,6 +268,9 @@ pub fn classify(
         if enabled(INVALID_IMMEDIATE_LABEL) && invalid_immediate_label(&diffs, reference, candidate)
         {
             return Verdict::Class(INVALID_IMMEDIATE_LABEL);
+        }
+        if enabled(DUPN_DEPTH_LABEL) && dupn_depth_label(&diffs, reference, candidate) {
+            return Verdict::Class(DUPN_DEPTH_LABEL);
         }
         return Verdict::Differ(diffs);
     }

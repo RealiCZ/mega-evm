@@ -2,8 +2,8 @@
 //! unlisted difference, a mismatching value or frame and a stale entry all fail.
 
 use mega_evm2_diff::gate::{
-    HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, Known, Verdict, classify, compared_frames,
-    known_classes, known_differences, known_replay_differences,
+    DUPN_DEPTH_LABEL, HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, Known, Verdict, classify,
+    compared_frames, known_classes, known_differences, known_replay_differences,
 };
 use serde_json::{Value, json};
 
@@ -177,11 +177,11 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             ("p6_exchange_invalid_immediate", "halt", label.0, label.1),
         ]
     );
-    assert_eq!(known_classes(), [INVALID_IMMEDIATE_LABEL, HALTED_FIRST_FRAME]);
+    assert_eq!(known_classes(), [DUPN_DEPTH_LABEL, INVALID_IMMEDIATE_LABEL, HALTED_FIRST_FRAME]);
     let text = include_str!("../known-differences.toml");
     assert_eq!(text.matches(HALTED_FIRST_FRAME_ENTRY).count(), 2);
-    // Five entries, two classes and two replay entries.
-    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 9);
+    // Five entries, three classes and two replay entries.
+    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 10);
 }
 
 #[test]
@@ -391,4 +391,52 @@ fn test_the_label_class_accepts_exactly_its_label() {
         classify(&[], &label(), "s", frame_count(), &o, &o, (&none, &f)),
         Verdict::Differ(frame_count())
     );
+}
+
+// --- the class `dupn_depth_label`
+// -----------------------------------------------------------
+
+fn dupn() -> Vec<String> {
+    vec![DUPN_DEPTH_LABEL.into()]
+}
+
+#[test]
+fn test_the_dupn_class_accepts_exactly_its_label() {
+    let (r, c) = (outcome("Base(StackOverflow)"), outcome("StackUnderflow"));
+    let halt = || vec!["halt".to_string()];
+    assert_eq!(
+        classify(&[], &dupn(), "s", halt(), &r, &c, NO_FRAMES),
+        Verdict::Class(DUPN_DEPTH_LABEL)
+    );
+    // Off unless the file enables it.
+    assert_eq!(classify(&[], NO_CLASS, "s", halt(), &r, &c, NO_FRAMES), Verdict::Differ(halt()));
+    // Another difference with it, the labels the other way round, another label, or a run that
+    // did not halt.
+    let mut more = halt();
+    more.push("gas_used".into());
+    assert_eq!(classify(&[], &dupn(), "s", more.clone(), &r, &c, NO_FRAMES), Verdict::Differ(more));
+    for (a, b) in [
+        ("StackUnderflow", "Base(StackOverflow)"),
+        ("Base(StackOverflow)", "OutOfGas"),
+        ("Base(OutOfGas(Basic))", "StackUnderflow"),
+        ("Base(OpcodeNotFound)", "InvalidImmediateEncoding"),
+    ] {
+        let (r, c) = (outcome(a), outcome(b));
+        assert_eq!(
+            classify(&[], &dupn(), "s", halt(), &r, &c, NO_FRAMES),
+            Verdict::Differ(halt()),
+            "{a} vs {b}"
+        );
+    }
+    let reverted = json!({"status": "revert", "halt": "StackUnderflow", "gas_used": 1});
+    assert_eq!(
+        classify(&[], &dupn(), "s", halt(), &r, &reverted, NO_FRAMES),
+        Verdict::Differ(halt())
+    );
+    // The other label class does not take it, nor this class the other's label.
+    assert_eq!(classify(&[], &label(), "s", halt(), &r, &c, NO_FRAMES), Verdict::Differ(halt()));
+    let (r2, c2) = (outcome("Base(OpcodeNotFound)"), outcome("InvalidImmediateEncoding"));
+    assert_eq!(classify(&[], &dupn(), "s", halt(), &r2, &c2, NO_FRAMES), Verdict::Differ(halt()));
+    // A case with an entry of its own is held to it.
+    assert_eq!(classify(&known(), &dupn(), "s", halt(), &r, &c, NO_FRAMES), Verdict::Known);
 }

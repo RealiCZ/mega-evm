@@ -117,12 +117,15 @@ gate_env() {
 }
 
 # gate_test <log> <test target> [VAR=value...]: runs one gate test of `mega-evm2-diff` with the
-# given environment, output to <log>; returns the test's exit status.
+# given environment, output to <log>, its exit status to <log>.status; returns that status.
 gate_test() {
-  local log=$1 test=$2
+  local log=$1 test=$2 status=0
   shift 2
   (cd "$gate_lib_next" && env RUST_MIN_STACK=8388608 "$@" \
-    cargo test --release --locked -p mega-evm2-diff --test "$test" -- --nocapture) > "$log" 2>&1
+    cargo test --release --locked -p mega-evm2-diff --test "$test" -- --nocapture) > "$log" 2>&1 ||
+    status=$?
+  echo "$status" > "$log.status"
+  return "$status"
 }
 
 # gate_summary <log> <test target> [VAR=value...]: runs the test and prints its single `GATE`

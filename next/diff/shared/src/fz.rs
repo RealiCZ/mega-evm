@@ -129,10 +129,13 @@ pub fn generate(mode: u8, first: u64, last: u64) -> Vec<Scenario> {
 /// The scenario of seed `seed` of mode `mode`.
 pub fn seed_scenario(mode: u8, seed: u64) -> Scenario {
     let mut s = match mode {
-        1 => composition(Gen { harsh: false, mechanisms: false }, seed),
-        2 => composition(Gen { harsh: true, mechanisms: false }, seed),
-        3 => composition(Gen { harsh: false, mechanisms: true }, seed),
-        4 => composition(Gen { harsh: true, mechanisms: true }, seed),
+        1 => composition(Gen { harsh: false, mechanisms: false, signer_sender: false }, seed),
+        2 => composition(Gen { harsh: true, mechanisms: false, signer_sender: false }, seed),
+        3 => composition(
+            Gen { harsh: false, mechanisms: true, signer_sender: seed >= SIGNER_SENDER_FROM },
+            seed,
+        ),
+        4 => composition(Gen { harsh: true, mechanisms: true, signer_sender: false }, seed),
         11..=13 => regions::generate(mode, seed),
         _ => classes::generate(mode, seed),
     };
@@ -156,12 +159,19 @@ pub fn all() -> Vec<Scenario> {
 }
 
 /// What a composition mode adds: harsh caps, gas and call depth (modes 2 and 4), the later
-/// mechanisms (modes 3 and 4).
+/// mechanisms (modes 3 and 4), and a keyless deployment whose signer is the transaction's sender
+/// (mode 3 from seed [`SIGNER_SENDER_FROM`] on).
 #[derive(Clone, Copy)]
 struct Gen {
     harsh: bool,
     mechanisms: bool,
+    signer_sender: bool,
 }
+
+/// The first seed of mode 3 whose keyless deployments may have the transaction's sender as their
+/// signer: the seeds before it are the gated batches `fq` and `fqbig`, whose inputs stay as they
+/// were drawn.
+pub const SIGNER_SENDER_FROM: u64 = 13_001;
 
 /// A later-mechanism fragment (stack-neutral).
 fn mechanism_fragment(r: &mut Rng) -> Asm {
@@ -444,7 +454,9 @@ fn mechanism_transaction(g: Gen, r: &mut Rng, s: &mut Scenario, h: bool) {
     if s.deposit.is_some() {
         return;
     }
-    match r.below(10) {
+    // From `SIGNER_SENDER_FROM` on, mode 3 draws its keyless deployments more often.
+    let branch = if g.signer_sender && r.chance(50) { 3 } else { r.below(10) };
+    match branch {
         0..=2 => {
             // An EIP-7702 list: 1-3 entries over X1, X2, B and the sender, delegating to B, C, D
             // (D's code is random too) or clearing; nonces mostly right; another chain, an
@@ -510,7 +522,44 @@ fn mechanism_transaction(g: Gen, r: &mut Rng, s: &mut Scenario, h: bool) {
                 s.salt.push((signer, None, r.pick(&[2u64, 8])));
                 s.salt.push((deploy, None, r.pick(&[1u64, 4])));
             }
+            if g.signer_sender && r.chance(70) {
+                // The signer sends the transaction: at nonce 0 validation bumps it to 1, so the
+                // creation's bump is taken back; at nonce 1 the deployment is refused.
+                s.sender = signer;
+                s.accounts.retain(|a| a.address != signer);
+                s.accounts.push(Account {
+                    address: signer,
+                    nonce: r.pick(&[0u64, 0, 0, 1]),
+                    balance: U256::from(r.pick(&[0u64, 10, 1_000_000_000_000_000_000])),
+                    ..Account::default()
+                });
+                s.gas_price = r.pick(&[0u64, 0, 1]);
+            }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Whether `s` is a keyless deployment sent by its own signer.
+    fn signer_sends(s: &Scenario) -> bool {
+        s.to == KEYLESS &&
+            KEYLESS_TXS
+                .iter()
+                .any(|(name, _, _)| super::super::q8::keyless_tx(name).1 == s.sender)
+    }
+
+    /// Mode 3 makes the signer of a keyless deployment the transaction's sender only from
+    /// `SIGNER_SENDER_FROM` on: the gated seeds before it keep their inputs.
+    #[test]
+    fn test_mode_3_draws_the_signer_as_sender_from_its_new_seeds() {
+        let old = generate(3, SIGNER_SENDER_FROM - 2_000, SIGNER_SENDER_FROM - 1);
+        assert_eq!(old.iter().filter(|s| signer_sends(s)).count(), 0);
+        let new = generate(3, SIGNER_SENDER_FROM, SIGNER_SENDER_FROM + 999);
+        let sent = new.iter().filter(|s| signer_sends(s)).count();
+        assert!(sent >= 150, "signer = sender in {sent} of 1,000 new seeds");
     }
 }

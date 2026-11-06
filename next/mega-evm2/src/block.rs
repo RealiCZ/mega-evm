@@ -207,11 +207,15 @@ impl<'a> BlockExecutor<'a> {
     }
 
     /// Satin `apply_pre_execution_changes` (no activation block: the predeploy check is not made).
+    /// A block without a parent beacon block root is refused at the EIP-4788 step.
     pub fn apply_pre_execution_changes(&mut self) -> Result<(), String> {
         let parent = Bytes::from(self.parent_hash.0.to_vec());
         self.system_call(HISTORY_STORAGE, parent)?;
-        let root = Bytes::from(self.parent_beacon_block_root.unwrap_or_default().0.to_vec());
-        self.system_call(BEACON_ROOTS, root)?;
+        // A block without a parent beacon block root is invalid (EIP-4788).
+        let root = self
+            .parent_beacon_block_root
+            .ok_or_else(|| "missing parent beacon block root (EIP-4788)".to_owned())?;
+        self.system_call(BEACON_ROOTS, Bytes::from(root.0.to_vec()))?;
         if self.registry_due()? {
             self.system_call(
                 SEQUENCER_REGISTRY,

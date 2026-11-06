@@ -4,12 +4,13 @@
 
 # The fuzz batches of the full gate, as name:mode:first..=last:count. `gate.sh full` runs the
 # engine on them and `regen-reference.sh` generates their reference outputs, so both read this list.
-# Modes 1 to 4 are random compositions; modes 5 to 10 each aim at one class of edge inputs (the
-# generator's `fz/classes.rs`), modes 11 to 13 at a region no earlier mode drew (`fz/regions.rs`).
+# Modes 1 to 4 are random compositions (mode 3's `fqsig` seeds also make a keyless deployment's
+# signer the sender; mode 7's `pre0kzg` seeds price KZG at 100,000); modes 5 to 10 each aim at one class of edge inputs (the generator's
+# `fz/classes.rs`), modes 11 to 13 at a region no earlier mode drew (`fz/regions.rs`).
 FULL_FUZZ_BATCHES=(
-  fq:3:1..=3000:3000 fqbig:3:3001..=13000:10000 fqh:4:1..=2000:2000
+  fq:3:1..=3000:3000 fqbig:3:3001..=13000:10000 fqsig:3:13001..=14000:1000 fqh:4:1..=2000:2000
   fqhbig:4:2001..=7000:5000 big:1:401..=3400:3000 harsh:2:1..=2000:2000
-  sys:5:1..=3000:3000 collide:6:1..=3000:3000 pre0:7:1..=3000:3000
+  sys:5:1..=3000:3000 collide:6:1..=3000:3000 pre0:7:1..=3000:3000 pre0kzg:7:3001..=4000:1000
   limits:8:1..=3000:3000 destroy:9:1..=3000:3000 refuse:10:1..=3000:3000
   frame:11:1..=3000:3000 readfail:12:1..=3000:3000 stack:13:1..=3000:3000
 )
@@ -29,7 +30,7 @@ SAMPLE_FUZZ_BATCHES=(
 # (`known-differences.toml`). This is the one place that states them. Adding a scenario or a known
 # difference means changing it here (and the data under `next/diff/data`, see `data/README.md`);
 # `gate-lib.sh`, `check-reference.sh` and `regen-reference.sh` read it.
-MAIN_EXPECT="total=1091 match=1082 known=5 class=4"
+MAIN_EXPECT="total=2666 match=2503 known=5 class=158"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (all of mode 11's first-frame window, `halted_first_frame`); every other seed must match.
 SAMPLE_FUZZ_CLASS=45

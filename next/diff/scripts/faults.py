@@ -294,11 +294,13 @@ def frameless_halt(o):
     without opening a frame."""
     return o.get("frames") == [] and "error" not in o and o.get("halt") == "Base(OutOfGas(Basic))"
 
-def drop_class(t):
-    """`known-differences.toml` without its `[[class]]` table of `halted_first_frame`."""
-    a = t.index('[[class]]\nname = "halted_first_frame"\n')
+def drop_class(t, name="halted_first_frame"):
+    """`known-differences.toml` without its `[[class]]` table of `name`."""
+    a = t.index('[[class]]\nname = "%s"\n' % name)
     b = t.index("\n\n", a) + 1
     return t[:a] + t[b:]
+
+DUPN = "edge_dupn_deeper_than_stack"
 
 
 def diff(field):
@@ -326,12 +328,16 @@ FAULTS = [
     # main: the accepted difference hides exactly itself
     ("known-stale", "main", r"^DIFFER p6_dupn .*stale known difference", scen_edit(M, named("p6_dupn", lambda o: o.update(halt="Base(StackUnderflow)")))),
     ("known-toml-wrong-field", "main", r"^DIFFER p6_dupn .*did not occur as listed", known_toml(lambda t: t.replace('field = "halt"', 'field = "gas_used"'))),
-    ("known-toml-wrong-case", "main", r'^DIFFER p6_dupn \["halt"\]', known_toml(lambda t: t.replace('scenario = "p6_dupn"', 'scenario = "p6_add"'))),
+    ("known-toml-wrong-case", "main", r'^DIFFER p6_add .*stale known difference', known_toml(lambda t: t.replace('scenario = "p6_dupn"', 'scenario = "p6_add"'))),
     # main: the class `halted_first_frame` takes exactly its shape, only while the file enables it
     ("class-other-field", "main", r'^DIFFER [^ ]+ \["gas_used", "frame count 0 vs 1"\]', scen_field(M, "gas_used", frameless_halt)),
     ("class-reference-frame", "main", r'^DIFFER [^ ]+ \["frame 0 ', scen_field(M, "frames", frameless_halt, lambda v: [{"kind": "Call", "level": 0, "gas_limit": 1, "reservoir": 0, "value": "0", "status": "halt", "output": "0x", "gas_left": 0, "reservoir_left": 0}])),
     ("class-not-enabled", "main", r'^DIFFER [^ ]+ \["frame count 0 vs 1"\]$', known_toml(drop_class)),
     ("main-expected-class", "main", SUMMARY, expect("EXPECT_MAIN", count("class", 1))),
+    # main: the class `dupn_depth_label` takes exactly its label, only while the file enables it
+    ("dupn-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % DUPN, scen_field(M, "gas_used", lambda o: o["name"] == DUPN)),
+    ("dupn-class-other-label", "main", r'^DIFFER %s \["halt"\]$' % DUPN, scen_edit(M, named(DUPN, lambda o: o.update(halt="Base(OutOfGas(Basic))")))),
+    ("dupn-class-not-enabled", "main", r'^DIFFER %s \["halt"\]$' % DUPN, known_toml(lambda t: drop_class(t, "dupn_depth_label"))),
     # fuzz
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),
     ("fuzz-duplicate-entry", "fuzz", r"duplicate oracle names", scen_edit(F, dup_entry)),

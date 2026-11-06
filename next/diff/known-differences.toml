@@ -12,7 +12,14 @@
 # revm labels a DUP whose operand is deeper than the stack as `StackOverflow`: its
 # `dup` returns false for both underflow and overflow, and `dupn_enabled` maps every false to
 # overflow. evm2 tells them apart and reports `StackUnderflow`. Gas, output and state are equal.
-# The owner accepted evm2's `StackUnderflow` label on 2026-11-05.
+# The owner accepted evm2's `StackUnderflow` label on 2026-11-05, as a class of label differences:
+# `p6_dupn` keeps its entry below, and the class `dupn_depth_label` takes any other case whose only
+# difference is this label (`gate::dupn_depth_label`).
+[[class]]
+name = "dupn_depth_label"
+why = "A label difference only: revm reports StackOverflow for a DUPN whose operand is deeper than the stack, evm2 StackUnderflow. Gas, output, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"
+
 [[difference]]
 scenario = "p6_dupn"
 field = "halt"

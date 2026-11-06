@@ -138,12 +138,6 @@ pub struct Lite {
     pub stops: u64,
     pub detention: DetentionState,
     pub tx_start_charge: u64,
-    /// The account the transaction's own frame starts on (its recipient, or its creation) when
-    /// its start charges a record.
-    pub tx_start_target: Option<Address>,
-    /// The transaction's own creation was destroyed in its constructor and its start record came
-    /// back with the leaf (the settlement gives it back as Satin's spill would).
-    pub tx_start_returned: bool,
     pub tx_start_bytes: u64,
     pub body_history: u64,
     pub body_bytes: u64,
@@ -255,8 +249,6 @@ impl Lite {
         self.stops = 0;
         self.detention.reset(self.cfg.cap, self.cfg.oracle_cap);
         self.tx_start_charge = 0;
-        self.tx_start_target = None;
-        self.tx_start_returned = false;
         self.tx_start_bytes = 0;
         self.last_caller_remaining = 0;
         self.reservoir_left = 0;
@@ -328,6 +320,39 @@ impl Lite {
                 self.tx_net[i] + if i == 2 { self.tx_growth } else { 0 } + self.frames_net[i];
             if over(total + delta[i], self.cfg.limits[i]) {
                 return Some((KIND[i], self.cfg.limits[i]));
+            }
+        }
+        let top = self.frames.last_mut().unwrap();
+        for (i, d) in delta.into_iter().enumerate() {
+            top.net[i] += d;
+            self.frames_net[i] += d;
+        }
+        None
+    }
+
+    /// Draws the transaction's own frame's decided start, `delta`, held to the limits (Satin's
+    /// order at one site): per dimension in order — data size, KV updates, state growth — the
+    /// frame budget, then the transaction limit, each also for a dimension the start adds nothing
+    /// to, so usage over a limit before the start (a deposit's created caller) is the crossing
+    /// there. A built frame and a frame answered with a success are held alike.
+    pub fn draw_first_frame(&mut self, delta: [i64; 3]) -> Option<(u8, u64)> {
+        if self.exempt {
+            return None;
+        }
+        let top = self.frames.last().expect("a frame");
+        for (i, kind) in KIND.into_iter().enumerate() {
+            let room = if crate::off("unclamped_draw") {
+                top.remaining(i)
+            } else {
+                top.reported_remaining(i)
+            };
+            if (delta[i] > 0 && delta[i] as u64 > room) || over(top.net[i], top.budget[i]) {
+                return Some((kind, top.budget[i]));
+            }
+            let total: i64 =
+                self.tx_net[i] + if i == 2 { self.tx_growth } else { 0 } + self.frames_net[i];
+            if over(total + delta[i].max(0), self.cfg.limits[i]) {
+                return Some((kind, self.cfg.limits[i]));
             }
         }
         let top = self.frames.last_mut().unwrap();

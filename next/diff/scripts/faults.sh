@@ -105,10 +105,10 @@ fault_job() {
     return
   fi
   if [ "$evidence" = summary ]; then
-    if grep -rq '^test result: ok' "$dir/logs" && ! grep -rq '^test result: FAILED' "$dir/logs"; then
+    if completed "$dir/logs"; then
       echo "REJECTED $id ($gate${note:+, $note}): by the expected summary"
     else
-      echo "UNPROVEN $id ($gate${note:+, $note}): a test failed, so the summary check is not what rejected it (see $dir)"
+      echo "UNPROVEN $id ($gate${note:+, $note}): a test failed or did not complete, so the summary check is not what rejected it (see $dir)"
     fi
     return
   fi
@@ -119,6 +119,20 @@ fault_job() {
   else
     echo "REJECTED $id ($gate${note:+, $note})"
   fi
+}
+
+# completed <logs>: whether every test of a run (every batch of a fuzz run) exited with status 0
+# and printed its passing libtest result. A test that failed, or one that died before its result
+# (a signal, a crash of cargo), proves nothing about the summary comparison.
+completed() {
+  local status found=0
+  for status in "$1"/*.log.status; do
+    [ -e "$status" ] || return 1
+    found=1
+    [ "$(cat "$status")" = 0 ] || return 1
+    grep -q '^test result: ok' "${status%.status}" || return 1
+  done
+  [ "$found" = 1 ]
 }
 
 # shows <dir> <regex>: whether the test logs or the comparison output of a run match <regex>.

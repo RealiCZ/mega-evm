@@ -524,11 +524,11 @@ scope = "sample"
 why = "A frame stopped by a limit as it resumes from its child (its nonce record after a creation, or held again by hold_caller) resumes on the detention ledger first, as Satin counts the limit once the child merged into it; off, the frame stops unresumed and the detention stops its caller as soon as it resumes (gas and reads differ)."
 
 [[control]]
-switch = "own_creation_record_spill"
+switch = "tx_spill_unwind"
 gate = "main"
-scenario = "edge_create_tx_destroyed_in_constructor"
+scenario = "edge_value_returned_to_sender"
 scope = "sample"
-why = "When a creation transaction's constructor destroys the new contract, the start record that comes back with the leaf returns to the regular gas that paid it, as Satin's spill does; off, it stays in the reservoir (reservoir_remaining differs)."
+why = "The first frame's start record is charged on the transaction's gas with its spill recorded there, so a reservoir the first frame returns (the record taken back when the value comes back to the sender, or with the leaf of a creation its constructor destroyed) unwinds that spill into the regular gas, as Satin's child-merge return does for every spill outstanding at the transaction. Off, the spill is not recorded and the reservoir keeps the gas (reservoir_remaining differs)."
 
 # The gate harness's fixture switches (`next/diff`); the engine's controls continue after them.
 
@@ -602,3 +602,24 @@ gate = "main"
 scenario = "edge_deposit_failed_mint_overflow"
 scope = "sample"
 why = "A failed deposit credits its mint with a checked add, as op-revm does: a balance that cannot hold it stays as it was. Off, the credit wraps and the sender is left with a small balance."
+
+[[control]]
+switch = "keyless_sender_record"
+gate = "main"
+scenario = "edge_keyless_signer_is_sender_ok"
+scope = "sample"
+why = "A keyless deployment whose signer is the transaction's sender charges no record of the signer's nonce (the sender's account is never recorded again), so setting the nonce back gives none back. Off, the take-back gives back 3,520 gas of history that was never charged (gas used and the history differ)."
+
+[[control]]
+switch = "first_frame_hold"
+gate = "main"
+scenario = "edge_first_frame_over_growth_value_to_eoa"
+scope = "sample"
+why = "The first frame's start is drawn and held in one step, built or answered with a success, dimension by dimension (data size, KV updates, state growth), each also when the start adds nothing to it: a deposit whose created caller is already over a state-growth limit of 0 is stopped there. Off, an answered first frame is not held (the value moves and the call succeeds) and a built one is held before its start is drawn (the stop names the wrong dimension)."
+
+[[control]]
+switch = "deposit_code_after_intrinsic"
+gate = "main"
+scenario = "edge_sweep_dep_delegated_existing_value_intrinsic"
+scope = "sample"
+why = "A deposit reads its sender's code only once it passed its intrinsic and floor checks: a delegated sender's deposit that fails its intrinsic gas reads no code. Off, the code is read before the check (the read set differs)."

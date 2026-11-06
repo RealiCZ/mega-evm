@@ -383,6 +383,7 @@ pub fn hand_written() -> Vec<Scenario> {
     v.extend(q8::all());
     v.extend(cap::all());
     v.extend(edge::all());
+    v.extend(sweep::all());
     v.extend(bd::all());
     v.iter_mut().for_each(add_chain_accounts);
     v
@@ -397,12 +398,45 @@ pub fn by_name(name: &str) -> Option<Scenario> {
 /// Gives `s` the accounts a real chain has: the L1Block predeploy and the SequencerRegistry, each
 /// with a code byte so that their slots are read below the journal on both engines (an absent
 /// account's slots are not read by evm2). An account `s` already holds at either address stays.
+/// Entries of one address are merged first ([`merge_duplicate_accounts`]).
 pub fn add_chain_accounts(s: &mut Scenario) {
+    merge_duplicate_accounts(s);
     for a in [L1_BLOCK, SEQUENCER_REGISTRY] {
         if !s.accounts.iter().any(|x| x.address == a) {
             s.accounts.push(Account { address: a, code: vec![0xfe], ..Account::default() });
         }
     }
+}
+
+/// Merges the account entries `s` holds for one address into its first, so that every fixture
+/// builder sees one entry per address (a generator can list an address twice). A later entry's
+/// balance, code and nonce replace the earlier ones when they are not zero or empty, and its slots
+/// are written over the earlier ones: what a builder that writes each entry's set fields in turn
+/// makes of the list.
+pub fn merge_duplicate_accounts(s: &mut Scenario) {
+    let mut merged: Vec<Account> = Vec::with_capacity(s.accounts.len());
+    for a in s.accounts.drain(..) {
+        let Some(m) = merged.iter_mut().find(|m| m.address == a.address) else {
+            merged.push(a);
+            continue;
+        };
+        if !a.balance.is_zero() {
+            m.balance = a.balance;
+        }
+        if !a.code.is_empty() {
+            m.code = a.code;
+        }
+        if a.nonce > 0 {
+            m.nonce = a.nonce;
+        }
+        for (k, v) in a.storage {
+            match m.storage.iter_mut().find(|(key, _)| *key == k) {
+                Some(slot) => slot.1 = v,
+                None => m.storage.push((k, v)),
+            }
+        }
+    }
+    s.accounts = merged;
 }
 
 /// Every scenario of a gate run, as the environment selects them: the base list, the `p6`, `p7`
@@ -418,6 +452,7 @@ pub fn everything() -> Vec<Scenario> {
     v.extend(q8::all());
     v.extend(cap::all());
     v.extend(edge::all());
+    v.extend(sweep::all());
     v.extend(bd::all());
     v.iter_mut().for_each(add_chain_accounts);
     if let Ok(only) = std::env::var("MEGA_EVM2_ONLY") {
@@ -447,6 +482,7 @@ pub mod probe;
 pub mod q2;
 pub mod q8;
 pub mod record;
+pub mod sweep;
 
 /// The base scenarios (group "p5").
 pub fn all() -> Vec<Scenario> {
@@ -900,6 +936,41 @@ pub fn all() -> Vec<Scenario> {
 /// `remainingComputeGas()`'s selector.
 pub fn remaining_compute_gas_selector() -> [u8; 4] {
     alloy_primitives::keccak256("remainingComputeGas()")[..4].try_into().unwrap()
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    /// A fuzz seed that lists an account twice reaches the builders as one entry, the later
+    /// entry's set fields over the earlier's.
+    #[test]
+    fn test_a_seed_listing_an_address_twice_has_one_entry() {
+        let raw = fz::seed_scenario(3, 19);
+        assert!(raw.accounts.iter().filter(|a| a.address == D).count() > 1, "fq0019 lists D twice");
+        let s = by_name("fq0019").unwrap();
+        let d: Vec<_> = s.accounts.iter().filter(|a| a.address == D).collect();
+        assert_eq!(d.len(), 1);
+        let last = raw.accounts.iter().rev().find(|a| a.address == D && !a.code.is_empty());
+        assert_eq!(Some(&d[0].code), last.map(|a| &a.code));
+        let mut twice = scenario("", vec![], BELOW_CAP, Limits::default());
+        twice.accounts = vec![
+            Account {
+                address: A,
+                balance: U256::from(7),
+                storage: vec![(1, 1), (2, 2)],
+                ..Account::default()
+            },
+            Account { address: A, code: vec![0], storage: vec![(2, 5)], ..Account::default() },
+        ];
+        merge_duplicate_accounts(&mut twice);
+        assert_eq!(twice.accounts.len(), 1);
+        let a = &twice.accounts[0];
+        assert_eq!(
+            (a.balance, a.code.clone(), a.storage.clone()),
+            (U256::from(7), vec![0], vec![(1, 1), (2, 5)])
+        );
+    }
 }
 
 #[cfg(test)]

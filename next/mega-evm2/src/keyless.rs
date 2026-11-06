@@ -167,6 +167,9 @@ struct Started {
     signer_nonce: u64,
     signer_account_charged: bool,
     signer_changed_before: bool,
+    /// Whether rule 14 charged the signer's nonce record (not when the transaction had changed
+    /// the signer's account already, the sender's among them).
+    nonce_record_charged: bool,
 }
 
 #[instruction(EvmTypes = MegaTypes, hooked)]
@@ -323,6 +326,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         signer_nonce: info.nonce,
         signer_account_charged,
         signer_changed_before,
+        nonce_record_charged: nonce_records == 1,
     };
     state.host().ext_mut().mechanisms.keyless = Some(crate::satin_ext::Keyless {
         signer,
@@ -387,7 +391,11 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
             .map(|mut acc| acc.set_nonce(started.signer_nonce))
             .map_err(evm2::HostError::from);
         reset.map_err(|e| state.fail(e))?;
-        if !changed(state.host(), started.signer) {
+        // No record stands once the nonce is set back: the history charged for it comes back,
+        // and only what was charged (nothing for a signer the transaction had changed already,
+        // such as its sender, whose account is never recorded again).
+        let charged = started.nonce_record_charged || crate::off("keyless_sender_record");
+        if charged && !changed(state.host(), started.signer) {
             refill_history(gas, state, WRITE_RECORD_SIZE);
         }
     }

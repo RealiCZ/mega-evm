@@ -105,14 +105,19 @@ pub fn keyless_tx(name: &str) -> (Vec<u8>, Address) {
 /// deploy address)`.
 pub fn keyless_call(name: &str, gas_override: u64) -> (Vec<u8>, Address, Address) {
     let (raw, signer) = keyless_tx(name);
+    (keyless_call_raw(&raw, gas_override), signer, signer.create(0))
+}
+
+/// `keylessDeploy(bytes, uint256)` with the signed keyless transaction `raw`.
+pub fn keyless_call_raw(raw: &[u8], gas_override: u64) -> Vec<u8> {
     let mut c = sel("keylessDeploy(bytes,uint256)").to_vec();
     c.extend_from_slice(&word(0x40));
     c.extend_from_slice(&word(gas_override));
     c.extend_from_slice(&word(raw.len() as u64));
-    let mut d = raw.clone();
+    let mut d = raw.to_vec();
     d.resize(raw.len().div_ceil(32) * 32, 0);
     c.extend_from_slice(&d);
-    (c, signer, signer.create(0))
+    c
 }
 
 pub fn send_hint(topic: u64, data: &[u8]) -> Vec<u8> {
