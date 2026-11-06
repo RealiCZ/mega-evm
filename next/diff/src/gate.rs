@@ -138,7 +138,7 @@ pub const HALTED_FIRST_FRAME: &str = "halted_first_frame";
 /// `OpcodeNotFound`, evm2 `InvalidImmediateEncoding` (the label only: gas, output and state are
 /// equal). Its shape, all of which [`invalid_immediate_label`] checks: the only difference of the
 /// case is `halt`, normalized `OpcodeNotFound` on the reference's side and
-/// `InvalidImmediateEncoding` on the engine's.
+/// `InvalidImmediateEncoding` on the engine's, both runs halted.
 pub const INVALID_IMMEDIATE_LABEL: &str = "invalid_immediate_label";
 
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
@@ -193,9 +193,12 @@ pub fn halted_first_frame(
 /// (not normalized), are exactly the shape of [`INVALID_IMMEDIATE_LABEL`].
 pub fn invalid_immediate_label(diffs: &[String], reference: &Value, candidate: &Value) -> bool {
     let [only] = diffs else { return false };
+    let (a, b) = (canonical(reference), canonical(candidate));
     only == "halt" &&
-        canonical(reference)["halt"] == "OpcodeNotFound" &&
-        canonical(candidate)["halt"] == "InvalidImmediateEncoding"
+        a["status"] == "halt" &&
+        b["status"] == "halt" &&
+        a["halt"] == "OpcodeNotFound" &&
+        b["halt"] == "InvalidImmediateEncoding"
 }
 
 /// How one scenario's differences relate to the accepted list.

@@ -15,7 +15,11 @@ starts with `refused`), every pre-block call is one `pre`. An applied transactio
 `match`. An applied transaction no entry lists whose reference row records no frame (`frames` is
 `[]`) is `class`: that is the reference's side of the accepted class `halted_first_frame` (the
 reference opens no frame for a first frame whose runtime gas phase fails); the engine's side, one
-halted root frame and nothing else different, is the gate's to check. An entry of a listed block whose transaction is missing, has another hash or was refused
+halted root frame and nothing else different, is the gate's to check. A transaction that fails
+before its first frame on the engine as well (a deposit that cannot pay its created caller) would
+be counted `class` here and `match` by the gate: the summary check then fails, so its count is
+decided by hand, not by this rule; the corpus holds none.
+An entry of a listed block whose transaction is missing, has another hash or was refused
 is an error, and so is a row of a kind the gates do not read.
 """
 import json, os, subprocess, sys

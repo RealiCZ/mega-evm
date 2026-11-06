@@ -227,8 +227,7 @@ pub fn run_system_call(
     if inspected {
         evm.set_inspector(Frames::default());
     }
-    evm.ext_mut().begin_tx(evm2::evm::SYSTEM_ADDRESS, 0, false, false);
-    evm.ext_mut().set_system_originated();
+    evm.ext_mut().begin_system_call();
     let tx = evm2::evm::SystemTx::new(target, data);
     let (r, changes) = match evm.system_call(tx) {
         Ok(executed) => {

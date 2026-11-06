@@ -168,9 +168,7 @@ impl<'a> BlockExecutor<'a> {
     }
 
     fn system_call(&mut self, target: Address, data: Bytes) -> Result<(), String> {
-        self.evm.ext_mut().begin_tx(evm2::evm::SYSTEM_ADDRESS, 0, false, false);
-        self.evm.ext_mut().set_system_originated();
-        self.evm.ext_mut().mechanisms.system_call = true;
+        self.evm.ext_mut().begin_system_call();
         let executed = self
             .evm
             .system_call(SystemTx::new(target, data))

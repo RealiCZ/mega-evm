@@ -295,8 +295,8 @@ def frameless_halt(o):
     return o.get("frames") == [] and "error" not in o and o.get("halt") == "Base(OutOfGas(Basic))"
 
 def drop_class(t):
-    """`known-differences.toml` without its `[[class]]` table."""
-    a = t.index("[[class]]\n")
+    """`known-differences.toml` without its `[[class]]` table of `halted_first_frame`."""
+    a = t.index('[[class]]\nname = "halted_first_frame"\n')
     b = t.index("\n\n", a) + 1
     return t[:a] + t[b:]
 

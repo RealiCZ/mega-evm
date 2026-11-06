@@ -3,16 +3,17 @@
 //!
 //! - 11 (`fxf`), the first frame's gas window: every envelope (legacy with and without a chain id,
 //!   EIP-2930, EIP-1559, EIP-7702, a deposit from an existing or an absent caller, a creation by a
-//!   user and by a deposit) to a recipient that is absent, an existing account, an existing empty
-//!   account, a contract, an account delegating (EIP-7702) to a contract, or the sender itself,
-//!   with and without a value, at SALT prices of one to eight minimum buckets, the sender or the
-//!   recipient sometimes the block beneficiary. The gas limit is drawn around each charge made
-//!   before and at the first frame: the validation minimum (the intrinsic gas and the body's
-//!   history), the start record, the recipient's new-account or the created account's state, the
-//!   frame's first work; for a deposit, its intrinsic gas, its created caller's account state, then
-//!   the first frame; also above the execution cap, where the reservoir pays history first. A first
-//!   frame whose state charge cannot be paid is evm2 #871's halted first frame, which the gate
-//!   accepts by its shape (`halted_first_frame`, `known-differences.toml`).
+//!   user and by a deposit, a Mega System Transaction from an existing or an absent system address)
+//!   to a recipient that is absent, an existing account, an existing empty account, a contract, an
+//!   account delegating (EIP-7702) to a contract, the sender itself, or the authority an EIP-7702
+//!   list delegates, with and without a value, at SALT prices of one to eight minimum buckets, the
+//!   sender or the recipient sometimes the block beneficiary. The gas limit is drawn around each
+//!   charge made before and at the first frame: the validation minimum (the intrinsic gas and the
+//!   body's history), the start record, the recipient's new-account or the created account's state,
+//!   the frame's first work; for a deposit, its intrinsic gas, its created caller's account state,
+//!   then the first frame; also above the execution cap, where the reservoir pays history first. A
+//!   first frame whose state charge cannot be paid is evm2 #871's halted first frame, which the
+//!   gate accepts by its shape (`halted_first_frame`, `known-differences.toml`).
 //! - 12 (`fxv`), an instruction reads volatile data, then fails: the instructions whose reads the
 //!   gate's refusal sweep lists (the account opcodes and EXTCODECOPY on the block beneficiary, the
 //!   call family to it or to an account delegating to it, SELFDESTRUCT to it), the beneficiary's
@@ -21,15 +22,15 @@
 //!   a full stack, under limits small enough that its records cross them; the caller then writes,
 //!   which a detention its child left would stop.
 //! - 13 (`fxk`), short stacks under detention: every instruction that pops operands and makes a
-//!   dynamic charge, with its last operands missing after a volatile read, under a cap its charges
-//!   may cross, in the transaction's frame or a child; with every operand, and undetained, as
-//!   controls.
+//!   dynamic charge, and BLOCKHASH (which pops before it reads), with its last operands missing
+//!   after a volatile read, under a cap its charges may cross, in the transaction's frame or a
+//!   child; with every operand, and undetained, as controls.
 #![allow(dead_code)]
 use super::Rng;
 use crate::{
     A, Account, Asm, Auth, BELOW_CAP, C, D, EMPTY, Limits, ORACLE, SENDER, Scenario, acct,
     bd::{self, BEN, P, PLENTY, STACK_LIMIT, delegation, fill},
-    edge::{AUTHORITY, store_one},
+    edge::{AUTHORITY, SYSTEM, registry_naming, store_one},
     funded, init_returning, op,
     q2::EMPTY2,
     q8::X1,
@@ -87,13 +88,31 @@ fn calldata(data: &[u8]) -> u64 {
 /// The first frame's gas window.
 fn first_frame(r: &mut Rng) -> Scenario {
     let mut s = scenario("", Vec::new(), BELOW_CAP, Limits::default());
-    let envelope = r.below(10);
+    let envelope = r.below(11);
     let deposit = matches!(envelope, 5 | 6 | 9);
     let create = matches!(envelope, 7..=9);
     let fresh_caller = envelope == 6 || (envelope == 9 && r.chance(50));
     if fresh_caller {
         s.accounts.retain(|a| a.address != SENDER);
         s.sender = FRESH;
+    }
+    if envelope == 10 {
+        // A Mega System Transaction: a legacy call to the Oracle from the live system address,
+        // promoted to a deposit (no history; a created caller is counted outside the frames).
+        s.accounts.retain(|a| a.address != SENDER);
+        s.accounts.push(registry_naming(SYSTEM));
+        s.accounts.push(acct(ORACLE, store_one()));
+        if r.chance(60) {
+            s.accounts.push(funded(SYSTEM, Vec::new(), r.pick(&[0u64, 10])));
+        }
+        s.sender = SYSTEM;
+        s.to = ORACLE;
+        s.chain_id = Some(1);
+        s.value = U256::from(r.pick(&[0u64, 0, 1]));
+        s.beneficiary = r.pick(&[Address::ZERO, Address::ZERO, SYSTEM, ORACLE]);
+        let at = r.pick(&[21_000u64, 21_000 + ACCOUNT_STATE, 21_000 + 22_100, 21_000 + 50_000]);
+        s.gas_limit = near(r, at).max(1);
+        return s;
     }
     match envelope {
         0 => s.chain_id = None,
@@ -163,6 +182,8 @@ fn first_frame(r: &mut Rng) -> Scenario {
                 A
             }
             5 => s.sender,
+            // The authority the list delegates: loaded and changed before the first frame.
+            6 if !s.auths.is_empty() => s.auths[0].authority.unwrap_or(AUTHORITY),
             _ => {
                 s.accounts.push(acct(A, vec![op::STOP]));
                 A
@@ -373,7 +394,7 @@ fn short_stack_table(r: &mut Rng) -> (u8, Vec<Opnd>) {
     let at = r.pick(&[0u64, 0, 0x40, 0x10000]);
     let addr = r.pick(&[A, C, EMPTY, BEN]);
     let value = r.pick(&[0u64, 1]);
-    match r.below(26) {
+    match r.below(27) {
         0 => (KECCAK256, vec![W(at), W(len)]),
         1 => (op::CALLDATACOPY, vec![W(at), W(0), W(len)]),
         2 => (op::CODECOPY, vec![W(at), W(0), W(len)]),
@@ -406,6 +427,7 @@ fn short_stack_table(r: &mut Rng) -> (u8, Vec<Opnd>) {
         22 => (r.pick(&[op::BALANCE, op::EXTCODESIZE, EXTCODEHASH, op::SLOAD]), vec![Ad(addr)]),
         23 => (EXP, vec![W(2), W(u64::MAX)]),
         24 => (op::SELFDESTRUCT, vec![Ad(addr)]),
+        25 => (op::BLOCKHASH, vec![W(0)]),
         _ => (TSTORE, vec![W(1), W(1)]),
     }
 }

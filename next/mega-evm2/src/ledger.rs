@@ -285,6 +285,14 @@ impl Lite {
         self.frames.push(Entry { budget, ..Entry::default() });
     }
 
+    /// Resets the ledger for a pre-block system call: the protocol's own work, and a system call
+    /// rather than a transaction (the Oracle's storage reads the chain and asks no service).
+    pub fn begin_system_call(&mut self) {
+        self.begin_tx(evm2::evm::SYSTEM_ADDRESS, 0, false, false);
+        self.set_system_originated();
+        self.mechanisms.system_call = true;
+    }
+
     /// Marks the running execution as the protocol's own (see `exempt`).
     pub fn set_system_originated(&mut self) {
         self.exempt = true;

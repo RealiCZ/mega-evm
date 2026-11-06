@@ -32,8 +32,8 @@ SAMPLE_FUZZ_BATCHES=(
 MAIN_EXPECT="total=1088 match=1079 known=5 class=4"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (all of mode 11's first-frame window, `halted_first_frame`); every other seed must match.
-SAMPLE_FUZZ_CLASS=41
-FULL_FUZZ_CLASS=372
+SAMPLE_FUZZ_CLASS=45
+FULL_FUZZ_CLASS=363
 # The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
 MAIN_TOTAL=${MAIN_EXPECT#total=}
 MAIN_TOTAL=${MAIN_TOTAL%% *}
