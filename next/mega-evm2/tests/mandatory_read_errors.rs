@@ -318,7 +318,9 @@ fn test_unreadable_l1_block_fails_every_envelope_but_a_deposit() {
 #[test]
 fn test_pre_block_step_fails_on_an_unreadable_l1_block() {
     for fail in [Fail::L1Account, Fail::L1Storage] {
-        let mut block = BlockExecutor::new(satin_evm(fail), B256::ZERO, None);
+        // A parent beacon block root: a block without one is refused before the L1 read.
+        let root = Some(B256::repeat_byte(0x11));
+        let mut block = BlockExecutor::new(satin_evm(fail), B256::ZERO, root);
         let error = block.apply_pre_execution_changes().expect_err("an unreadable L1 block info");
         assert!(error.contains("Unavailable"), "{fail:?}: {error}");
     }
