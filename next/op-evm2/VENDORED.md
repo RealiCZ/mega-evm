@@ -38,5 +38,6 @@ Run the steps from the repository root, on a clean tree (`--3way` also updates t
    Drop a local change once upstream has it (for example change 1 once #12 is merged), and remove its line here.
 4. If upstream moved its evm2 pin, check that the thin fork has the API it needs; change 6 follows the fork, not upstream.
 5. If upstream changed the parity test's `op-revm` or `revm` versions, update them in `next/Cargo.toml`.
-6. Run, from `next/`: `cargo test -p op-evm2`, `cargo clippy -p op-evm2 --all-targets -- -D warnings`, and `cargo check -p op-evm2 --no-default-features --target riscv64imac-unknown-none-elf`.
-7. Set the base commit at the top of this file to the fetched commit (`git rev-parse FETCH_HEAD`).
+6. If upstream changed `execute_deposit_tx`, carry the change into the engine's own copy of it, `execute_deposit_inner` in `next/mega-evm2/src/tx.rs`: the engine runs deposits through that copy (with Satin's additions), not through `execute_deposit_tx`, and calls only `prepare_deposit_tx` from here.
+7. Run, from `next/`: `cargo test -p op-evm2`, `cargo clippy -p op-evm2 --all-targets -- -D warnings`, and `cargo check -p op-evm2 --no-default-features --target riscv64imac-unknown-none-elf`.
+8. Set the base commit at the top of this file to the fetched commit (`git rev-parse FETCH_HEAD`).

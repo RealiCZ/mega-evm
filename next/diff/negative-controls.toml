@@ -4,9 +4,11 @@
 # in `next/mega-evm2/src`, which reads `MEGA_EVM2_DISABLE=<name>,...` (a comma-separated list;
 # feature `compare` only, otherwise a constant `false`). Each engine switch has a `[[control]]`
 # table. A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block
-# system call) has no switch; an engine test in `next/mega-evm2/tests` proves it instead. The gate harness has switches of its own, `off("<name>")` in `next/diff`, for fixture
-# choices that make the engine's inputs match the reference's (absent accounts, delegation code,
-# reads of absent storage); each has a `[[harness]]` table with the same keys.
+# system call, a block without a parent beacon block root) has no switch; an engine test in
+# `next/mega-evm2/tests` proves it instead. The gate harness has switches of its own,
+# `off("<name>")` in `next/diff`, for fixture choices that make the engine's inputs match the
+# reference's (absent accounts, delegation code, reads of absent storage); each has a
+# `[[harness]]` table with the same keys.
 #
 # A control names the one gate case that differs from the reference when its switch is off.
 # `scripts/controls.sh` runs that case with the switch on (it must pass) and off (the gate must

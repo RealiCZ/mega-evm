@@ -67,13 +67,14 @@ candidate = "InvalidImmediateEncoding"
 signoff = "owner sign-off 2026-11-05"
 
 # evm2 #871's halted first frame, accepted as a class: a transaction whose first frame's runtime
-# gas phase cannot pay its gas (a SALT-priced state charge: a value call's new account, a
-# creation's account; a deposit's first frame after its created caller). evm2 reports that frame
-# to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens
-# no frame. The gate accepts a case without an entry of its own when its differences are exactly
-# that shape (`gate::halted_first_frame`): the reference has no frame, the engine one halted
-# level-0 `Call` or `Create` frame, the transaction ran and failed (out of gas, or a failed
-# deposit), and nothing else differs. The gates' summaries count these cases as `class`.
+# gas phase cannot pay its gas (a SALT-priced state charge, a value call's new account or a
+# creation's account; a delegated recipient's delegate access; a deposit's first frame after its
+# created caller). evm2 reports that frame to the inspector as one halted level-0 frame
+# (go-ethereum's haltTopFrame); the reference opens no frame. The gate accepts a case without an
+# entry of its own when its differences are exactly that shape (`gate::halted_first_frame`): the
+# reference has no frame, the engine one halted level-0 `Call` or `Create` frame, the transaction
+# ran and failed (out of gas, or a failed deposit), and nothing else differs. The gates' summaries
+# count these cases as `class`.
 [[class]]
 name = "halted_first_frame"
 why = "The engine follows upstream evm2 for this class (owner decision of 2026-11-05): evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame; the reference opens no frame. Outcome, gas, state and read set are equal."

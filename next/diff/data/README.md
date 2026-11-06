@@ -8,7 +8,7 @@
 
 | Path                              | Content                                                                                          |
 | --------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `synthetic/main.json.zst`         | Reference outputs of the shared scenarios (the hand-written ones and the default fuzz seeds)     |
+| `synthetic/main.json.zst`         | Reference outputs of the shared scenarios (hand-written, pre-frame sweep, default fuzz seeds)    |
 | `synthetic/fuzz-<batch>.json.zst` | Reference outputs of a sample fuzz batch (below)                                                 |
 | `real-blocks/<set>/<n>.json.zst`  | Recorded block `n` of corpus `set` (`d4` or `p9`): header, transactions, receipts, sparse state  |
 | `real-blocks/<set>/manifest.json` | The sample's blocks of that set, in the full corpus's manifest format                            |

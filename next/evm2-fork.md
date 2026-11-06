@@ -31,7 +31,7 @@ Upstream order, smallest and least contested first: `2227aa3c`, `82427081` (both
 ## The patches
 
 Each engine rule a patch serves sits behind a named switch with a negative control in `diff/negative-controls.toml` (a harness switch for `68547bdf`); turning the switch off makes the control's case differ from the reference.
-`82427081`'s setting is a version constant, proved by tests instead; `04f0e24f` and `de8c5cd0` change evm2's own instruction and precompile, which the `edge_create2_*` scenarios and the ModExp probes show; `91518705` carries the start-record charge, whose switches (`start_at_runtime`, `tx_spill_unwind`) have their controls.
+`82427081`'s setting is a version constant, proved by tests instead; `04f0e24f` and `de8c5cd0` change evm2's own instruction and precompile, which the `edge_create2_*` and `edge_modexp_*` scenarios show; `91518705` carries the start-record charge, whose switches (`start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`) have their controls.
 
 ### `70bbeb67` static message hooks
 
@@ -40,7 +40,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Every built-in result decided after the message's checkpoint reaches `before_commit`: a frame's, a precompile's, an account without code's, a call's out-of-funds answer and a creation's failure to create its account (a collision, an endowment the creator cannot pay); a result decided before the checkpoint (a call or creation too deep, a creation's balance or nonce check) does not (`out_of_funds_call_reaches_before_commit_on_both_paths`, `create_collision_reaches_before_commit_on_both_paths`).
   A message that halts without executing (`Evm::execute_halted_message`) reaches none of them, on either path (`halted_messages_run_no_hooks_on_either_path`).
 - **Why.** Satin's frame-start rules stop a frame before its code runs, take back a success answer, and answer the system contracts before evm2 moves value.
-  The engine's `StartHooks` implements them: `pre_frame_stop`, `tx_beneficiary`, `keyless`, `keyless_value_hold`, `access_control`, `oracle_hints`, `precompile_hold` and `top_precompile_hold` (`before`); `hold_start` (`started`); `hold` (`frame_built`); `classify`, `built_check`, `unbuilt_burn` and `deposit_loan_reset` (`before_commit`).
+  The engine's `StartHooks` implements them: `pre_frame_stop`, `tx_beneficiary`, `keyless`, `keyless_value_hold`, `access_control`, `oracle_hints`, `precompile_hold` and `top_precompile_hold` (`before`); `first_frame_hold` and `hold_start` (`started`); `hold` (`frame_built`); `classify`, `built_check`, `unbuilt_burn`, `deposit_loan_reset` and `first_frame_hold` (`before_commit`).
   Detention counts the whole forward of a message that halts without a built frame as burned in `before_commit` (`unbuilt_burn`), so a creation that collides after a volatile read is burned, not compute (the `bd` collision scenarios).
   The type is static so that a family without hooks compiles no hook calls on the message path.
 - **Upstream.** None filed.
@@ -171,13 +171,13 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 
 ### `91518705` the first-frame hook
 
-- **API.** `TxHandlerHooks::before_initial_frame(host, envelope, tx_gas) -> HandlerResult<Option<MessageResult<T>>>` runs in every standard `execute_prepared` (legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702) after the pre-execution changes and the transaction environment, immediately before `prepare_initial_frame`, on the transaction-level gas tracker; EIP-7702 runs it after its authorizations are applied.
+- **API.** `TxHandlerHooks::before_initial_frame(host, envelope, tx_gas) -> HandlerResult<Option<MessageResult<T>>>` runs in every standard `execute_prepared` (legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702) after the pre-execution changes and the transaction environment, immediately before `prepare_initial_frame`, on the transaction-level gas tracker; EIP-7702 runs it after its authorizations are applied, and not when their charges ran out of gas (that transaction settles as a halted first frame first).
   A family may charge `tx_gas` (the charge is the transaction's, kept whatever the first frame's execution does; its spill is unwound by a reservoir the first frame returns), or return a result that `settle_transaction` settles without a frame (an EIP-7702 transaction then keeps none of its delegations).
   The default returns `Ok(None)`, inlined and statically dispatched like the other hooks.
   Tests cover the default's placement (after the environment, the nonce bump and the delegations, once, on the gas the first frame starts from) and both non-default uses on every envelope (`tests::before_initial_frame`).
 - **Why.** Satin validates a transaction's gas against the intrinsic gas and the body's history and charges the first frame's start record after validation, before the first frame; a transaction that cannot pay it is included as an out-of-gas that runs no frame.
-  The engine charges it in `MegaHooks::before_initial_frame` and runs types 0, 1 and 2 through evm2's own `execute_prepared`; it used to restate that function, and the restatement took a creation's nonce from the envelope instead of the prepared state nonce (`nonce_check_off` tests).
-  Charging on the transaction's tracker also records the record's spill where evm2's merge unwinds it, which replaced the engine's special case for a creation destroyed in its constructor.
+  The engine charges it in `MegaHooks::before_initial_frame` and runs types 0, 1 and 2 through evm2's own `execute_prepared`, so a creation's address comes from the prepared state nonce, not the envelope, also with the nonce check off (`mega-evm2/tests/nonce_check_off.rs`).
+  Charging on the transaction's tracker records the record's spill where evm2's merge unwinds it with a reservoir the first frame returns, so a creation destroyed in its constructor needs no case of its own (`tx_spill_unwind`).
   Controls: `start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`.
 - **Upstream.** Not yet proposed.
 - **Drop** when upstream has a handler hook before the first frame that can charge the transaction's gas or settle it without a frame.
@@ -192,7 +192,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 
 ## Known follow-up
 
-The engine's mirrored EIP-7702 path (`mega-evm2/src/eip7702.rs`) settles a runtime-gas-phase out-of-gas without a frame, unlike upstream's `eip7702::execute_prepared`, which reports a halted first frame.
+The engine's own EIP-7702 path (`mega-evm2/src/eip7702.rs`) settles a runtime-gas-phase out-of-gas without a frame, unlike upstream's `eip7702::execute_prepared`, which reports a halted first frame.
 It is left as a follow-up; the reference opens no frame there either, so no gate shows it.
 The first-frame hook does not let that path go: Satin decides the list rule before the list is applied (a list it skips is never applied), needs the accepted authorities for their records and growth, and detains a transaction whose applied authority is the beneficiary; evm2's `execute_prepared` applies the list with its own accounting and offers no seam for those three.
 Its first frame takes no nonce from the envelope that matters: an EIP-7702 transaction cannot create.
@@ -226,10 +226,14 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
 - **Every `EvmTypesHost` impl sets `MessageHooks`**, including the JIT host tests in `crates/jit/runtime/src/evm2_evm.rs`.
   Build the JIT crate after the rebase: the interpreter can build while the runtime tests do not.
 - **Every `execute_prepared` calls the first-frame hook.**
-  Read every `execute_prepared` upstream has (and any new one): each must call `before_initial_frame` after the transaction environment and the pre-execution changes, immediately before `prepare_initial_frame`, settle the result it returns without a frame, and recompute nothing from the envelope that `PreparedTx` holds (the creation nonce is the prepared state nonce); keep `tests::before_initial_frame` covering every envelope.
+  Read every `execute_prepared` upstream has (and any new one): each must call `before_initial_frame` after the transaction environment and the pre-execution changes, immediately before `prepare_initial_frame` (EIP-7702's only when its authorization charges were paid), settle the result it returns without a frame, and recompute nothing from the envelope that `PreparedTx` holds (the creation nonce is the prepared state nonce); keep `tests::before_initial_frame` covering every envelope.
   Types 0, 1 and 2 run evm2's `execute_prepared` with `MegaHooks`, so the start record moves with that call.
 - **The engine restates EIP-7702's `execute_prepared`.**
-  `mega-evm2/src/eip7702.rs` runs its own copy (see Known follow-up for why the hook does not replace it); compare it with upstream's `eip7702::execute_prepared` after a rebase, as a clean merge does not, and check that it takes nothing from the envelope that the prepared state holds.
+  `mega-evm2/src/eip7702.rs` runs its own copy (see Known follow-up for why the hook does not replace it); compare it with upstream's `eip7702::execute_prepared` after a rebase, as a clean merge does not.
+  It reads the intrinsic gas, the initial state gas and the floor from what `adjust_intrinsic_gas` recorded (`PreparedTx` cannot be read outside evm2) and the nonce from the envelope, which only a creation would use and an EIP-7702 transaction cannot make; check that both still hold.
+- **The engine restates op-evm2's deposit execution.**
+  `execute_deposit_inner` (`mega-evm2/src/tx.rs`) is its own copy of op-evm2's `execute_deposit_tx` around evm2's `prepare_initial_frame` and `execute_initial_frame`, adding the created caller's state gas, the first frame's start, the creation from a sender whose nonce cannot be bumped and the out-of-funds failure; it runs no `execute_prepared`, so the first-frame hook does not reach it.
+  After a rebase, compare it with those functions and with `execute_deposit_tx`, and check that the creation nonce still comes from `PreparedDeposit` (the state nonce).
 - **Run the negative controls, not only the gates.**
   A fix the new upstream code no longer reaches shows up as a missed control while every gate still passes; `diff/scripts/ci-local.sh` runs the sample controls, `controls.sh full` the rest.
 

@@ -9,7 +9,7 @@ The existing engine in `crates/` (REX1–REX6, built on revm) is frozen: it keep
 - `mega-evm2` — the Satin engine: Satin and later specs, resource metering, system contracts and block execution.
 - `op-evm2` — a vendored OP Stack execution layer for evm2, so the engine does not depend on `op-revm`; `op-evm2/VENDORED.md` records its upstream base and every local change.
 - `diff` — the strict differential gates that compare the engine with the Satin implementation under review, and the engine side of the two-sided probe; `diff/data/README.md` describes the in-repo sample and the full corpus.
-- `diff/shared` — `mega-evm2-scenarios`, engine-neutral: the scenarios (the hand-written groups and the fuzz generator), the outcome record both harnesses render (`src/record.rs`) and the probe's input format (`src/probe.rs`).
+- `diff/shared` — `mega-evm2-scenarios`, engine-neutral: the scenarios (the hand-written groups, the pre-frame sweep and the fuzz generator), the outcome record both harnesses render (`src/record.rs`) and the probe's input format (`src/probe.rs`).
   It depends on `alloy-primitives` only; `diff` and `reference` depend on it by path.
   It sits under `diff/shared` because CI's reference check runs on changes there.
   `diff/shared/blockdb.rs`, the recorded-block reader of both replay harnesses, is not part of it: both include it by `#[path]`, since it parses blocks with `serde_json`.
@@ -63,7 +63,7 @@ An input that finds a difference belongs in a scenario of the gates once the dif
 ## Switches and negative controls
 
 Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`; `MEGA_EVM2_DISABLE=<name>,…` turns it off, with feature `compare` only, and without that feature `off` is a constant `false`.
-A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call) has no switch; an engine test in `mega-evm2/tests` proves it instead.
+A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root) has no switch; an engine test in `mega-evm2/tests` proves it instead.
 The harness's fixture choices that make the engine's inputs match the reference's are switches too, `off("<name>")` in `diff`.
 
 `diff/negative-controls.toml` names, for each switch, one gate case that must differ when the switch is off, and in `why` what the fix does.

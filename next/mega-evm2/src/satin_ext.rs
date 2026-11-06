@@ -27,7 +27,8 @@ pub struct MechanismState {
     /// that execute a `PreparedTx` they cannot read.
     pub prepared: Option<(u64, u64, u64)>,
     /// How the first frame's start charge was paid when it was charged on the transaction's gas
-    /// after validation (EIP-7702): the part the reservoir paid.
+    /// after validation (types 0, 1 and 2 in `before_initial_frame`, EIP-7702 in its handler): the
+    /// part the reservoir paid.
     pub start_from_reservoir: Option<u64>,
     /// The stop the transaction's own frame returns before it runs (an authorization list the KV
     /// or state-growth limit skips).
