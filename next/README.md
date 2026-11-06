@@ -40,6 +40,8 @@ Each script extracts its inputs afresh into its own directory under `<target>/me
 ## The gates and their accepted differences
 
 The gates run every scenario, fuzz seed and recorded transaction on both sides, plain and inspected, and compare every emitted field outside the exclusion list in `diff/src/gate.rs`, which states a reason for each entry.
+The reference is a cross-check, not the definition of Satin: where the engine and the reference differ, the Satin specification (`docs/spec/upgrades/satin.md` at the reference's pinned commit) decides which side is wrong.
+A fix on the reference's side is a change to the Satin implementation itself; until it is made, the gates hold the engine to the reference, except for the accepted differences below.
 A difference fails a gate unless `diff/known-differences.toml` lists it: by scenario for the synthetic gate, and by set, block, transaction index and hash for the engine replay gate.
 A listed entry that differs otherwise, or no longer differs, fails too; the summaries count the accepted ones as `known=`.
 Each entry states its reason and whether the owner has signed it off.
@@ -60,6 +62,7 @@ An input that finds a difference belongs in a scenario of the gates once the dif
 ## Switches and negative controls
 
 Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`; `MEGA_EVM2_DISABLE=<name>,…` turns it off, with feature `compare` only, and without that feature `off` is a constant `false`.
+A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call) has no switch; an engine test in `mega-evm2/tests` proves it instead.
 The harness's fixture choices that make the engine's inputs match the reference's are switches too, `off("<name>")` in `diff`.
 
 `diff/negative-controls.toml` names, for each switch, one gate case that must differ when the switch is off, and in `why` what the fix does.

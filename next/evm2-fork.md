@@ -29,7 +29,7 @@ Upstream order, smallest and least contested first: `2227aa3c`, `82427081` (both
 ## The patches
 
 Each engine rule a patch serves sits behind a named switch with a negative control in `diff/negative-controls.toml` (a harness switch for `68547bdf`); turning the switch off makes the control's case differ from the reference.
-`82427081`'s setting is a version constant, proved by tests instead.
+`82427081`'s setting is a version constant, proved by tests instead, and `04f0e24f` changes evm2's own instruction, which the `edge_create2_*` scenarios show.
 
 ### `70bbeb67` static message hooks
 
@@ -38,7 +38,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Every built-in result decided after the message's checkpoint reaches `before_commit`: a frame's, a precompile's, an account without code's, a call's out-of-funds answer and a creation's failure to create its account (a collision, an endowment the creator cannot pay); a result decided before the checkpoint (a call or creation too deep, a creation's balance or nonce check) does not (`out_of_funds_call_reaches_before_commit_on_both_paths`, `create_collision_reaches_before_commit_on_both_paths`).
   A message that halts without executing (`Evm::execute_halted_message`) reaches none of them, on either path (`halted_messages_run_no_hooks_on_either_path`).
 - **Why.** Satin's frame-start rules stop a frame before its code runs, take back a success answer, and answer the system contracts before evm2 moves value.
-  The engine's `StartHooks` implements them: `pre_frame_stop`, `tx_beneficiary`, `keyless`, `access_control`, `oracle_hints`, `precompile_hold` and `top_precompile_hold` (`before`); `hold_start` (`started`); `hold` (`frame_built`); `classify`, `built_check`, `unbuilt_burn` and `deposit_loan_reset` (`before_commit`).
+  The engine's `StartHooks` implements them: `pre_frame_stop`, `tx_beneficiary`, `keyless`, `keyless_value_hold`, `access_control`, `oracle_hints`, `precompile_hold` and `top_precompile_hold` (`before`); `hold_start` (`started`); `hold` (`frame_built`); `classify`, `built_check`, `unbuilt_burn` and `deposit_loan_reset` (`before_commit`).
   Detention counts the whole forward of a message that halts without a built frame as burned in `before_commit` (`unbuilt_burn`), so a creation that collides after a volatile read is burned, not compute (the `bd` collision scenarios).
   The type is static so that a family without hooks compiles no hook calls on the message path.
 - **Upstream.** None filed.
@@ -166,7 +166,8 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 
 ## Known follow-up
 
-The engine's mirrored EIP-7702 path (`mega-evm2/src/eip7702.rs`) settles a runtime-gas-phase out-of-gas without a frame, unlike upstream's `eip7702::execute_prepared`, which reports a halted first frame; owner decision 2026-11-05: left as a follow-up, not a gate entry.
+The engine's mirrored EIP-7702 path (`mega-evm2/src/eip7702.rs`) settles a runtime-gas-phase out-of-gas without a frame, unlike upstream's `eip7702::execute_prepared`, which reports a halted first frame.
+It is left as a follow-up; the reference opens no frame there either, so no gate shows it.
 
 ## Rules for the next rebase
 
@@ -196,8 +197,10 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
   Give a new site its engine decision in `refuses_load`; the controls `refuse_at_load`, `refusal_gas` and `delegate_refusal` show the rule.
 - **Every `EvmTypesHost` impl sets `MessageHooks`**, including the JIT host tests in `crates/jit/runtime/src/evm2_evm.rs`.
   Build the JIT crate after the rebase: the interpreter can build while the runtime tests do not.
-- **The engine mirrors `execute_prepared`.**
-  Types 0, 1 and 2 (`execute_user` in `mega-evm2/src/tx.rs`) and EIP-7702 (`mega-evm2/src/eip7702.rs`) run their own copy of evm2's `execute_prepared`, so that the first frame's start record is charged after validation; compare both with upstream's `legacy`, `eip2930`, `eip1559` and `eip7702::execute_prepared` after a rebase, as a clean merge does not.
+- **The engine restates `execute_prepared`.**
+  Types 0, 1 and 2 (`execute_user` in `mega-evm2/src/tx.rs`) and EIP-7702 (`mega-evm2/src/eip7702.rs`) run their own copy of evm2's `execute_prepared`, so that the first frame's start record is charged after validation and before the first frame, and a transaction that cannot pay it runs out of gas without a frame.
+  Compare both with upstream's `legacy`, `eip2930`, `eip1559` and `eip7702::execute_prepared` after a rebase, as a clean merge does not; `execute_user` takes the intrinsic gas, the initial state gas and the floor from what `adjust_intrinsic_gas` recorded, not from `PreparedTx`.
+  A handler hook between validation and the first frame that can make a charge, or end the transaction as an out-of-gas without a frame, would let `execute_user` go.
 - **Run the negative controls, not only the gates.**
   A fix the new upstream code no longer reaches shows up as a missed control while every gate still passes; `diff/scripts/ci-local.sh` runs the sample controls, `controls.sh full` the rest.
 

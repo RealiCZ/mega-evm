@@ -3,7 +3,8 @@
 # Every fix the Satin engine makes on top of stock evm2 is behind a named switch: `off("<name>")`
 # in `next/mega-evm2/src`, which reads `MEGA_EVM2_DISABLE=<name>,...` (a comma-separated list;
 # feature `compare` only, otherwise a constant `false`). Each engine switch has a `[[control]]`
-# table. The gate harness has switches of its own, `off("<name>")` in `next/diff`, for fixture
+# table. A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block
+# system call) has no switch; an engine test in `next/mega-evm2/tests` proves it instead. The gate harness has switches of its own, `off("<name>")` in `next/diff`, for fixture
 # choices that make the engine's inputs match the reference's (absent accounts, delegation code,
 # reads of absent storage); each has a `[[harness]]` table with the same keys.
 #
@@ -459,8 +460,6 @@ seed = 1392
 scope = "full"
 why = "A frame's own resource draws see its budget minus its net use, unclamped, so a restore gives room back; off, the room is clamped to the budget. Full corpus only: no sample case draws on room a restore gave back."
 
-# The gate harness's fixture switches (`next/diff`).
-
 [[control]]
 switch = "wide_limits"
 gate = "main"
@@ -530,6 +529,8 @@ gate = "main"
 scenario = "edge_create_tx_destroyed_in_constructor"
 scope = "sample"
 why = "When a creation transaction's constructor destroys the new contract, the start record that comes back with the leaf returns to the regular gas that paid it, as Satin's spill does; off, it stays in the reservoir (reservoir_remaining differs)."
+
+# The gate harness's fixture switches (`next/diff`); the engine's controls continue after them.
 
 [[harness]]
 switch = "absent_storage_read"
