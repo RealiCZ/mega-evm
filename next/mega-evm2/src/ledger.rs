@@ -338,21 +338,24 @@ impl Lite {
     /// work is counted and held to nothing.
     pub fn draw_first_frame(&mut self, delta: [i64; 3]) -> Option<(u8, u64)> {
         let top = self.frames.last().expect("a frame");
+        // With `hold_start` off a dimension the start adds nothing to is not held.
+        let hold = !crate::off("hold_start");
         for (i, kind) in KIND.into_iter().enumerate() {
             if self.exempt {
                 break;
             }
+            let draws = delta[i] > 0;
             let room = if crate::off("unclamped_draw") {
                 top.remaining(i)
             } else {
                 top.reported_remaining(i)
             };
-            if (delta[i] > 0 && delta[i] as u64 > room) || over(top.net[i], top.budget[i]) {
+            if (draws && delta[i] as u64 > room) || (hold && over(top.net[i], top.budget[i])) {
                 return Some((kind, top.budget[i]));
             }
             let total: i64 =
                 self.tx_net[i] + if i == 2 { self.tx_growth } else { 0 } + self.frames_net[i];
-            if over(total + delta[i].max(0), self.cfg.limits[i]) {
+            if (draws || hold) && over(total + delta[i].max(0), self.cfg.limits[i]) {
                 return Some((kind, self.cfg.limits[i]));
             }
         }
