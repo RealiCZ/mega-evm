@@ -29,10 +29,9 @@
 //!   of the charges it makes before its load, the target warm or cold, the stack empty, ordinary,
 //!   full or one below full, a static frame, a probe frame with or without a balance, detention.
 //!
-//! No mode makes the transaction's own first frame pay a state charge it may not afford (a value
-//! to an absent account, a creation, a created deposit caller with little gas): there evm2 #871
-//! reports one halted frame to the inspector where the reference reports none, an accepted
-//! difference of inspection only (`known-differences.toml`), not an input class of these modes.
+//! The first frame's own gas window (a value to an absent account, a creation, a created deposit
+//! caller, each with little gas) is mode 11's (`regions.rs`); these modes keep their streams, so
+//! their seeds stay the inputs the reference outputs were made from.
 #![allow(dead_code)]
 use super::{Gen, Rng, composition};
 use crate::{
@@ -113,7 +112,8 @@ fn system_sender(r: &mut Rng) -> Scenario {
         EMPTY,
         L1_BLOCK,
     ]);
-    // Little gas only without a value, a creation, a list or a deposit (see the module's note).
+    // Little gas only without a value, a creation, a list or a deposit: the first frame's gas
+    // window of those is mode 11's.
     let little = r.chance(15);
     s.gas_limit = if little {
         r.pick(&[21_000u64, 21_500, 25_000, 60_000])

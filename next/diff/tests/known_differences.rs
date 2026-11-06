@@ -2,8 +2,8 @@
 //! unlisted difference, a mismatching value or frame and a stale entry all fail.
 
 use mega_evm2_diff::gate::{
-    HALTED_FIRST_FRAME, Known, Verdict, classify, compared_frames, known_classes,
-    known_differences, known_replay_differences,
+    HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, Known, Verdict, classify, compared_frames,
+    known_classes, known_differences, known_replay_differences,
 };
 use serde_json::{Value, json};
 
@@ -177,11 +177,11 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             ("p6_exchange_invalid_immediate", "halt", label.0, label.1),
         ]
     );
-    assert_eq!(known_classes(), [HALTED_FIRST_FRAME]);
+    assert_eq!(known_classes(), [INVALID_IMMEDIATE_LABEL, HALTED_FIRST_FRAME]);
     let text = include_str!("../known-differences.toml");
     assert_eq!(text.matches(HALTED_FIRST_FRAME_ENTRY).count(), 2);
-    // Five entries, the class and two replay entries.
-    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 8);
+    // Five entries, two classes and two replay entries.
+    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 9);
 }
 
 #[test]
@@ -346,4 +346,49 @@ fn test_the_class_takes_the_cases_it_replaced() {
             Verdict::Class(HALTED_FIRST_FRAME)
         );
     }
+}
+
+// --- the class `invalid_immediate_label`
+// -----------------------------------------------------------
+
+fn label() -> Vec<String> {
+    vec![INVALID_IMMEDIATE_LABEL.into()]
+}
+
+#[test]
+fn test_the_label_class_accepts_exactly_its_label() {
+    let (r, c) = (outcome("Base(OpcodeNotFound)"), outcome("InvalidImmediateEncoding"));
+    let halt = || vec!["halt".to_string()];
+    assert_eq!(
+        classify(&[], &label(), "s", halt(), &r, &c, NO_FRAMES),
+        Verdict::Class(INVALID_IMMEDIATE_LABEL)
+    );
+    // Off unless the file enables it.
+    assert_eq!(classify(&[], NO_CLASS, "s", halt(), &r, &c, NO_FRAMES), Verdict::Differ(halt()));
+    // Another difference with it, the labels the other way round, or another label.
+    let mut more = halt();
+    more.push("gas_used".into());
+    assert_eq!(
+        classify(&[], &label(), "s", more.clone(), &r, &c, NO_FRAMES),
+        Verdict::Differ(more)
+    );
+    for (a, b) in [
+        ("InvalidImmediateEncoding", "Base(OpcodeNotFound)"),
+        ("Base(OpcodeNotFound)", "StackUnderflow"),
+        ("Base(StackOverflow)", "InvalidImmediateEncoding"),
+    ] {
+        let (r, c) = (outcome(a), outcome(b));
+        assert_eq!(
+            classify(&[], &label(), "s", halt(), &r, &c, NO_FRAMES),
+            Verdict::Differ(halt()),
+            "{a} vs {b}"
+        );
+    }
+    // The #871 class does not take a label difference, nor the label class a frame difference.
+    assert_eq!(classify(&[], &class(), "s", halt(), &r, &c, NO_FRAMES), Verdict::Differ(halt()));
+    let (o, none, f) = (ran_out_of_gas(), json!([]), root_halt("Call"));
+    assert_eq!(
+        classify(&[], &label(), "s", frame_count(), &o, &o, (&none, &f)),
+        Verdict::Differ(frame_count())
+    );
 }

@@ -176,10 +176,7 @@ pub fn execute(
     let settle_oog = |host: &mut Evm<'_, MegaTypes>| {
         let features = host.version().features;
         host.state_mut().rollback(checkpoint, features);
-        let ext = host.ext_mut();
-        ext.tx_start_pending = None;
-        ext.tx_start_charge = 0;
-        ext.tx_start_bytes = 0;
+        crate::tx::drop_start(host.ext_mut());
         settle(host, runtime_oog_result(execution_gas_limit, reservoir))
     };
 
@@ -241,6 +238,7 @@ pub fn execute(
     } else if host.ext().prices_history {
         host.ext_mut().mechanisms.start_from_reservoir = Some(0);
     }
+    crate::tx::start_pending(host);
     let frame =
         prepare_initial_frame(host, caller, tx.nonce, to, &tx.input, tx.value, &mut tx_gas)?;
     // A first frame the runtime gas phase cannot pay is settled here, as Satin opens no frame for

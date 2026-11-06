@@ -85,7 +85,14 @@ pub fn before(
         return None;
     }
     if !msg.value.is_zero() {
-        // Rule 2, before the frame is built: the overhead, then the refusal.
+        // Rule 2, before the frame is built: the overhead, then the refusal. The overhead is the
+        // call's first charge: under detention it can be the crossing, which stops the call with
+        // nothing billed.
+        if !crate::off("keyless_value_hold") &&
+            let Some(answer) = crate::detention::hold_charge(evm, msg, OVERHEAD)
+        {
+            return Some(answer);
+        }
         let mut gas =
             GasTracker::new_with_execution_gas_and_reservoir(msg.gas_limit, msg.reservoir);
         let (stop, output) = if gas.spend(OVERHEAD).is_err() {

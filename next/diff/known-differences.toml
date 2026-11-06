@@ -22,7 +22,13 @@ signoff = "owner sign-off 2026-11-05"
 
 # DUPN and SWAPN with an immediate EIP-8024 rejects, and EXCHANGE with one: revm reports
 # `OpcodeNotFound`, evm2 `InvalidImmediateEncoding`. Gas, output and state are equal. The owner
-# accepted evm2's label for these shapes on 2026-11-05; each shape has its scenario.
+# accepted evm2's label for these shapes on 2026-11-05, as a class of label differences: each
+# shape has its scenario and entry below, and the class `invalid_immediate_label` takes any other
+# case whose only difference is this label (`gate::invalid_immediate_label`).
+[[class]]
+name = "invalid_immediate_label"
+why = "A label difference only: revm reports OpcodeNotFound for DUPN, SWAPN and EXCHANGE with an immediate EIP-8024 rejects, evm2 InvalidImmediateEncoding. Gas, output, state and read set are equal."
+signoff = "owner sign-off 2026-11-05"
 
 [[difference]]
 scenario = "p6_dupn_invalid_immediate"

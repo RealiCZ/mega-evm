@@ -1,9 +1,10 @@
 //! Transaction handlers: op-evm2's OP layer (L1 data fee, operator fee, vaults, deposits) with
 //! Satin's transaction rules on top: the registry read every transaction makes first and the
 //! classification of every envelope against the live system address it finds, the body's history
-//! as intrinsic state gas, the first frame's start records and charge, the first-frame
-//! settlement, deposits that pay no history but are charged their created
-//! caller's account state (SALT-priced) and held to every limit.
+//! as intrinsic state gas, the first frame's start records and their charge after validation (an
+//! out-of-gas there runs no frame and reads nothing of its target), the first-frame settlement,
+//! deposits that pay no history but are charged their created caller's account state
+//! (SALT-priced) before their first frame's start is made, and held to every limit.
 
 use crate::{MegaTypes, ledger::*};
 use alloy_consensus::{Transaction, TxEip1559, TxEip2930, TxLegacy};
@@ -51,10 +52,25 @@ pub(crate) fn first_frame_start(
     value: U256,
     mint: u128,
 ) {
+    if let Some(target) = start_target(host, caller, to, value, mint) {
+        park_start(host, target, value);
+    }
+}
+
+/// The account the transaction's own frame's start would make a record of (its value's
+/// recipient, or the account it creates), decided on the caller's account alone: the target is
+/// not read.
+fn start_target(
+    host: &mut Evm<'_, MegaTypes>,
+    caller: alloy_primitives::Address,
+    to: TxKind,
+    value: U256,
+    mint: u128,
+) -> Option<Address> {
     // No start record is needed for a zero-value call. Avoid a premature sender read before
     // transaction validation; a refused retired-system transaction must not read that account.
     if matches!(to, TxKind::Call(target) if value.is_zero() || target == caller) {
-        return;
+        return None;
     }
     let nonce =
         host.state_mut().account_info_untracked(&caller).ok().flatten().map_or(0, |i| i.nonce);
@@ -71,26 +87,56 @@ pub(crate) fn first_frame_start(
         .flatten()
         .map_or(U256::ZERO, |i| i.balance);
     if !wants || balance.saturating_add(U256::from(mint)) < value {
-        return;
+        return None;
     }
-    let info = host.state_mut().account_info_untracked(&target).ok().flatten();
-    let empty = info.as_ref().is_none_or(|i| i.is_empty());
-    let unchanged = !changed(host, target);
+    Some(target)
+}
+
+/// Parks the start charge and records of the transaction's own frame, whose start makes a record
+/// of `target` ([`start_target`]). The target is not read: an account the transaction has not
+/// loaded is unchanged, so its record stands; its account is read by [`start_pending`], right
+/// before the first frame is built.
+fn park_start(host: &mut Evm<'_, MegaTypes>, target: Address, value: U256) {
+    let loaded = crate::off("start_reads_no_target") ||
+        host.state_mut().loaded_accounts().any(|(a, _)| *a == target);
+    let unchanged = !(loaded && changed(host, target));
     let records = unchanged as i64;
-    let log = !value.is_zero();
+    if crate::off("start_reads_no_target") {
+        host.state_mut().account_info_untracked(&target).ok();
+    }
     let ext = host.ext_mut();
-    // Drawn on the first frame's pool once evm2 decided its start (`started` / `before_commit`
-    // message hooks).
-    ext.tx_start_pending = Some([
-        records * WRITE_RECORD_SIZE as i64 + if log { TRANSFER_LOG_SIZE as i64 } else { 0 },
-        records,
-        empty as i64,
-    ]);
+    ext.mechanisms.start_records = Some((target, records, !value.is_zero()));
     if ext.prices_history {
         ext.tx_start_charge = records as u64 * WRITE_RECORD_SIZE * CPHB;
         ext.tx_start_bytes = records as u64 * WRITE_RECORD_SIZE;
         ext.tx_start_target = Some(target);
     }
+}
+
+/// The start records [`park_start`] parked, made pending once nothing before the first frame can
+/// fail any more: the target's account is read here, for whether the start creates it. Drawn on
+/// the first frame's pool once evm2 decided its start (`started` / `before_commit` message
+/// hooks).
+pub(crate) fn start_pending(host: &mut Evm<'_, MegaTypes>) {
+    let Some((target, records, log)) = host.ext_mut().mechanisms.start_records.take() else {
+        return;
+    };
+    let info = host.state_mut().account_info_untracked(&target).ok().flatten();
+    let empty = info.as_ref().is_none_or(|i| i.is_empty());
+    host.ext_mut().tx_start_pending = Some([
+        records * WRITE_RECORD_SIZE as i64 + if log { TRANSFER_LOG_SIZE as i64 } else { 0 },
+        records,
+        empty as i64,
+    ]);
+}
+
+/// Forgets a start that was never made: a transaction that ran out of gas before its first frame.
+pub(crate) fn drop_start(ext: &mut Lite) {
+    ext.mechanisms.start_records = None;
+    ext.tx_start_pending = None;
+    ext.tx_start_charge = 0;
+    ext.tx_start_bytes = 0;
+    ext.tx_start_target = None;
 }
 
 /// Checks the body where Satin does, after the environment's rules (the chain id, the gas limit
@@ -234,7 +280,12 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
                 got: gas_limit,
             });
         }
-        *initial_state_gas += host.ext().body_history + host.ext().tx_start_charge;
+        // Validation holds the gas limit to the intrinsic gas and the body's history; the first
+        // frame's start record is a runtime charge (`execute_user`), as in Satin.
+        *initial_state_gas += host.ext().body_history;
+        if crate::off("start_at_runtime") {
+            *initial_state_gas += host.ext().tx_start_charge;
+        }
         host.ext_mut().mechanisms.prepared = Some((*_intrinsic, *initial_state_gas, *_floor_gas));
         Ok(())
     }
@@ -271,12 +322,15 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         // The part of the start charge the regular gas paid: the reservoir pays the body's
         // history first, then the start (Satin charges the start on the frame, a spill there).
         let spilled = || {
-            let reservoir0 = gas.gas_limit.saturating_sub(EXECUTION_CAP);
-            let body = gas.initial_state_gas - charge;
             let from_reservoir = match host.ext().mechanisms.start_from_reservoir {
-                // Charged after validation (EIP-7702), as recorded then.
+                // Charged after validation, as recorded then.
                 Some(paid) => paid,
-                None => charge.min(reservoir0.saturating_sub(body)),
+                // Charged with the body's history as initial state gas: the reservoir paid the
+                // body first.
+                None => {
+                    let reservoir0 = gas.gas_limit.saturating_sub(EXECUTION_CAP);
+                    charge.min(reservoir0.saturating_sub(gas.initial_state_gas - charge))
+                }
             };
             (charge - from_reservoir, from_reservoir)
         };
@@ -391,9 +445,100 @@ fn execute_legacy(
     prepared: LegacyPrepared,
 ) -> HandlerResult<TxResult<MegaTypes>> {
     match prepared {
-        LegacyPrepared::User(p) => legacy::execute_prepared::<MegaTypes, MegaHooks>(req, p),
+        LegacyPrepared::User(_) => {
+            let caller = req.tx.signer();
+            let tx = *req.tx.inner();
+            let gas_price = U256::from(tx.gas_price);
+            execute_user(req.host, req.envelope, caller, gas_price, tx)
+        }
         LegacyPrepared::System(deposit, p) => execute_deposit_inner(req.host, &deposit, p),
     }
+}
+
+fn execute_2930(
+    req: TxRequest<'_, '_, MegaTypes, TxEip2930>,
+    _prepared: PreparedTx,
+) -> HandlerResult<TxResult<MegaTypes>> {
+    let caller = req.tx.signer();
+    let tx = *req.tx.inner();
+    execute_user(req.host, req.envelope, caller, U256::from(tx.gas_price), tx)
+}
+
+fn execute_1559(
+    req: TxRequest<'_, '_, MegaTypes, TxEip1559>,
+    _prepared: PreparedTx,
+) -> HandlerResult<TxResult<MegaTypes>> {
+    let caller = req.tx.signer();
+    let tx = *req.tx.inner();
+    let gas_price = ethereum::effective_gas_price(
+        U256::from(tx.max_fee_per_gas),
+        U256::from(tx.max_priority_fee_per_gas),
+        req.host.block().basefee,
+    );
+    execute_user(req.host, req.envelope, caller, gas_price, tx)
+}
+
+/// evm2's `execute_prepared` of a type 0, 1 or 2 transaction (whose `PreparedTx` it reads back
+/// from `adjust_intrinsic_gas`), with the first frame's start record charged after validation:
+/// Satin validates the gas limit against the intrinsic gas and the body's history, then charges
+/// the record before the first frame. A transaction that cannot pay it is included as an
+/// out-of-gas that runs no frame (nonce bumped, fees paid, the gas limit used), with nothing of
+/// its start made.
+fn execute_user<'a>(
+    host: &mut Evm<'a, MegaTypes>,
+    envelope: &OpTxEnvelope,
+    caller: Address,
+    gas_price: U256,
+    tx: &impl Transaction,
+) -> HandlerResult<TxResult<MegaTypes>> {
+    let (intrinsic, initial_state_gas, floor_gas) =
+        host.ext_mut().mechanisms.prepared.take().expect("adjust_intrinsic_gas ran");
+    let gas_limit = tx.gas_limit();
+    let (execution_gas_limit, reservoir) =
+        initial_gas_and_reservoir(host.version(), gas_limit, intrinsic, initial_state_gas);
+    *host.tx_env_mut() = TxEnvExt {
+        origin: caller,
+        gas_price,
+        chain_id: U256::from(host.version().chain_id),
+        ..TxEnvExt::default()
+    };
+    let settle = |host: &mut Evm<'a, MegaTypes>, initial_state_gas, result| {
+        <MegaHooks as TxHandlerHooks<MegaTypes>>::settle_transaction(
+            host,
+            envelope,
+            GasSettlement {
+                caller,
+                gas_price,
+                gas_limit,
+                floor_gas,
+                initial_state_gas,
+                state_refund: 0,
+                result,
+            },
+        )
+    };
+    // The record is history, paid before the frame like the body's (the reservoir first): once
+    // paid, the transaction runs as if it were intrinsic state gas. (With the switch off it was.)
+    let charge = if crate::off("start_at_runtime") { 0 } else { host.ext().tx_start_charge };
+    if gas_limit < intrinsic.saturating_add(initial_state_gas).saturating_add(charge) {
+        drop_start(host.ext_mut());
+        return settle(
+            host,
+            initial_state_gas,
+            ethereum::runtime_oog_result(execution_gas_limit, reservoir),
+        );
+    }
+    let initial_state_gas = initial_state_gas + charge;
+    let (execution_gas_limit, reservoir) =
+        initial_gas_and_reservoir(host.version(), gas_limit, intrinsic, initial_state_gas);
+    let mut tx_gas =
+        GasTracker::new_with_execution_gas_and_reservoir(execution_gas_limit, reservoir);
+    start_pending(host);
+    let nonce = tx.nonce();
+    let frame =
+        prepare_initial_frame(host, caller, nonce, tx.kind(), tx.input(), tx.value(), &mut tx_gas)?;
+    let result = execute_initial_frame(host, frame, &mut tx_gas, execution_gas_limit, reservoir)?;
+    settle(host, initial_state_gas, result)
 }
 
 fn prepare_2930(req: &mut TxRequest<'_, '_, MegaTypes, TxEip2930>) -> HandlerResult<PreparedTx> {
@@ -465,8 +610,15 @@ fn prepare_deposit_inner(
     if runs && info.is_some_and(|i| !i.is_empty_code_hash()) && !crate::off("deposit_caller_code") {
         host.state_mut().code_untracked(&tx.from)?;
     }
-    if runs {
+    // The first frame's start is decided on the caller here and parked once the deposit passed
+    // its intrinsic check and paid its created caller (`execute_deposit_inner`): a deposit that
+    // fails before reads nothing of its recipient.
+    if runs && crate::off("deposit_start_after_caller") {
         first_frame_start(host, tx.from, tx.to, tx.value, tx.mint);
+        start_pending(host);
+    } else if runs {
+        host.ext_mut().mechanisms.deposit_start =
+            start_target(host, tx.from, tx.to, tx.value, tx.mint);
     }
     if created {
         let ext = host.ext_mut();
@@ -502,7 +654,13 @@ fn execute_deposit_inner(
 ) -> HandlerResult<TxResult<MegaTypes>> {
     let (intrinsic, floor_gas, nonce) = match prepared {
         PreparedDeposit::Ready { intrinsic, floor_gas, nonce } => (intrinsic, floor_gas, nonce),
-        PreparedDeposit::Failed(_) => return failed_deposit(host, tx, InstrStop::OutOfGas),
+        PreparedDeposit::Failed(_) => {
+            // Refused by the intrinsic gas check: no start was made, so none settles.
+            if !crate::off("prepared_deposit_no_start") {
+                host.ext_mut().frames.clear();
+            }
+            return failed_deposit(host, tx, InstrStop::OutOfGas);
+        }
     };
     if host.ext().mechanisms.body_refused {
         // No frame starts, so its start ledger holds nothing.
@@ -520,6 +678,10 @@ fn execute_deposit_inner(
     if created_state > tx.gas_limit.saturating_sub(intrinsic) {
         return failed_deposit(host, tx, InstrStop::OutOfGas);
     }
+    if let Some(target) = host.ext_mut().mechanisms.deposit_start.take() {
+        park_start(host, target, tx.value);
+    }
+    start_pending(host);
     let (execution_gas_limit, reservoir) =
         initial_gas_and_reservoir(host.version(), tx.gas_limit, intrinsic, created_state);
     *host.tx_env_mut() = TxEnvExt {
@@ -620,16 +782,8 @@ fn failed_deposit(
 pub fn registry() -> TxRegistry<MegaTypes, TxResult<MegaTypes>> {
     TxRegistry::new()
         .with_handler(0, OpTxEnvelope::as_legacy, handler(prepare_legacy, execute_legacy))
-        .with_handler(
-            1,
-            OpTxEnvelope::as_eip2930,
-            handler(prepare_2930, eip2930::execute_prepared::<MegaTypes, MegaHooks>),
-        )
-        .with_handler(
-            2,
-            OpTxEnvelope::as_eip1559,
-            handler(prepare_1559, eip1559::execute_prepared::<MegaTypes, MegaHooks>),
-        )
+        .with_handler(1, OpTxEnvelope::as_eip2930, handler(prepare_2930, execute_2930))
+        .with_handler(2, OpTxEnvelope::as_eip1559, handler(prepare_1559, execute_1559))
         .with_handler(
             4,
             OpTxEnvelope::as_eip7702,

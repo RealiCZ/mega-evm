@@ -329,7 +329,9 @@ pub fn mega_sload(cx: _) -> Result {
     let (gas, state) = unsafe { evm2::interpreter::private::split_gas_state(cx.state) };
     // Satin `oracle_sload`: no load when the whole gas cannot pay the cold access; otherwise
     // the slot is loaded through the journal, the service asked, the read priced cold
-    // whatever its warmth, and committed as a volatile read under the Oracle's cap.
+    // whatever its warmth, and committed as a volatile read under the Oracle's cap. A pre-block
+    // system call asks nothing: it reads the chain's value and records no answer, so the
+    // pre-block state depends on the state alone (a Mega System Transaction still asks).
     let additional_cold_cost = state.gas_params().get(GasId::ColdStorageAdditionalCost);
     let budget = ins::gas_budget(gas, state, BudgetUse::ColdStorage);
     if state.feature(EvmFeatures::EIP2929) && budget < additional_cold_cost {
@@ -337,8 +339,11 @@ pub fn mega_sload(cx: _) -> Result {
     }
     let load = evm2::interpreter::Host::sload(state.host(), &destination, &key, false)
         .map_err(|error| state.fail(error))?;
-    let answer = state.host().ext().cfg.oracle.get(&key).copied();
-    state.host().ext_mut().oracle_reads += 1;
+    let asks = !state.host().ext().mechanisms.system_call;
+    let answer = if asks { state.host().ext().cfg.oracle.get(&key).copied() } else { None };
+    if asks {
+        state.host().ext_mut().oracle_reads += 1;
+    }
     gas.spend(additional_cold_cost)?;
     let cap = state.host().ext().detention.oracle_cap;
     detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
@@ -548,7 +553,8 @@ pub fn mega_log<const N: usize>(cx: _) -> Result {
 /// new-account state spill draws it first, both through the gas reserve), then
 /// the completed-write rule: the destruction table of an account created in the transaction,
 /// the records of the account it clears and of its beneficiary, its
-/// transfer log and state growth, held to the limits, then the records' history.
+/// transfer log and state growth, held to the limits, then the records' history; last, the
+/// volatile reads of both ends, once nothing can fail the opcode any more.
 #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
 pub fn mega_selfdestruct(cx: _) -> Result {
     // The base body's first check: nothing is loaded in a static frame.
@@ -587,8 +593,13 @@ pub fn mega_selfdestruct(cx: _) -> Result {
     if r != Err(InstrStop::SelfDestruct) {
         return r;
     }
-    beneficiary_read(gas, state, target);
-    beneficiary_read(gas, state, me);
+    // A read counts only once the opcode completed: after its records were held to the limits and
+    // their history was paid (below). A write that then fails reads nothing.
+    let reads_last = !off("sd_read_after_write");
+    if !reads_last {
+        beneficiary_read(gas, state, target);
+        beneficiary_read(gas, state, me);
+    }
     // The beneficiary as it was, rebuilt from the balance the opcode moved (Satin
     // `CompletedWrite::SelfDestruct::balance`); the body loaded it.
     let (target_changed, target_empty) = {
@@ -708,6 +719,10 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         charge_history(gas, state, net as u64 * WRITE_RECORD_SIZE, false)?;
     } else if net < 0 {
         refill_history(gas, state, (-net) as u64 * WRITE_RECORD_SIZE);
+    }
+    if reads_last {
+        beneficiary_read(gas, state, target);
+        beneficiary_read(gas, state, me);
     }
     Err(InstrStop::SelfDestruct)
 }

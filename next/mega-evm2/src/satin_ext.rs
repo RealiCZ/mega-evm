@@ -43,6 +43,14 @@ pub struct MechanismState {
     pub keyless_frame: bool,
     /// A deposit whose body is over the data-size limit (a failed deposit).
     pub body_refused: bool,
+    /// A deposit's first-frame start target, parked once the deposit paid its created caller.
+    pub deposit_start: Option<Address>,
+    /// The first frame's start records parked before the frame (`tx::park_start`): the target,
+    /// its record count and whether the start logs a transfer.
+    pub start_records: Option<(Address, i64, bool)>,
+    /// The running execution is a pre-block system call (`BlockExecutor::system_call`), not a
+    /// transaction: the Oracle's storage reads the chain and asks the service nothing.
+    pub system_call: bool,
     /// The body check of a user transaction, waiting for the intrinsic-gas hook (Satin checks
     /// the body after the environment's rules, which evm2 checks before the hook): its number of
     /// authorization entries.

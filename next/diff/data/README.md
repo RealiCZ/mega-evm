@@ -16,9 +16,9 @@
 | `block/<set>/<n>.jsonl.zst`       | Reference output of the block executor gate: per transaction, then block counters and post-state |
 | `expected.env`                    | The replay and block counts `gate.sh` expects, sample and full                                   |
 
-The sample's fuzz batches are `SAMPLE_FUZZ_BATCHES` in `scripts/common.sh`: `mode4` (mode 4, seeds 1..=2000, `fqh0001`..`fqh2000`) and the first 300 seeds of each class mode, `sys` (5), `collide` (6), `pre0` (7), `limits` (8), `destroy` (9) and `refuse` (10); each is cut from the full batch of its mode that starts at seed 1.
+The sample's fuzz batches are `SAMPLE_FUZZ_BATCHES` in `scripts/common.sh`: `mode4` (mode 4, seeds 1..=2000, `fqh0001`..`fqh2000`) and the first 300 seeds of each class mode, `sys` (5), `collide` (6), `pre0` (7), `limits` (8), `destroy` (9), `refuse` (10), `frame` (11), `readfail` (12) and `stack` (13); each is cut from the full batch of its mode that starts at seed 1.
 The main gate's expected count is `MAIN_EXPECT` in `scripts/common.sh`, the one place the scripts state it; `expected.env` holds the others, counted by `count_expected.py` from the reference files and `known-differences.toml`, independently of the gates.
-Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q8`, `cap`, `edge`, `bd`) and fuzz batch names (`fq`, `fqbig`, `fqh`, `fqhbig`, `big`, `harsh`, `sys`, `collide`, `pre0`, `limits`, `destroy`, `refuse`, and the sample's `mode4`) are stable data identifiers: the reference outputs and `known-differences.toml` are keyed on them.
+Scenario names (such as `p6_dupn`), group keys (`p5`, `p6`, `p7`, `q2`, `fz`, `q8`, `cap`, `edge`, `bd`) and fuzz batch names (`fq`, `fqbig`, `fqh`, `fqhbig`, `big`, `harsh`, `sys`, `collide`, `pre0`, `limits`, `destroy`, `refuse`, `frame`, `readfail`, `stack`, and the sample's `mode4`) are stable data identifiers: the reference outputs and `known-differences.toml` are keyed on them.
 
 ## Selection of the sample blocks
 
@@ -57,13 +57,13 @@ reference/
   reference-outputs.tar.zst         reference outputs, extracted by `gate.sh full` (made by `regen-reference.sh`;
                                     when absent the original `q11-oracles.tar.zst` is read instead):
     satin-oracle.json               synthetic main
-    oracles/<batch>.json            the twelve fuzz batches, 43,000 scenarios in total
+    oracles/<batch>.json            the fifteen fuzz batches, 52,000 scenarios in total
     raw/satin/<set>/<n>.jsonl       engine replay reference
     raw/satin-block/<set>/<n>.jsonl block executor reference
 ```
 
-The twelve fuzz batches (mode, seeds), `FULL_FUZZ_BATCHES` in `scripts/common.sh`: `fq` 3 / 1..=3000, `fqbig` 3 / 3001..=13000, `fqh` 4 / 1..=2000, `fqhbig` 4 / 2001..=7000, `big` 1 / 401..=3400, `harsh` 2 / 1..=2000, and seeds 1..=3000 of each class mode: `sys` 5 (the live system address as sender, every envelope), `collide` 6 (creations onto occupied addresses), `pre0` 7 (depth-0 precompile calls with the sender or recipient as beneficiary), `limits` 8 (limits and SALT capacities from 0 to `u64::MAX`), `destroy` 9 (a creation address funded, created and destroyed) and `refuse` 10 (refusals with the frame gas around the charges before the load).
-Modes 1 to 4 are random compositions, modes 5 to 10 are described in `shared/src/fz/classes.rs`.
+The fifteen fuzz batches (mode, seeds), `FULL_FUZZ_BATCHES` in `scripts/common.sh`: `fq` 3 / 1..=3000, `fqbig` 3 / 3001..=13000, `fqh` 4 / 1..=2000, `fqhbig` 4 / 2001..=7000, `big` 1 / 401..=3400, `harsh` 2 / 1..=2000, and seeds 1..=3000 of each class mode: `sys` 5 (the live system address as sender, every envelope), `collide` 6 (creations onto occupied addresses), `pre0` 7 (depth-0 precompile calls with the sender or recipient as beneficiary), `limits` 8 (limits and SALT capacities from 0 to `u64::MAX`), `destroy` 9 (a creation address funded, created and destroyed), `refuse` 10 (refusals with the frame gas around the charges before the load), `frame` 11 (every envelope and recipient with the gas limit around each charge before and at the first frame), `readfail` 12 (an instruction that reads volatile data, then fails) and `stack` 13 (short stacks under detention).
+Modes 1 to 4 are random compositions, modes 5 to 10 are described in `shared/src/fz/classes.rs`, modes 11 to 13 in `shared/src/fz/regions.rs`.
 
 ## Regenerating the reference outputs
 

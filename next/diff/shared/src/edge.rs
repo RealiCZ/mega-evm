@@ -640,6 +640,201 @@ fn create2_salt_order() -> Vec<Scenario> {
     v
 }
 
+/// The first frame's start record is a runtime charge, not part of validation: a gas limit that
+/// covers the intrinsic gas and the body's history (21,000 + 27,280 for a value call) but not the
+/// recipient's record (3,520) is an included out-of-gas that runs no frame and reads nothing of
+/// its recipient; one below the validation minimum is refused. Every envelope that prices
+/// history, a creation, an absent recipient; at 51,800 the record is paid (the control).
+fn start_record_at_runtime() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    for (name, tx_type, gas) in [
+        ("edge_start_record_unpaid_legacy", 0u8, 50_000u64),
+        ("edge_start_record_unpaid_2930", 1, 50_000),
+        ("edge_start_record_unpaid_1559", 2, 50_000),
+        ("edge_start_record_at_validation_minimum", 0, 48_280),
+        ("edge_start_record_below_validation_minimum", 0, 48_279),
+        ("edge_start_record_one_below", 0, 51_799),
+        ("edge_start_record_paid", 0, 51_800),
+    ] {
+        let mut s = edge(name, vec![funded(A, Vec::new(), 1)], gas, Limits::default());
+        s.tx_type = tx_type;
+        s.value = U256::from(1);
+        s.gas_price = 1;
+        v.push(s);
+    }
+    let mut s =
+        edge("edge_start_record_unpaid_absent_recipient", vec![], 50_000, Limits::default());
+    s.to = EMPTY;
+    s.value = U256::from(1);
+    s.gas_price = 1;
+    v.push(s);
+    // A creation: 24,000 + 27,280, its account's record unpaid at 52,000.
+    let mut s = edge("edge_start_record_unpaid_create", vec![], 52_000, Limits::default());
+    s.create = true;
+    s.gas_price = 1;
+    v.push(s);
+    v
+}
+
+/// A deposit loads its recipient only once it passed its intrinsic check and paid its created
+/// caller: one that cannot pay the caller (absent recipient, existing recipient), or is refused
+/// below its intrinsic gas with a mint that covers its value, reads nothing of it; one refused
+/// below its intrinsic gas settles no start.
+fn deposit_before_start() -> Vec<Scenario> {
+    let mut v: Vec<Scenario> = deposit_first_frame()
+        .into_iter()
+        .filter(|s| s.name == "edge_deposit_new_caller_value_new_recipient_runtime_oog")
+        .map(|mut s| {
+            s.name = "edge_deposit_new_caller_unpaid_absent_recipient";
+            s.gas_limit = 25_000;
+            s
+        })
+        .collect();
+    let fresh = Address::with_last_byte(0xd1);
+    for (name, gas, mint, value) in [
+        ("edge_deposit_new_caller_unpaid_existing_recipient", 200_000u64, 1u64, 1u64),
+        ("edge_deposit_new_caller_below_intrinsic", 11_999, 0, 0),
+    ] {
+        let mut s = edge(name, vec![acct(B, vec![op::STOP])], gas, Limits::default());
+        s.accounts.retain(|a| a.address != super::SENDER);
+        s.sender = fresh;
+        s.to = B;
+        s.deposit = Some(mint);
+        s.value = U256::from(value);
+        s.salt = vec![(fresh, None, 1)];
+        v.push(s);
+    }
+    for (name, mint, value) in
+        [("edge_deposit_below_intrinsic", 0u64, 0u64), ("edge_deposit_below_intrinsic_value", 5, 5)]
+    {
+        let mut s = edge(name, vec![], 12_000, Limits::default());
+        s.deposit = Some(mint);
+        s.value = U256::from(value);
+        v.push(s);
+    }
+    v
+}
+
+/// SELFDESTRUCT to the block beneficiary (C destroys itself to B) whose completed write then fails:
+/// its records cross the frame's KV budget, or the frame cannot pay their history (directly, and
+/// in a frame reached by DELEGATECALL). Its read of the beneficiary counts only once the opcode
+/// completed, so the caller A goes on undetained (cap 6,000, and at Satin's default cap with 50M
+/// of compute after). Controls: another heir, and the history paid.
+fn selfdestruct_read_after_write() -> Vec<Scenario> {
+    let destroy_to_b = hex!("7310000000000000000000000000000000000000b0ff").to_vec();
+    let mut v = Vec::new();
+    // (name, A's code, KV limit, detention cap, gas limit)
+    type Case = (&'static str, &'static [u8], Option<u64>, Option<u64>, u64);
+    let cases: [Case; 6] = [
+        (
+            "edge_sd_beneficiary_kv_stop",
+            &hex!(
+                "5f5f5f5f60037310000000000000000000000000000000000000c05af16001553d6002556001600555600160065500"
+            ),
+            Some(3),
+            Some(6_000),
+            BELOW_CAP,
+        ),
+        (
+            "edge_sd_other_heir_kv_stop",
+            &hex!(
+                "5f5f5f5f60037310000000000000000000000000000000000000c05af16001553d6002556001600555600160065500"
+            ),
+            Some(3),
+            Some(6_000),
+            BELOW_CAP,
+        ),
+        (
+            "edge_sd_beneficiary_history_unpaid",
+            &hex!(
+                "5f5f5f5f5f7310000000000000000000000000000000000000c0611770f16001553d6002556001600555600160065500"
+            ),
+            None,
+            Some(6_000),
+            BELOW_CAP,
+        ),
+        (
+            "edge_sd_beneficiary_history_paid",
+            &hex!(
+                "5f5f5f5f5f7310000000000000000000000000000000000000c061ea60f16001553d6002556001600555600160065500"
+            ),
+            None,
+            Some(6_000),
+            BELOW_CAP,
+        ),
+        (
+            "edge_sd_beneficiary_history_unpaid_default_cap",
+            &hex!(
+                "5f5f5f5f5f7310000000000000000000000000000000000000c0611770f16001553d6002555b6305f5e1005a11602557600160055500"
+            ),
+            None,
+            None,
+            150_000_000,
+        ),
+        (
+            "edge_sd_beneficiary_history_unpaid_delegated",
+            &hex!(
+                "5f5f5f5f5f7310000000000000000000000000000000000000c0612328f16001553d6002556001600555600160065500"
+            ),
+            None,
+            Some(6_000),
+            BELOW_CAP,
+        ),
+    ];
+    for (name, a, kv, cap, gas) in cases {
+        let heir_b = name != "edge_sd_other_heir_kv_stop";
+        let c = if name.ends_with("_delegated") {
+            hex!("5f5f5f5f7310000000000000000000000000000000000000d05af46001553d60025500").to_vec()
+        } else if heir_b {
+            destroy_to_b.clone()
+        } else {
+            hex!("7310000000000000000000000000000000000000d0ff").to_vec()
+        };
+        let mut accounts = vec![
+            funded(A, a.to_vec(), if kv.is_some() { 100 } else { 0 }),
+            funded(super::C, c, 7),
+            funded(B, Vec::new(), 1),
+        ];
+        if name.ends_with("_delegated") {
+            accounts.push(acct(D, destroy_to_b.clone()));
+        } else if !heir_b {
+            accounts.push(funded(D, Vec::new(), 1));
+        }
+        let limits = Limits { kv, block_env_cap: cap, ..Limits::default() };
+        let mut s = edge(name, accounts, gas, limits);
+        s.beneficiary = B;
+        v.push(s);
+    }
+    v
+}
+
+/// A keyless call with a value, detained from its start (its sender or recipient is the block
+/// beneficiary) under a cap below its 100,000 overhead: the overhead is the crossing, so the call
+/// stops at the compute limit with none of it billed, before its value is refused. At a cap of
+/// 100,000 it is refused for its value (the control); as a deposit, the same.
+fn keyless_value_detained() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    for (name, beneficiary, cap, deposit) in [
+        ("edge_keyless_value_detained_sender", super::SENDER, 3_000u64, false),
+        ("edge_keyless_value_detained_recipient", KEYLESS, 99_999, false),
+        ("edge_keyless_value_detained_at_overhead", KEYLESS, 100_000, false),
+        ("edge_keyless_value_detained_deposit", super::SENDER, 3_000, true),
+    ] {
+        let (data, _, _) = super::q8::keyless_call("ok", 1_000_000);
+        let limits = Limits { block_env_cap: Some(cap), ..Limits::default() };
+        let mut s = edge(name, vec![], 5_000_000, limits);
+        s.to = KEYLESS;
+        s.data = data;
+        s.value = U256::from(1);
+        s.beneficiary = beneficiary;
+        if deposit {
+            s.deposit = Some(1);
+        }
+        v.push(s);
+    }
+    v
+}
+
 pub fn all() -> Vec<Scenario> {
     let mut v = system_address();
     v.extend(destroyed_leaf());
@@ -655,5 +850,9 @@ pub fn all() -> Vec<Scenario> {
     v.extend(creator_stopped_on_resume());
     v.extend(creation_destroyed_in_constructor());
     v.extend(create2_salt_order());
+    v.extend(start_record_at_runtime());
+    v.extend(deposit_before_start());
+    v.extend(selfdestruct_read_after_write());
+    v.extend(keyless_value_detained());
     v
 }

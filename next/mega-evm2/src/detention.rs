@@ -472,32 +472,61 @@ pub fn hold_precompile(
             return None;
         }
     }
-    let det = &evm.ext().detention;
-    let depth = msg.depth as usize;
-    let contribution = det.caller_contribution(depth, msg.gas_limit);
+    let allowance = allowance_at_start(&evm.ext().detention, msg, limit);
+    let crosses = price > allowance && price <= msg.gas_limit;
+    #[cfg(feature = "compare")]
+    evm.ext_mut().detention.priced.push((price, allowance, crosses));
+    crosses.then(|| crossing_answer(evm, msg, limit))
+}
+
+/// The compute a message's own charges may make before it crosses the detention limit `limit`:
+/// the limit less the compute at the message's start (its caller's contribution included), at
+/// most its forward.
+fn allowance_at_start(det: &DetentionState, msg: &Message<MegaTypes>, limit: u64) -> u64 {
+    let contribution = det.caller_contribution(msg.depth as usize, msg.gas_limit);
     let at_start = det
         .suspended
         .saturating_add(contribution)
         .saturating_add(det.stipends)
         .saturating_sub(det.burned);
-    let allowance = limit.saturating_sub(at_start).min(msg.gas_limit);
-    let crosses = price > allowance && price <= msg.gas_limit;
-    #[cfg(feature = "compare")]
-    evm.ext_mut().detention.priced.push((price, allowance, crosses));
-    if !crosses {
-        return None;
-    }
+    limit.saturating_sub(at_start).min(msg.gas_limit)
+}
+
+/// The answer to a message whose own charge crossed the detention limit `limit` before it ran:
+/// the compute stop, on the untouched forward (none of the charge is billed).
+fn crossing_answer(
+    evm: &mut Evm<'_, MegaTypes>,
+    msg: &Message<MegaTypes>,
+    limit: u64,
+) -> evm2::interpreter::MessageResult<MegaTypes> {
     let ext = evm.ext_mut();
     ext.detention.crossings += 1;
     if msg.depth == 0 {
         ext.top_stop = Some((2, limit));
     }
-    Some(evm2::interpreter::MessageResultExt {
+    evm2::interpreter::MessageResultExt {
         stop: InstrStop::Revert,
         output: limit_exceeded_output(2, limit).into(),
         gas: GasTracker::new_with_execution_gas_and_reservoir(msg.gas_limit, msg.reservoir),
         ..Default::default()
-    })
+    }
+}
+
+/// A charge of `price` a message makes before anything of it runs (the keyless call's overhead),
+/// decided as [`hold_precompile`] decides a precompile's price: when the message's allowance is
+/// below the price and its forward pays it, the charge is the crossing, answered with the compute
+/// stop on the untouched forward.
+pub fn hold_charge(
+    evm: &mut Evm<'_, MegaTypes>,
+    msg: &Message<MegaTypes>,
+    price: u64,
+) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
+    if !detains(evm.ext()) {
+        return None;
+    }
+    let limit = evm.ext().detention.limit?;
+    let allowance = allowance_at_start(&evm.ext().detention, msg, limit);
+    (price > allowance && price <= msg.gas_limit).then(|| crossing_answer(evm, msg, limit))
 }
 
 /// The full price catalogue. An entry with an input-only quote (`precompile_price`) is priced by

@@ -18,7 +18,7 @@
 #   switch    the name in `off("…")`
 #   gate      main | fuzz | replay | block
 #   scenario  (main) the scenario name
-#   mode      (fuzz) the generator mode, 1..=10
+#   mode      (fuzz) the generator mode, 1..=13
 #   seed      (fuzz) the seed
 #   block     (replay, block) the recorded block, `<set>:<number>`
 #   scope     sample: the case is in the in-repo sample (run by CI on every change);
@@ -552,3 +552,45 @@ gate = "main"
 scenario = "t03_recipient_delegates_to_beneficiary"
 scope = "sample"
 why = "The harness loads 23-byte fixture code `0xef0100 || address` as an EIP-7702 delegation, as the reference's database reads it; off, it is plain bytecode and a call to the account no longer follows the delegation."
+
+[[control]]
+switch = "start_at_runtime"
+gate = "main"
+scenario = "edge_start_record_unpaid_legacy"
+scope = "sample"
+why = "The first frame's start record is charged after validation, which holds the gas limit to the intrinsic gas and the body's history: a gas limit short of the record is an included out-of-gas that runs no frame (fees and nonce paid). Off, the record is part of the intrinsic gas and the transaction is refused."
+
+[[control]]
+switch = "start_reads_no_target"
+gate = "main"
+scenario = "edge_start_record_unpaid_absent_recipient"
+scope = "sample"
+why = "The start's record is decided without loading its target (an account the transaction has not loaded is unchanged), and the target is read only right before the first frame is built: a transaction that cannot pay the record reads nothing of its recipient. Off, the prediction loads the recipient before validation."
+
+[[control]]
+switch = "deposit_start_after_caller"
+gate = "main"
+scenario = "edge_deposit_new_caller_unpaid_absent_recipient"
+scope = "sample"
+why = "A deposit's first-frame start is parked once the deposit passed its intrinsic check and paid its created caller: one that cannot pay the caller reads nothing of its recipient. Off, the start is predicted while the deposit is prepared, reading the recipient."
+
+[[control]]
+switch = "prepared_deposit_no_start"
+gate = "main"
+scenario = "edge_deposit_below_intrinsic"
+scope = "sample"
+why = "A deposit refused by its intrinsic gas check made no start, so it settles none. Off, the comparison reports a depth-0 settlement with unlimited budgets for it."
+
+[[control]]
+switch = "sd_read_after_write"
+gate = "main"
+scenario = "edge_sd_beneficiary_history_unpaid"
+scope = "sample"
+why = "SELFDESTRUCT commits its reads of the block beneficiary only after its records were held to the limits and their history paid: a destruction that then fails detains nothing. Off, the read is committed first, and the caller is held to the detention limit."
+
+[[control]]
+switch = "keyless_value_hold"
+gate = "main"
+scenario = "edge_keyless_value_detained_sender"
+scope = "sample"
+why = "A keyless call with a value decides its 100,000 overhead under detention: when the overhead crosses the compute limit, the call stops there with none of it billed, before its value is refused. Off, the overhead is charged and the value refused."

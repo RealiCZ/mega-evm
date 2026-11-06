@@ -11,7 +11,7 @@
 //! Every other emitted semantic field is compared; missing fields and unknown kinds fail closed.
 //! Accepted differences are listed by case (`[[difference]]`, `[[replay_difference]]`) or, for a
 //! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
-//! [`HALTED_FIRST_FRAME`]).
+//! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`]).
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -134,8 +134,15 @@ pub fn known_replay_differences() -> Vec<KnownReplay> {
 ///   deposit.
 pub const HALTED_FIRST_FRAME: &str = "halted_first_frame";
 
+/// The halt label of DUPN, SWAPN and EXCHANGE with an immediate EIP-8024 rejects: revm reports
+/// `OpcodeNotFound`, evm2 `InvalidImmediateEncoding` (the label only: gas, output and state are
+/// equal). Its shape, all of which [`invalid_immediate_label`] checks: the only difference of the
+/// case is `halt`, normalized `OpcodeNotFound` on the reference's side and
+/// `InvalidImmediateEncoding` on the engine's.
+pub const INVALID_IMMEDIATE_LABEL: &str = "invalid_immediate_label";
+
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 1] = [HALTED_FIRST_FRAME];
+const CLASSES: [&str; 2] = [HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL];
 
 /// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
 /// [`CLASSES`] and states its `why` and `signoff`. A class not enabled there is not accepted.
@@ -182,6 +189,15 @@ pub fn halted_first_frame(
     r.is_empty() && root_halt && failed(reference) && failed(candidate)
 }
 
+/// Whether the differences `diffs` of one case, whose outcomes are `reference` and `candidate`
+/// (not normalized), are exactly the shape of [`INVALID_IMMEDIATE_LABEL`].
+pub fn invalid_immediate_label(diffs: &[String], reference: &Value, candidate: &Value) -> bool {
+    let [only] = diffs else { return false };
+    only == "halt" &&
+        canonical(reference)["halt"] == "OpcodeNotFound" &&
+        canonical(candidate)["halt"] == "InvalidImmediateEncoding"
+}
+
 /// How one scenario's differences relate to the accepted list.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -217,10 +233,13 @@ pub fn classify(
         if diffs.is_empty() {
             return Verdict::Match;
         }
-        if classes.iter().any(|c| c == HALTED_FIRST_FRAME) &&
-            halted_first_frame(&diffs, reference, candidate, frames)
-        {
+        let enabled = |class: &str| classes.iter().any(|c| c == class);
+        if enabled(HALTED_FIRST_FRAME) && halted_first_frame(&diffs, reference, candidate, frames) {
             return Verdict::Class(HALTED_FIRST_FRAME);
+        }
+        if enabled(INVALID_IMMEDIATE_LABEL) && invalid_immediate_label(&diffs, reference, candidate)
+        {
+            return Verdict::Class(INVALID_IMMEDIATE_LABEL);
         }
         return Verdict::Differ(diffs);
     }

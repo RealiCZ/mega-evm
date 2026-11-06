@@ -196,6 +196,8 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
   Give a new site its engine decision in `refuses_load`; the controls `refuse_at_load`, `refusal_gas` and `delegate_refusal` show the rule.
 - **Every `EvmTypesHost` impl sets `MessageHooks`**, including the JIT host tests in `crates/jit/runtime/src/evm2_evm.rs`.
   Build the JIT crate after the rebase: the interpreter can build while the runtime tests do not.
+- **The engine mirrors `execute_prepared`.**
+  Types 0, 1 and 2 (`execute_user` in `mega-evm2/src/tx.rs`) and EIP-7702 (`mega-evm2/src/eip7702.rs`) run their own copy of evm2's `execute_prepared`, so that the first frame's start record is charged after validation; compare both with upstream's `legacy`, `eip2930`, `eip1559` and `eip7702::execute_prepared` after a rebase, as a clean merge does not.
 - **Run the negative controls, not only the gates.**
   A fix the new upstream code no longer reaches shows up as a missed control while every gate still passes; `diff/scripts/ci-local.sh` runs the sample controls, `controls.sh full` the rest.
 

@@ -283,6 +283,7 @@ mod tests {
         assert_eq!(fuzz_name(3, 663), "fq0663");
         assert_eq!(fuzz_name(4, 1788), "fqh1788");
         assert_eq!(fuzz_name(10, 7), "fxr0007");
+        assert_eq!(fuzz_name(13, 7), "fxk0007");
     }
 
     #[test]
@@ -292,7 +293,7 @@ mod tests {
             ("gate = \"main\"\nscenario = \"a\"\nblock = \"d4:1\"", "block"),
             ("gate = \"main\"\nscenario = \"a\"\nseeds = 1", "seeds"),
             ("gate = \"fuzz\"\nmode = 4", "seed"),
-            ("gate = \"fuzz\"\nmode = 11\nseed = 1", "mode"),
+            ("gate = \"fuzz\"\nmode = 14\nseed = 1", "mode"),
             ("gate = \"fuzz\"\nmode = 4\nseed = 0", "seed"),
             ("gate = \"replay\"\nblock = \"2045117\"", "block"),
             ("gate = \"block\"\nblock = \"d4:x\"", "block"),
