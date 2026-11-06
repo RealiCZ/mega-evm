@@ -19,7 +19,7 @@
 #   switch    the name in `off("…")`
 #   gate      main | fuzz | replay | block
 #   scenario  (main) the scenario name
-#   mode      (fuzz) the generator mode, 1..=13
+#   mode      (fuzz) the generator mode, 1..=14
 #   seed      (fuzz) the seed
 #   block     (replay, block) the recorded block, `<set>:<number>`
 #   scope     sample: the case is in the in-repo sample (run by CI on every change);

@@ -11,7 +11,8 @@
 //!
 //! Modes 5 to 10 ([`classes`]) each draw inputs of one class of edge inputs of single rules, modes
 //! 11 to 13 ([`regions`]) inputs of the regions no earlier mode drew: the first frame's gas window,
-//! an instruction that reads volatile data then fails, short stacks under detention.
+//! an instruction that reads volatile data then fails, short stacks under detention. Mode 14
+//! ([`pairs`]) puts two mechanisms in one transaction, every unordered pair of them in turn.
 //!
 //! A gate selects a mode with `MEGA_EVM2_FUZZ_MODE` (default 1) and the seeds with
 //! `MEGA_EVM2_FUZZ=first..=last` (default `1..=400`); a seed's scenario name ([`name`]) states
@@ -26,6 +27,7 @@ use super::{
 use alloy_primitives::{Address, U256};
 
 mod classes;
+pub mod pairs;
 mod regions;
 
 pub(crate) struct Rng(pub(crate) u64);
@@ -60,7 +62,7 @@ const EMPTY2: Address =
 
 /// The generator modes: `(mode, name prefix, seed digits)`. A seed's name is the prefix and the
 /// seed, zero-padded to the digits; the names are part of the reference outputs.
-pub const MODES: [(u8, &str, usize); 13] = [
+pub const MODES: [(u8, &str, usize); 14] = [
     (1, "fz", 3),
     (2, "fh", 4),
     (3, "fq", 4),
@@ -74,6 +76,7 @@ pub const MODES: [(u8, &str, usize); 13] = [
     (11, "fxf", 4),
     (12, "fxv", 4),
     (13, "fxk", 4),
+    (14, "fxm", 4),
 ];
 
 /// The scenario name of seed `seed` of mode `mode`.
@@ -137,6 +140,7 @@ pub fn seed_scenario(mode: u8, seed: u64) -> Scenario {
         ),
         4 => composition(Gen { harsh: true, mechanisms: true, signer_sender: false }, seed),
         11..=13 => regions::generate(mode, seed),
+        14 => pairs::generate(seed),
         _ => classes::generate(mode, seed),
     };
     s.name = Box::leak(name(mode, seed).into_boxed_str());
