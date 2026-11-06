@@ -835,6 +835,29 @@ fn keyless_value_detained() -> Vec<Scenario> {
     v
 }
 
+/// A failed deposit (its recipient halts on INVALID) whose mint the sender's balance cannot hold:
+/// the credit is a checked add that keeps the balance (op-revm), at `U256::MAX` and one below it;
+/// a mint that fits exactly (the control) is credited.
+fn failed_deposit_mint_overflow() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    for (name, below_max) in [
+        ("edge_deposit_failed_mint_overflow", 0u64),
+        ("edge_deposit_failed_mint_overflow_max_minus_one", 1),
+        ("edge_deposit_failed_mint_fits", 100),
+    ] {
+        let mut s = edge(name, vec![acct(A, vec![op::INVALID])], 1_000_000, Limits::default());
+        s.accounts.retain(|a| a.address != super::SENDER);
+        s.accounts.push(Account {
+            address: super::SENDER,
+            balance: U256::MAX - U256::from(below_max),
+            ..Account::default()
+        });
+        s.deposit = Some(100);
+        v.push(s);
+    }
+    v
+}
+
 pub fn all() -> Vec<Scenario> {
     let mut v = system_address();
     v.extend(destroyed_leaf());
@@ -854,5 +877,6 @@ pub fn all() -> Vec<Scenario> {
     v.extend(deposit_before_start());
     v.extend(selfdestruct_read_after_write());
     v.extend(keyless_value_detained());
+    v.extend(failed_deposit_mint_overflow());
     v
 }

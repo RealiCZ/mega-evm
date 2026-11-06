@@ -29,7 +29,7 @@ SAMPLE_FUZZ_BATCHES=(
 # (`known-differences.toml`). This is the one place that states them. Adding a scenario or a known
 # difference means changing it here (and the data under `next/diff/data`, see `data/README.md`);
 # `gate-lib.sh`, `check-reference.sh` and `regen-reference.sh` read it.
-MAIN_EXPECT="total=1088 match=1079 known=5 class=4"
+MAIN_EXPECT="total=1091 match=1082 known=5 class=4"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (all of mode 11's first-frame window, `halted_first_frame`); every other seed must match.
 SAMPLE_FUZZ_CLASS=45

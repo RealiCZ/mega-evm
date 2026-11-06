@@ -767,7 +767,14 @@ fn failed_deposit(
     {
         let mut caller = host.state_mut().account(&tx.from)?;
         caller.bump_nonce();
-        caller.add_balance(U256::from(tx.mint));
+        // op-revm credits a failed deposit's mint with a checked add: a balance that cannot hold
+        // it stays as it was (the success path saturates instead, in op-evm2).
+        let mint = U256::from(tx.mint);
+        match caller.balance().checked_add(mint) {
+            Some(balance) => caller.set_balance(balance),
+            None if !crate::off("failed_deposit_checked_mint") => {}
+            None => caller.add_balance(mint),
+        }
     }
     host.ext_mut().reservoir_left = 0;
     Ok(TxResultExt {

@@ -594,3 +594,10 @@ gate = "main"
 scenario = "edge_keyless_value_detained_sender"
 scope = "sample"
 why = "A keyless call with a value decides its 100,000 overhead under detention: when the overhead crosses the compute limit, the call stops there with none of it billed, before its value is refused. Off, the overhead is charged and the value refused."
+
+[[control]]
+switch = "failed_deposit_checked_mint"
+gate = "main"
+scenario = "edge_deposit_failed_mint_overflow"
+scope = "sample"
+why = "A failed deposit credits its mint with a checked add, as op-revm does: a balance that cannot hold it stays as it was. Off, the credit wraps and the sender is left with a small balance."
