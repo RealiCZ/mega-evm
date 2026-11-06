@@ -334,13 +334,14 @@ impl Lite {
     /// order at one site): per dimension in order — data size, KV updates, state growth — the
     /// frame budget, then the transaction limit, each also for a dimension the start adds nothing
     /// to, so usage over a limit before the start (a deposit's created caller) is the crossing
-    /// there. A built frame and a frame answered with a success are held alike.
+    /// there. A built frame and a frame answered with a success are held alike. The protocol's own
+    /// work is counted and held to nothing.
     pub fn draw_first_frame(&mut self, delta: [i64; 3]) -> Option<(u8, u64)> {
-        if self.exempt {
-            return None;
-        }
         let top = self.frames.last().expect("a frame");
         for (i, kind) in KIND.into_iter().enumerate() {
+            if self.exempt {
+                break;
+            }
             let room = if crate::off("unclamped_draw") {
                 top.remaining(i)
             } else {

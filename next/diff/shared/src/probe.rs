@@ -381,7 +381,9 @@ mod tests {
         let s = parse_line(r#"{"base": "fqh0042"}"#, 1).unwrap();
         assert_eq!(s.name, "fqh0042");
         assert_eq!(s.group, "fz");
-        let direct = crate::fz::seed_scenario(4, 42);
+        // The seed lists an account twice; a base has its entries merged.
+        let mut direct = crate::fz::seed_scenario(4, 42);
+        crate::merge_duplicate_accounts(&mut direct);
         assert_eq!(s.accounts.len(), direct.accounts.len() + 2);
         assert_eq!(s.accounts[1].code, direct.accounts[1].code);
     }
