@@ -157,8 +157,19 @@ pub(super) fn generate(seed: u64) -> Scenario {
     });
     // The envelope: a deposit's, or the first mechanism's that wants one; the other joins it.
     let deposit = [first, second].into_iter().find(|m| MECHANISMS[*m] == "deposit");
-    let envelope =
+    let mut envelope =
         deposit.or_else(|| [first, second].into_iter().find(|m| wants_envelope(*m, &mut r)));
+    // A keyless or precompile envelope runs no code of the scenario first, so a partner whose
+    // part is code would do nothing: most such draws make both parts code of the first frame.
+    if let Some(e) = envelope {
+        let other = if e == first { second } else { first };
+        if matches!(MECHANISMS[e], "keyless" | "precompile") &&
+            MECHANISMS[other] != "limit" &&
+            r.chance(60)
+        {
+            envelope = None;
+        }
+    }
     match envelope {
         Some(e) => {
             set_envelope(e, &mut r, &mut build);

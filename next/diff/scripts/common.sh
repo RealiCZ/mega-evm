@@ -38,7 +38,7 @@ MAIN_EXPECT="total=2672 match=2509 known=5 class=158"
 # gate (mode 11's first-frame window and mode 14's pairs, `halted_first_frame`); every other seed
 # must match.
 SAMPLE_FUZZ_CLASS=49
-FULL_FUZZ_CLASS=395
+FULL_FUZZ_CLASS=394
 # The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
 MAIN_TOTAL=${MAIN_EXPECT#total=}
 MAIN_TOTAL=${MAIN_TOTAL%% *}
