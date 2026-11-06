@@ -38,7 +38,8 @@
 //!   caller under a state-growth limit of 0): built or answered with a success, it is held to the
 //!   limits as its start is drawn, dimension by dimension, so the first dimension crossed in the
 //!   order data size, KV updates, state growth names the stop; an interceptor's answer is not held;
-//! - a `DUPN` deeper than the stack outside `p6_dupn`, without an entry: the class of its label;
+//! - a failed `DUPN`, `DUP1` on an empty stack and `DUP16` on a one-item stack, without entries:
+//!   the class of their label;
 //! - a value the recipient returns to the sender (a call, a destruction): the start record is taken
 //!   back in the first frame, and the reservoir it returns unwinds the transaction's spill.
 #![allow(dead_code)]
@@ -986,15 +987,50 @@ fn first_frame_over_limit() -> Vec<Scenario> {
     v
 }
 
-/// `PUSH1 1; DUPN 0x00`: a `DUPN` deeper than the one-item stack, a case of the label class
-/// `dupn_depth_label` (it has no entry of its own).
+/// Failed DUPs without entries of their own, cases of the label class `dup_stack_label`:
+/// `PUSH1 1; DUPN 0x00` (a `DUPN` deeper than the one-item stack), `DUP1` on an empty stack and
+/// `PUSH1 1; DUP16` (16 deep on a one-item stack).
 fn dupn_deeper_than_stack() -> Vec<Scenario> {
-    vec![edge(
-        "edge_dupn_deeper_than_stack",
-        vec![acct(A, vec![op::PUSH1, 1, op::DUPN, 0x00, op::STOP])],
-        1_000_000,
-        Limits::default(),
-    )]
+    let mut v = Vec::new();
+    for (name, code) in [
+        ("edge_dupn_deeper_than_stack", vec![op::PUSH1, 1, op::DUPN, 0x00, op::STOP]),
+        ("edge_dup1_empty_stack", vec![op::DUP1, op::STOP]),
+        ("edge_dup16_one_item_stack", vec![op::PUSH1, 1, op::DUP1 + 15, op::STOP]),
+    ] {
+        v.push(edge(name, vec![acct(A, code)], 1_000_000, Limits::default()));
+    }
+    v
+}
+
+/// A deposit creating from a sender at nonce `u64::MAX`, whose nonce cannot be bumped: revm
+/// answers the creation with a success, nothing created, its gas untouched, after the balance
+/// check (a value the sender cannot fund is out of funds, a failed deposit). The control is a
+/// sender at `u64::MAX - 1`, which creates.
+fn deposit_creation_nonce_max() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    for (name, nonce, value, balance) in [
+        ("edge_deposit_create_nonce_max", u64::MAX, 0u64, ONE_ETHER),
+        ("edge_deposit_create_nonce_max_value", u64::MAX, 5, ONE_ETHER),
+        ("edge_deposit_create_nonce_max_unfunded_value", u64::MAX, 5, 0),
+        ("edge_deposit_create_nonce_max_minus_one", u64::MAX - 1, 0, ONE_ETHER),
+    ] {
+        let depositor = super::q2::DEPOSITOR;
+        let sender = Account {
+            address: depositor,
+            nonce,
+            balance: U256::from(balance),
+            ..Account::default()
+        };
+        let mut s = edge(name, vec![sender], 1_000_000, Limits::default());
+        s.accounts.retain(|a| a.address != super::SENDER);
+        s.sender = depositor;
+        s.deposit = Some(0);
+        s.create = true;
+        s.value = U256::from(value);
+        s.data = init_returning(1);
+        v.push(s);
+    }
+    v
 }
 
 /// A value of 1 the recipient returns to the sender, by a call or by destroying itself: the first
@@ -1115,5 +1151,6 @@ pub fn all() -> Vec<Scenario> {
     v.extend(dupn_deeper_than_stack());
     v.extend(value_returned_to_sender());
     v.extend(modexp_over_bound());
+    v.extend(deposit_creation_nonce_max());
     v
 }

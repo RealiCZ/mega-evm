@@ -623,3 +623,10 @@ gate = "main"
 scenario = "edge_sweep_dep_delegated_existing_value_intrinsic"
 scope = "sample"
 why = "A deposit reads its sender's code only once it passed its intrinsic and floor checks: a delegated sender's deposit that fails its intrinsic gas reads no code. Off, the code is read before the check (the read set differs)."
+
+[[control]]
+switch = "deposit_creation_nonce_max"
+gate = "main"
+scenario = "edge_deposit_create_nonce_max"
+scope = "sample"
+why = "A deposit creating from a sender at nonce u64::MAX, whose nonce cannot be bumped, is answered as revm answers it: a success, nothing created, the frame's gas untouched and the created account's state gas not kept (a start the caller's account refuses counts nothing). Off, the creation runs and deploys at the sender's u64::MAX address (gas, state and the counts differ)."

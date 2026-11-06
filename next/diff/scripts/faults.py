@@ -334,10 +334,10 @@ FAULTS = [
     ("class-reference-frame", "main", r'^DIFFER [^ ]+ \["frame 0 ', scen_field(M, "frames", frameless_halt, lambda v: [{"kind": "Call", "level": 0, "gas_limit": 1, "reservoir": 0, "value": "0", "status": "halt", "output": "0x", "gas_left": 0, "reservoir_left": 0}])),
     ("class-not-enabled", "main", r'^DIFFER [^ ]+ \["frame count 0 vs 1"\]$', known_toml(drop_class)),
     ("main-expected-class", "main", SUMMARY, expect("EXPECT_MAIN", count("class", 1))),
-    # main: the class `dupn_depth_label` takes exactly its label, only while the file enables it
-    ("dupn-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % DUPN, scen_field(M, "gas_used", lambda o: o["name"] == DUPN)),
-    ("dupn-class-other-label", "main", r'^DIFFER %s \["halt"\]$' % DUPN, scen_edit(M, named(DUPN, lambda o: o.update(halt="Base(OutOfGas(Basic))")))),
-    ("dupn-class-not-enabled", "main", r'^DIFFER %s \["halt"\]$' % DUPN, known_toml(lambda t: drop_class(t, "dupn_depth_label"))),
+    # main: the class `dup_stack_label` takes exactly its label, only while the file enables it
+    ("dup-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % DUPN, scen_field(M, "gas_used", lambda o: o["name"] == DUPN)),
+    ("dup-class-other-label", "main", r'^DIFFER %s \["halt"\]$' % DUPN, scen_edit(M, named(DUPN, lambda o: o.update(halt="Base(OutOfGas(Basic))")))),
+    ("dup-class-not-enabled", "main", r'^DIFFER %s \["halt"\]$' % DUPN, known_toml(lambda t: drop_class(t, "dup_stack_label"))),
     # fuzz
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),
     ("fuzz-duplicate-entry", "fuzz", r"duplicate oracle names", scen_edit(F, dup_entry)),

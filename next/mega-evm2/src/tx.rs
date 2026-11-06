@@ -14,11 +14,11 @@ use evm2::{
     Evm, EvmTypesHost, TxResult, TxResultExt,
     env::TxEnvExt,
     ethereum::{
-        self, PreparedTx, eip1559, eip2930, execute_initial_frame, finalize_gas,
+        self, InitialFrame, PreparedTx, eip1559, eip2930, execute_initial_frame, finalize_gas,
         initial_gas_and_reservoir, legacy, prepare_initial_frame, runtime_oog_result,
     },
     handler::{GasSettlement, TxHandlerHooks},
-    interpreter::{GasTracker, Host, InstrStop, MessageResult},
+    interpreter::{GasTracker, Host, InstrStop, MessageResult, MessageResultExt},
     registry::{HandlerResult, TxRegistry, TxRequest, handler},
     version::{GasId, StateGasSite},
 };
@@ -659,7 +659,11 @@ fn execute_deposit_inner(
         GasTracker::new_with_execution_gas_and_reservoir(execution_gas_limit, reservoir);
     let frame =
         prepare_initial_frame(host, tx.from, nonce, tx.to, &tx.input, tx.value, &mut tx_gas)?;
-    let result = execute_initial_frame(host, frame, &mut tx_gas, execution_gas_limit, reservoir)?;
+    let result = if creation_nonce_unbumpable(host, tx, nonce, &frame)? {
+        unbumpable_creation(host, frame, execution_gas_limit, reservoir)?
+    } else {
+        execute_initial_frame(host, frame, &mut tx_gas, execution_gas_limit, reservoir)?
+    };
     // op-revm maps a first frame whose value the caller cannot fund (`OutOfFunds`) to a halt, so
     // the deposit fails (nonce and mint kept, gas limit used); evm2 reports it as a revert-class
     // stop, which op-evm2's `execute_deposit_tx` does not turn into a failed deposit.
@@ -681,6 +685,50 @@ fn execute_deposit_inner(
             result,
         },
     )
+}
+
+/// Whether a deposit's first frame is a creation whose creator's nonce (`u64::MAX`) cannot be
+/// bumped. revm checks the caller's balance first (a value it cannot fund stays the out-of-funds
+/// failure), then answers the creation when the bump fails, before anything is created: Satin's
+/// start the caller's account refuses, which counts nothing. Only a deposit reaches it: every other
+/// envelope's nonce is checked below `u64::MAX`.
+fn creation_nonce_unbumpable(
+    host: &mut Evm<'_, MegaTypes>,
+    tx: &TxDeposit,
+    nonce: u64,
+    frame: &InitialFrame<MegaTypes>,
+) -> HandlerResult<bool> {
+    if !tx.to.is_create() ||
+        nonce != u64::MAX ||
+        frame.runtime_oog ||
+        crate::off("deposit_creation_nonce_max")
+    {
+        return Ok(false);
+    }
+    let balance =
+        host.state_mut().account_info_untracked(&tx.from)?.map_or(U256::ZERO, |i| i.balance);
+    Ok(balance >= tx.value)
+}
+
+/// revm's answer to that creation: a success with nothing created and the frame's gas untouched;
+/// the account state gas the runtime gas phase charged for the created account is not kept. The
+/// frame is reported to an inspector as it was built, and the transaction's own frame keeps
+/// nothing on its ledger.
+fn unbumpable_creation(
+    host: &mut Evm<'_, MegaTypes>,
+    frame: InitialFrame<MegaTypes>,
+    execution_gas_limit: u64,
+    reservoir: u64,
+) -> HandlerResult<MessageResult<MegaTypes>> {
+    let mut message = frame.message;
+    let untouched =
+        GasTracker::new_with_execution_gas_and_reservoir(message.gas_limit, message.reservoir);
+    let answer =
+        MessageResultExt { stop: InstrStop::Return, gas: untouched, ..MessageResultExt::default() };
+    let mut result = host.execute_halted_message(&mut message, answer)?;
+    host.ext_mut().top_started = true;
+    result.gas = GasTracker::new_with_execution_gas_and_reservoir(execution_gas_limit, reservoir);
+    Ok(result)
 }
 
 /// The transaction's own start settles on the start ledger (Satin's depth-0 settlement), as the

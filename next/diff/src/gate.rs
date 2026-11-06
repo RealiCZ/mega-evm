@@ -11,7 +11,7 @@
 //! Every other emitted semantic field is compared; missing fields and unknown kinds fail closed.
 //! Accepted differences are listed by case (`[[difference]]`, `[[replay_difference]]`) or, for a
 //! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
-//! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUPN_DEPTH_LABEL`]).
+//! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUP_STACK_LABEL`]).
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -141,16 +141,16 @@ pub const HALTED_FIRST_FRAME: &str = "halted_first_frame";
 /// `InvalidImmediateEncoding` on the engine's, both runs halted.
 pub const INVALID_IMMEDIATE_LABEL: &str = "invalid_immediate_label";
 
-/// The halt label of a `DUPN` whose operand is deeper than the stack: revm reports
-/// `StackOverflow` (its `dup` returns false for both underflow and overflow, and `dupn_enabled`
-/// maps every false to overflow), evm2 `StackUnderflow` (the label only: gas, output and state are
-/// equal). Its shape, all of which [`dupn_depth_label`] checks: the only difference of the case is
-/// `halt`, normalized `StackOverflow` on the reference's side and `StackUnderflow` on the engine's,
-/// both runs halted.
-pub const DUPN_DEPTH_LABEL: &str = "dupn_depth_label";
+/// The halt label of a failed DUP (`DUP1` to `DUP16` deeper than the stack, and `DUPN`): revm
+/// reports `StackOverflow` (its `dup` returns false for both underflow and overflow, and its DUP
+/// instructions map every false to overflow), evm2 `StackUnderflow` (the label only: gas, output
+/// and state are equal). Its shape, all of which [`dup_stack_label`] checks: the only difference of
+/// the case is `halt`, normalized `StackOverflow` on the reference's side and `StackUnderflow` on
+/// the engine's, both runs halted.
+pub const DUP_STACK_LABEL: &str = "dup_stack_label";
 
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 3] = [HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, DUPN_DEPTH_LABEL];
+const CLASSES: [&str; 3] = [HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, DUP_STACK_LABEL];
 
 /// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
 /// [`CLASSES`] and states its `why` and `signoff`. A class not enabled there is not accepted.
@@ -204,8 +204,8 @@ pub fn invalid_immediate_label(diffs: &[String], reference: &Value, candidate: &
 }
 
 /// Whether the differences `diffs` of one case, whose outcomes are `reference` and `candidate`
-/// (not normalized), are exactly the shape of [`DUPN_DEPTH_LABEL`].
-pub fn dupn_depth_label(diffs: &[String], reference: &Value, candidate: &Value) -> bool {
+/// (not normalized), are exactly the shape of [`DUP_STACK_LABEL`].
+pub fn dup_stack_label(diffs: &[String], reference: &Value, candidate: &Value) -> bool {
     halt_label_only(diffs, reference, candidate, ("StackOverflow", "StackUnderflow"))
 }
 
@@ -269,8 +269,8 @@ pub fn classify(
         {
             return Verdict::Class(INVALID_IMMEDIATE_LABEL);
         }
-        if enabled(DUPN_DEPTH_LABEL) && dupn_depth_label(&diffs, reference, candidate) {
-            return Verdict::Class(DUPN_DEPTH_LABEL);
+        if enabled(DUP_STACK_LABEL) && dup_stack_label(&diffs, reference, candidate) {
+            return Verdict::Class(DUP_STACK_LABEL);
         }
         return Verdict::Differ(diffs);
     }

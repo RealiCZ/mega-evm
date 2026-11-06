@@ -2,7 +2,7 @@
 //! unlisted difference, a mismatching value or frame and a stale entry all fail.
 
 use mega_evm2_diff::gate::{
-    DUPN_DEPTH_LABEL, HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, Known, Verdict, classify,
+    DUP_STACK_LABEL, HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, Known, Verdict, classify,
     compared_frames, known_classes, known_differences, known_replay_differences,
 };
 use serde_json::{Value, json};
@@ -177,7 +177,7 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             ("p6_exchange_invalid_immediate", "halt", label.0, label.1),
         ]
     );
-    assert_eq!(known_classes(), [DUPN_DEPTH_LABEL, INVALID_IMMEDIATE_LABEL, HALTED_FIRST_FRAME]);
+    assert_eq!(known_classes(), [DUP_STACK_LABEL, INVALID_IMMEDIATE_LABEL, HALTED_FIRST_FRAME]);
     let text = include_str!("../known-differences.toml");
     assert_eq!(text.matches(HALTED_FIRST_FRAME_ENTRY).count(), 2);
     // Five entries, three classes and two replay entries.
@@ -393,20 +393,20 @@ fn test_the_label_class_accepts_exactly_its_label() {
     );
 }
 
-// --- the class `dupn_depth_label`
+// --- the class `dup_stack_label`
 // -----------------------------------------------------------
 
 fn dupn() -> Vec<String> {
-    vec![DUPN_DEPTH_LABEL.into()]
+    vec![DUP_STACK_LABEL.into()]
 }
 
 #[test]
-fn test_the_dupn_class_accepts_exactly_its_label() {
+fn test_the_dup_class_accepts_exactly_its_label() {
     let (r, c) = (outcome("Base(StackOverflow)"), outcome("StackUnderflow"));
     let halt = || vec!["halt".to_string()];
     assert_eq!(
         classify(&[], &dupn(), "s", halt(), &r, &c, NO_FRAMES),
-        Verdict::Class(DUPN_DEPTH_LABEL)
+        Verdict::Class(DUP_STACK_LABEL)
     );
     // Off unless the file enables it.
     assert_eq!(classify(&[], NO_CLASS, "s", halt(), &r, &c, NO_FRAMES), Verdict::Differ(halt()));
