@@ -49,7 +49,7 @@ The oracle is `cargo test` over the engine crates and the harness with the sampl
 A mutant is caught when any unit test or gate turns red; a survivor is a scenario the gates lack, or code no input reaches.
 On a pull request only the changed engine lines are mutated, and a survivor or timeout that `diff/mutants/suppressions.toml` does not list fails the job.
 The daily run mutates the full engine in eight shards and reports without failing.
-Locally, `bash scripts/mutants.sh smoke` runs a fixed set of two engine files and writes `mutants.out/outcomes.json` under `$OUT`; `scripts/mutants.sh pr <base>`, `shard <k>/<n>` and `full` are the modes CI uses.
+Locally, `bash scripts/mutants.sh smoke` runs a fixed set (the mutants of `mega-evm2/src/satin_ext.rs`) and writes `mutants.out/outcomes.json` under `$OUT`; `scripts/mutants.sh pr <base>`, `shard <k>/<n>` and `full` are the modes CI uses.
 
 ## The gates and their accepted differences
 

@@ -4,7 +4,7 @@
 # harness, run with the sample gate's inputs (synthetic scenarios, replay, block execution).
 #
 # Usage: mutants.sh <mode>
-#   smoke           a small fixed set (two engine files); runs locally in minutes
+#   smoke           a small fixed set (one engine file, satin_ext.rs); runs locally in about ten minutes
 #   pr <base-ref>   only the lines changed against <base-ref> under next/mega-evm2 and next/op-evm2
 #   shard <k>/<n>   shard k of n (0-based) of the full set
 #   full            the full set
@@ -13,6 +13,8 @@
 #   CARGO_TARGET_DIR  cargo target directory (default: next/target)
 #   JOBS              parallel mutants (default: half the CPUs)
 #   SUPPRESS          suppressions file (default: next/diff/mutants/suppressions.toml)
+#
+# The warm build goes to next/target (ignored by git); the oracle inputs, scratch and OUT use CARGO_TARGET_DIR.
 #
 # Exit status: 0 when the run completed, whatever the outcomes (cargo-mutants exits 2 for
 # missed and 3 for timed-out mutants); scoring them is mutation_gate.py's job. Any other
@@ -79,7 +81,7 @@ export "${env_main[@]}" "${GATE_ENV[@]}"
 selection=()
 case "$mode" in
   smoke)
-    selection=(-f 'mega-evm2/src/satin_ext.rs' -f 'mega-evm2/src/intercept.rs')
+    selection=(-f 'mega-evm2/src/satin_ext.rs')
     ;;
   pr)
     base=${2:?usage: mutants.sh pr <base-ref>}
@@ -110,9 +112,17 @@ mkdir -p "$scratch/tmp"
 ln -s "$(cd "$next/../../evm2" && pwd -P)" "$scratch/evm2"
 export TMPDIR=$scratch/tmp
 
+# Each mutant builds in its own copy of next/ with its own `target/`. A shared
+# CARGO_TARGET_DIR would make the parallel builds overwrite one another's test binaries and
+# the outcomes would depend on timing, so cargo-mutants runs without it. `copy_target` seeds
+# every copy from next/target, which is warmed here with the unmutated test binaries.
+echo "+ cargo test --no-run (warming next/target)"
+env -u CARGO_TARGET_DIR cargo test --no-run --release --locked \
+  -p mega-evm2 -p op-evm2 -p mega-evm2-scenarios -p mega-evm2-diff
+
 rm -rf "$OUT/mutants.out"
 rc=0
-cargo mutants \
+env -u CARGO_TARGET_DIR cargo mutants \
   --package mega-evm2 --package op-evm2 \
   --jobs "$JOBS" \
   --output "$OUT" \
