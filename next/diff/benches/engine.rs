@@ -5,9 +5,10 @@
 //!
 //! Every workload is built outside the measured closure (`iter_batched`: a new database, EVM and
 //! transaction per iteration, since a commit changes the state) and its input is fixed below.
-//! Each workload is run once before measuring and must succeed, so a bench cannot measure a
-//! halt by accident. All scenario workloads run as legacy transactions (a deposit where named)
-//! from the shared sender in the synthetic block of `driver::evm`.
+//! Each workload is run once before measuring and checked against its expected status, so a
+//! success workload cannot measure a halt by accident. All scenario workloads run as legacy
+//! transactions (a deposit where named) in the synthetic block of `driver::evm`; the protocol
+//! workload uses the reserved caller and the others use the shared sender.
 //!
 //! | name          | what runs                                                                       |
 //! | ------------- | ------------------------------------------------------------------------------- |
@@ -19,6 +20,8 @@
 //! | `precompile`  | `NUMBER` (a volatile read), then a `CALL` of BLAKE2F with 40,000 rounds and a   |
 //! |               | 3M gas forward, under a 25,000 detention cap (priced and held); 10M gas         |
 //! | `deposit`     | an OP deposit (mint 0) calling a contract that writes slot 1; 1M gas            |
+//! | `failed_deposit` | a deposit that writes a slot then halts, retaining its reads after rollback |
+//! | `protocol_caller` | the reserved caller writing storage under zero resource limits |
 //! | `block`       | recorded block 26400004 of corpus `p9` (24 transactions, ten of them from the   |
 //! |               | system address, which the executor promotes to deposits) through the block      |
 //! |               | executor: pre-block changes, every transaction, commit                          |
@@ -152,14 +155,14 @@ fn deposit() -> Scenario {
     s
 }
 
-/// A workload runs once outside the measurement and must have succeeded.
-fn check(s: &Scenario) {
+/// Checks the workload once outside the measurement, including the deliberately failed deposit.
+fn check(s: &Scenario, expected_status: &str) {
     let out = driver::run(s, false);
-    assert_eq!(out["status"], "success", "{} did not succeed: {out}", s.name);
+    assert_eq!(out["status"], expected_status, "{} unexpected outcome: {out}", s.name);
 }
 
-fn bench_scenario(c: &mut Criterion, name: &str, s: Scenario) {
-    check(&s);
+fn bench_scenario(c: &mut Criterion, name: &str, s: Scenario, expected_status: &str) {
+    check(&s, expected_status);
     for inspected in [false, true] {
         let id = format!("{name}/{}", if inspected { "inspected" } else { "plain" });
         c.bench_function(&id, |b| {
@@ -255,12 +258,23 @@ fn bench_block(c: &mut Criterion) {
 }
 
 fn engine(c: &mut Criterion) {
-    bench_scenario(c, "call_loop", call_loop());
-    bench_scenario(c, "detained", detained());
-    bench_scenario(c, "sstore", sstore());
-    bench_scenario(c, "create", create());
-    bench_scenario(c, "precompile", precompile());
-    bench_scenario(c, "deposit", deposit());
+    bench_scenario(c, "call_loop", call_loop(), "success");
+    bench_scenario(c, "detained", detained(), "success");
+    bench_scenario(c, "sstore", sstore(), "success");
+    bench_scenario(c, "create", create(), "success");
+    bench_scenario(c, "precompile", precompile(), "success");
+    bench_scenario(c, "deposit", deposit(), "success");
+    let mut failed = deposit();
+    // Replace STOP with INVALID so the slot written before the halt is returned as a read.
+    let code = &mut failed.accounts.iter_mut().find(|a| a.address == A).unwrap().code;
+    *code.last_mut().unwrap() = 0xfe;
+    bench_scenario(c, "failed_deposit", failed, "halt");
+    bench_scenario(
+        c,
+        "protocol_caller",
+        scenarios::by_name("edge_protocol_caller_legacy").unwrap(),
+        "success",
+    );
     bench_block(c);
 }
 

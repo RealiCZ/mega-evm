@@ -11,7 +11,7 @@ use alloy_consensus::{Transaction, TxEip1559, TxEip2930, TxLegacy};
 use alloy_eips::eip2930::AccessList;
 use alloy_primitives::{Address, B256, TxKind, U256, address, b256};
 use evm2::{
-    Evm, EvmTypesHost, TxResult, TxResultExt,
+    Evm, EvmFeatures, EvmTypesHost, TxResult, TxResultExt,
     env::TxEnvExt,
     ethereum::{
         self, InitialFrame, PreparedTx, eip1559, eip2930, execute_initial_frame, finalize_gas,
@@ -223,7 +223,7 @@ pub(crate) fn classify(
 
 /// Satin `validate_account_nonce_and_code` on the live system address, its code loaded: EIP-3607
 /// first, which refuses a sender with code unless the code is an EIP-7702 delegation, then the
-/// nonce. A read the database cannot serve fails the transaction.
+/// nonce. Both checks follow their configuration switches. A database error fails execution.
 fn check_system_sender(
     host: &mut Evm<'_, MegaTypes>,
     caller: Address,
@@ -240,14 +240,19 @@ fn check_system_sender(
         }
         return Ok(());
     }
-    if !info.is_empty_code_hash() && !host.state_mut().code_untracked(&caller)?.is_eip7702() {
+    if host.feature(EvmFeatures::EIP3607) &&
+        !info.is_empty_code_hash() &&
+        !host.state_mut().code_untracked(&caller)?.is_eip7702()
+    {
         return Err(HandlerError::RejectCallerWithCode);
     }
-    if nonce == u64::MAX && info.nonce == u64::MAX {
-        return Err(HandlerError::NonceOverflow);
-    }
-    if info.nonce != nonce {
-        return Err(HandlerError::InvalidNonce { expected: info.nonce, got: nonce });
+    if host.feature(EvmFeatures::NONCE_CHECK) {
+        if nonce == u64::MAX && info.nonce == u64::MAX {
+            return Err(HandlerError::NonceOverflow);
+        }
+        if info.nonce != nonce {
+            return Err(HandlerError::InvalidNonce { expected: info.nonce, got: nonce });
+        }
     }
     Ok(())
 }
@@ -537,6 +542,11 @@ fn prepare_deposit(
             let created =
                 req.host.state_mut().account_info_untracked(&tx.from)?.is_none_or(|i| i.is_empty());
             req.host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, false, true);
+            if tx.source_hash == MEGA_SYSTEM_TRANSACTION_SOURCE_HASH &&
+                !crate::off("protocol_origin")
+            {
+                req.host.ext_mut().set_system_originated();
+            }
             req.host.ext_mut().frames.clear();
             if created && !crate::off("refused_deposit_caller") {
                 req.host.ext_mut().tx_growth += 1;
@@ -551,13 +561,15 @@ fn prepare_deposit_inner(
     tx: &TxDeposit,
     system: bool,
 ) -> HandlerResult<PreparedDeposit> {
-    let info = host.state_mut().account_info_untracked(&tx.from).ok().flatten();
+    let info = host.state_mut().account_info_untracked(&tx.from)?;
     let created = info.as_ref().is_none_or(|i| i.is_empty());
     // A deposit whose body is over the data-size limit is a failed deposit (Satin), refused
     // before anything of it runs: its caller is not validated, its first frame's start is not
     // even predicted (no read of its recipient), and no start settles.
     host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, false, true);
-    if system {
+    if system ||
+        (tx.source_hash == MEGA_SYSTEM_TRANSACTION_SOURCE_HASH && !crate::off("protocol_origin"))
+    {
         host.ext_mut().set_system_originated();
     }
     let body_refused = admits_body(host, 0).is_err();
@@ -779,7 +791,10 @@ fn failed_deposit(
     if host.ext().settlements.iter().all(|s| s.depth != 0) && !host.ext().frames.is_empty() {
         settle_first_frame(host.ext_mut(), false);
     }
-    host.state_mut().clear_transaction_state();
+    // Undo the deposit's writes, including its initial nonce bump and mint, without discarding
+    // any loaded accounts or slots. They belong to the failed deposit's returned witness state.
+    let features = host.version().features;
+    host.state_mut().rollback(evm2::evm::StateCheckpoint::new(0, 0), features);
     {
         let mut caller = host.state_mut().account(&tx.from)?;
         caller.bump_nonce();

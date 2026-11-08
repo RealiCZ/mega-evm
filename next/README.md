@@ -37,6 +37,17 @@ cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads
 Every gate script refuses to run when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set, so an inherited selection cannot narrow an official run; a direct `cargo test -p mega-evm2-diff` with such a variable prints `PARTIAL GATE` lines and is for debugging.
 Each script extracts its inputs afresh into its own directory under `<target>/mega-evm2-diff/`, so different scripts can run at the same time; do not run one script twice at once on the same cargo target.
 
+## State and witness exports
+
+`BlockExecutor::pre_block_states` retains each complete pre-block state in commit order, including read-only and absent-account entries.
+The registry due-change read is a separate state before its optional application call; the L1 block account and its five slots are the last state.
+A witness collector must consume these states and each transaction's `Executed::pending` before reducing them to changed entries.
+A failed deposit keeps its loaded accounts and slots in that returned state while undoing every write except its sender's nonce bump and mint.
+
+With feature `witness`, `BlockExecutor::bucket_reads` exports the union of valid SALT capacity lookups made by this block execution, including candidates that were dropped or aborted after an earlier successful lookup.
+The set starts empty for each executor; committing a transaction executed elsewhere adds no lookup to it.
+The per-transaction `Lite::bucket_reads` remains available for integrations that collect their own union.
+
 ## Coverage and mutation testing in CI
 
 The `coverage` job of `.github/workflows/next.yml` runs `scripts/coverage.sh`: branch coverage (`cargo llvm-cov`) of `mega-evm2` and `op-evm2` under their own tests and the sample gate's test targets, which run every scenario, fuzz seed and recorded block of the sample through the engine.
@@ -77,7 +88,7 @@ An input that finds a difference belongs in a scenario of the gates once the dif
 ## Switches and negative controls
 
 Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`; `MEGA_EVM2_DISABLE=<name>,…` turns it off, with feature `compare` only, and without that feature `off` is a constant `false`.
-A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root, a keyless deployment with EIP-3607 disabled) has no switch; an engine test in `mega-evm2/tests` proves it instead.
+A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root, a keyless deployment or system sender with validation switches disabled, or the contents of returned witness states) has no switch; an engine test in `mega-evm2/tests` proves it instead.
 The harness's fixture choices that make the engine's inputs match the reference's are switches too, `off("<name>")` in `diff`.
 
 `diff/negative-controls.toml` names, for each switch, one gate case that must differ when the switch is off, and in `why` what the fix does.

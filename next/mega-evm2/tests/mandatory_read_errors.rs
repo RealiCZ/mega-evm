@@ -54,6 +54,7 @@ enum Fail {
     Storage,
     L1Account,
     L1Storage,
+    SenderRead(usize),
 }
 
 /// A chain whose registry names [`SYSTEM`], over a backend that fails the reads `fail` names and
@@ -62,6 +63,7 @@ enum Fail {
 struct RegistryBackend {
     inner: InMemoryDB,
     fail: Fail,
+    sender_reads: usize,
 }
 
 impl RegistryBackend {
@@ -92,7 +94,7 @@ impl RegistryBackend {
         inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::from(0x77));
         inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::from(1));
         inner.insert_account_info(&L1_BLOCK_CONTRACT, AccountInfo::default().with_nonce(1));
-        Self { inner, fail }
+        Self { inner, fail, sender_reads: 0 }
     }
 
     fn unavailable() -> DatabaseError {
@@ -104,6 +106,12 @@ impl Database for RegistryBackend {
     type Error = DatabaseError;
 
     fn get_account(&mut self, address: &Address) -> Result<Option<AccountInfo>, Self::Error> {
+        if *address == SENDER {
+            self.sender_reads += 1;
+            if matches!(self.fail, Fail::SenderRead(n) if n == self.sender_reads) {
+                return Err(Self::unavailable());
+            }
+        }
         if matches!(self.fail, Fail::Account) && *address == SEQUENCER_REGISTRY ||
             matches!(self.fail, Fail::L1Account) && *address == L1_BLOCK_CONTRACT
         {
@@ -324,4 +332,26 @@ fn test_pre_block_step_fails_on_an_unreadable_l1_block() {
         let error = block.apply_pre_execution_changes().expect_err("an unreadable L1 block info");
         assert!(error.contains("Unavailable"), "{fail:?}: {error}");
     }
+}
+
+/// A transient failure of the deposit sender read cannot become an absent caller and a
+/// fabricated failed deposit, even when a subsequent database read would succeed.
+#[test]
+fn test_deposit_sender_read_error_is_internal() {
+    let (_, tx) = every_envelope().pop().unwrap();
+    let mut evm = satin_evm(Fail::SenderRead(1));
+    let error =
+        evm.transact(&tx).err().unwrap_or_else(|| panic!("the sender read must fail execution"));
+    assert_unavailable("deposit sender", &error);
+}
+
+#[test]
+fn test_block_deposit_sender_read_error_has_no_outcome() {
+    let (_, tx) = every_envelope().pop().unwrap();
+    // The accepted overlay caches a successful first read, so fail the block's sender read.
+    let mut block = BlockExecutor::new(satin_evm(Fail::SenderRead(1)), B256::ZERO, None);
+    let error = block.run_transaction(&tx, &[]).expect_err("no deposit outcome");
+    assert!(error.contains("Unavailable"), "{error}");
+    assert!(block.receipts.is_empty());
+    assert_eq!(block.limiter.block_gas_used, 0);
 }
