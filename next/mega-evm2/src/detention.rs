@@ -276,7 +276,10 @@ pub const fn wrap_table(mut c: OpcodeConfig<MegaTypes>) -> OpcodeConfig<MegaType
     c.set_instruction::<Volatile<instructions::gaslimit<MegaTypes>, { crate::satin_ext::access::GAS_LIMIT }>>(op::GASLIMIT, c.static_gas(op::GASLIMIT));
     c.set_instruction::<Volatile<instructions::basefee<MegaTypes>, { crate::satin_ext::access::BASE_FEE }>>(op::BASEFEE, c.static_gas(op::BASEFEE));
     c.set_instruction::<Volatile<instructions::blobbasefee<MegaTypes>, { crate::satin_ext::access::BLOB_BASE_FEE }>>(op::BLOBBASEFEE, c.static_gas(op::BLOBBASEFEE));
-    c.set_instruction::<Volatile<instructions::slotnum<MegaTypes>, { crate::satin_ext::access::SLOT_NUM }>>(op::SLOTNUM, c.static_gas(op::SLOTNUM));
+    c.set_instruction::<Volatile<crate::mega_slotnum, { crate::satin_ext::access::SLOT_NUM }>>(
+        op::SLOTNUM,
+        c.static_gas(op::SLOTNUM),
+    );
     c.set_instruction::<Volatile<instructions::blockhash<MegaTypes>, { crate::satin_ext::access::BLOCK_HASH }>>(op::BLOCKHASH, c.static_gas(op::BLOCKHASH));
     c.set_instruction::<Volatile<instructions::timestamp<MegaTypes>, { crate::satin_ext::access::TIMESTAMP }>>(op::TIMESTAMP, c.static_gas(op::TIMESTAMP));
     c.set_instruction::<Volatile<instructions::block_number<MegaTypes>, { crate::satin_ext::access::BLOCK_NUMBER }>>(op::NUMBER, c.static_gas(op::NUMBER));
@@ -553,8 +556,10 @@ pub fn precompile_price_of(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes
     let mut probe = GasTracker::new_with_execution_gas_and_reservoir(0, 0);
     let _ = (p.run())(evm, msg, &mut probe);
     let first = probe.failed_charge().map_or(0, |(_, cost)| cost);
-    // evm2's ModExp charges its 500 minimum, then the rest (`modexp.rs:240`); every
-    // other entry charges once. A second probe funded with the first charge reads the rest.
+    // evm2's ModExp charges its 500 minimum, then the rest of its formula price, and only then
+    // checks EIP-7823's bound (`precompiles/modexp.rs`, `run_inner`), so an over-bound input is
+    // priced by its formula too; every other entry charges once. A second probe funded with the
+    // first charge reads the rest.
     if address == alloy_primitives::Address::with_last_byte(5) &&
         first > 0 &&
         !crate::off("modexp_two_step")

@@ -56,9 +56,6 @@ fn block() -> BlockExecutor<'static> {
         precompiles(),
     );
     let ext = evm.ext_mut();
-    ext.cfg.limits = [13_107_200, 500_000, 1_000];
-    ext.cfg.cap = 20_000_000;
-    ext.cfg.oracle_cap = 20_000_000;
     ext.cfg.oracle.insert(U256::from(1), U256::from(ANSWER));
     BlockExecutor::new(evm, B256::ZERO, Some(B256::repeat_byte(0x11)))
 }

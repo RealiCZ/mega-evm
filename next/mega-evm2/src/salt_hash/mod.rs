@@ -1,10 +1,9 @@
 //! The production SALT bucket hasher, copied from Satin
 //! (`crates/mega-evm/src/external/hasher/` @ 5e3f30ad: `AHashBucketHasher`, the vendored AHash
-//! v0.8.12 fallback with the fixed seeds; see `NOTICE.md`). The engine's default
-//! (`ledger::bucket_id`) is the FNV-1a test hasher Satin's `TestExternalEnvs` uses, which the
-//! differential scenarios name buckets with; the measured build uses this one, as `mega-evme`'s
-//! replay does (`EvmeExternalEnvs = TestExternalEnvs<Infallible, AHashBucketHasher>`). With
-//! every bucket at the minimum the choice changes no outcome, only which bucket ids a read names.
+//! v0.8.12 fallback with the fixed seeds; see `NOTICE.md`). It is the engine's mapping
+//! (`ledger::bucket_id`): the bucket an account or a slot lands in is SALT's own definition. The
+//! FNV-1a test hasher of Satin's `TestExternalEnvs`, which the differential scenarios name buckets
+//! with, replaces it only under feature `salt-test-hasher`.
 
 mod convert;
 mod fallback;

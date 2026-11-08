@@ -11,7 +11,9 @@
 //! Every other emitted semantic field is compared; missing fields and unknown kinds fail closed.
 //! Accepted differences are listed by case (`[[difference]]`, `[[replay_difference]]`) or, for a
 //! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
-//! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUP_STACK_LABEL`]).
+//! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUP_STACK_LABEL`],
+//! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`SLOTNUM_ZERO`]).
+use mega_evm2::ReferenceRule;
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -149,8 +151,49 @@ pub const INVALID_IMMEDIATE_LABEL: &str = "invalid_immediate_label";
 /// the engine's, both runs halted.
 pub const DUP_STACK_LABEL: &str = "dup_stack_label";
 
+/// The read set of an EIP-7702 transaction whose authorization list ran out of gas part-way: the
+/// engine simulates every list before applying it, whatever its length, so it loads every
+/// authority whose entry passes the chain-id, nonce and signature gates; the reference simulates
+/// only a list that could cross a limit, so it loads only the authorities its application reached
+/// (the other implementation has not made the decided change yet). A read set does not say which
+/// account is an authority, so the shape is checked by running the case again on the engine
+/// without the simulation of a list too short to cross a limit, as the reference runs it
+/// ([`ReferenceRule::ShortListUnsimulated`]): the case is of the class when that run, plain and
+/// inspected, has no difference from the reference at all ([`scenario_verdict`]).
+pub const AUTH_PREFLIGHT_READS: &str = "auth_preflight_reads";
+
+/// ModExp charges its 500 minimum, then its formula price, and only then checks EIP-7823's bound
+/// (evm2 upstream's order, the specification's); the reference checks the bound first, so an
+/// over-bound input costs it the 500 minimum and is priced at it (the other implementation has not
+/// made the decided change yet). The difference shows as a halt label (`PrecompileOOG` against
+/// `PrecompileError` when the gas lies between the two prices), and under gas detention as a call
+/// decided differently from its price, the compute stop on one side where the other runs the call
+/// and burns its forward, with whatever the program then does with the gas it has. So the shape is
+/// checked by running the case again on the engine with the reference's order
+/// ([`ReferenceRule::ModexpBoundFirst`]): the case is of the class when that run, plain and
+/// inspected, has no difference from the reference at all ([`scenario_verdict`]).
+pub const MODEXP_FORMULA_PRICE: &str = "modexp_formula_price";
+
+/// `SLOTNUM` pushes zero in the engine, the reference's slot number in the reference (the other
+/// implementation has not made the decided change yet). What the pushed value changes is the
+/// program's to decide, so the shape is checked by running the case again on the engine with
+/// `SLOTNUM` pushing the block environment's slot number, as the reference does
+/// ([`ReferenceRule::SlotNumber`]): the case is of the class when that run, plain and inspected,
+/// has no difference from the reference at all ([`scenario_verdict`]).
+///
+/// The engine replay gate checks none of the three classes run again ([`RERUN_CLASSES`]): it runs
+/// no case again, and a case of one there differs.
+pub const SLOTNUM_ZERO: &str = "slotnum_zero";
+
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 3] = [HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, DUP_STACK_LABEL];
+const CLASSES: [&str; 6] = [
+    HALTED_FIRST_FRAME,
+    INVALID_IMMEDIATE_LABEL,
+    DUP_STACK_LABEL,
+    AUTH_PREFLIGHT_READS,
+    MODEXP_FORMULA_PRICE,
+    SLOTNUM_ZERO,
+];
 
 /// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
 /// [`CLASSES`] and states its `why` and `signoff`. A class not enabled there is not accepted.
@@ -344,8 +387,19 @@ pub fn scenario_differences(reference: &Value, plain: &Value, inspected: &Value)
     diffs
 }
 
+/// The classes checked by running the case again on the engine under the reference's rule, each
+/// with that rule.
+pub const RERUN_CLASSES: [(&str, ReferenceRule); 3] = [
+    (SLOTNUM_ZERO, ReferenceRule::SlotNumber),
+    (AUTH_PREFLIGHT_READS, ReferenceRule::ShortListUnsimulated),
+    (MODEXP_FORMULA_PRICE, ReferenceRule::ModexpBoundFirst),
+];
+
 /// The verdict of the synthetic gate on scenario `name`: its [`scenario_differences`],
-/// [`classify`]d against the accepted differences `known`.
+/// [`classify`]d against the accepted differences `known`. A case without an entry that no class
+/// of [`classify`] takes is of a class of [`RERUN_CLASSES`], when that class is accepted, if
+/// `under(rule)` — the case run again on the engine, plain and inspected, under that class's
+/// reference rule — has no difference from the reference at all.
 pub fn scenario_verdict(
     known: &[Known],
     classes: &[String],
@@ -353,9 +407,10 @@ pub fn scenario_verdict(
     reference: &Value,
     plain: &Value,
     inspected: &Value,
+    under: impl Fn(ReferenceRule) -> (Value, Value),
 ) -> Verdict {
     let diffs = scenario_differences(reference, plain, inspected);
-    classify(
+    let verdict = classify(
         known,
         classes,
         name,
@@ -363,7 +418,20 @@ pub fn scenario_verdict(
         reference,
         plain,
         (&reference["frames"], &inspected["frames"]),
-    )
+    );
+    let listed = known.iter().any(|k| k.scenario == name);
+    if !matches!(verdict, Verdict::Differ(_)) || listed {
+        return verdict;
+    }
+    for (class, rule) in RERUN_CLASSES {
+        if classes.iter().any(|c| c == class) {
+            let (plain, inspected) = under(rule);
+            if scenario_differences(reference, &plain, &inspected).is_empty() {
+                return Verdict::Class(class);
+            }
+        }
+    }
+    verdict
 }
 
 /// The counts of a gate's summary line, when `MEGA_EVM2_EXPECT` names them (the summary line

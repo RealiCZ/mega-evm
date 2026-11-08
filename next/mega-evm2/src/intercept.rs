@@ -142,8 +142,8 @@ pub fn hint_before(
     let ext = evm.ext_mut();
     if !ext.exempt {
         let total: i64 = ext.tx_net[0] + ext.frames.iter().map(|f| f.net[0]).sum::<i64>();
-        if crate::over(total + bytes as i64, ext.cfg.limits[0]) {
-            let limit = ext.cfg.limits[0];
+        if crate::over(total + bytes as i64, ext.limits.tx[0]) {
+            let limit = ext.limits.tx[0];
             ext.stops += 1;
             if m.depth == 0 {
                 ext.top_stop = Some((0, limit));

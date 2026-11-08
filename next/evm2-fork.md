@@ -7,7 +7,8 @@ The earlier series, branch `cz/feat/thin-fork` at `91576d1e`, is left as it was,
 
 A patch exists only when the engine needs something evm2 cannot give it from outside: data from inside evm2's own flow, or a hook point.
 Every patch keeps stock behavior as its default, and each says what upstream change would let it go.
-Two patches, `b9fa9909` and `0f50973c`, are stock fixes instead: each moves a check to revm's order, which evm2 follows, and is written to be proposed upstream as it is.
+One patch, `b9fa9909`, is a stock fix instead: it moves a check to revm's order, which evm2 follows, and is written to be proposed upstream as it is.
+ModExp keeps upstream's order (its 500 minimum, its formula price, then EIP-7823's bound, upstream [#874](https://github.com/alloy-rs/evm2/pull/874)): the Satin specification follows upstream there, so the series carries no ModExp patch.
 The engine also uses two upstream changes that are already in the base: `call_with` / `create_with` ([#887](https://github.com/alloy-rs/evm2/pull/887)) and reservoir-funded state gas in `system_call` totals ([#842](https://github.com/alloy-rs/evm2/pull/842)).
 
 | Patch                                                                               | Adds                                                             | Size     | Upstream                                                                                                                  | Drop when upstream                                                                         |
@@ -22,16 +23,15 @@ The engine also uses two upstream changes that are already in the base: `call_wi
 | `28301ff3` make the EIP-8037 total transaction gas cap configurable                 | `Version::tx_total_gas_cap`                                      | +51/−2   | PR [#1023](https://github.com/alloy-rs/evm2/pull/1023), open                                                              | lets a chain set or disable the total cap, default unchanged                               |
 | `f6d21862` let a type family refuse an instruction's account load                   | `EvmTypesHost::before_account_load`, `AccountLoadSite`           | +395/−5  | none yet                                                                                                                  | lets a type family stop an instruction at its own account load                             |
 | `b9fa9909` pop CREATE2's salt after the init-code and memory charges                | none (instruction order)                                         | +33/−1   | not yet proposed                                                                                                          | pops CREATE2's salt after the init-code charge and the memory expansion                    |
-| `0f50973c` check ModExp's EIP-7823 bound before its formula price                   | none (precompile order)                                          | +32/−22  | not yet proposed                                                                                                          | checks the EIP-7823 bound before the formula price                                         |
-| `8751da2b` let a type family act on the transaction before its first frame          | `TxHandlerHooks::before_initial_frame`                           | +375/−45 | not yet proposed                                                                                                          | has a handler hook before the first frame that can charge the transaction or settle it     |
+| `cee7bfb4` let a type family act on the transaction before its first frame          | `TxHandlerHooks::before_initial_frame`                           | +375/−45 | not yet proposed                                                                                                          | has a handler hook before the first frame that can charge the transaction or settle it     |
 
-Size is the commit's own stat against its parent; most of the insertions of `f37259b6`, `9df29b6a`, `f6d21862`, `b9fa9909` and `8751da2b` are tests.
-Upstream order, smallest and least contested first: `0f373350`, `28301ff3` (both filed), `b9fa9909`, `0f50973c`, `8751da2b`, `94011dec`, `f623a776`, `41525289` with the halt record of `f37259b6`, `9df29b6a`, the rest of `f37259b6`, `f6d21862`, and `70bbeb67` last, because it runs on every message.
+Size is the commit's own stat against its parent; most of the insertions of `f37259b6`, `9df29b6a`, `f6d21862`, `b9fa9909` and `cee7bfb4` are tests.
+Upstream order, smallest and least contested first: `0f373350`, `28301ff3` (both filed), `b9fa9909`, `cee7bfb4`, `94011dec`, `f623a776`, `41525289` with the halt record of `f37259b6`, `9df29b6a`, the rest of `f37259b6`, `f6d21862`, and `70bbeb67` last, because it runs on every message.
 
 ## The patches
 
 Each engine rule a patch serves sits behind a named switch with a negative control in `diff/negative-controls.toml` (a harness switch for `94011dec`); turning the switch off makes the control's case differ from the reference.
-`28301ff3`'s setting is a version constant, proved by tests instead; `b9fa9909` and `0f50973c` change evm2's own instruction and precompile, which the `edge_create2_*` and `edge_modexp_*` scenarios show; `8751da2b` carries the start-record charge, whose switches (`start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`) have their controls.
+`28301ff3`'s setting is a version constant, proved by tests instead; `b9fa9909` changes evm2's own instruction, which the `edge_create2_*` scenarios show; `cee7bfb4` carries the start-record charge, whose switches (`start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`) have their controls.
 
 ### `70bbeb67` static message hooks
 
@@ -161,18 +161,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   evm2 follows revm's control flow and gas accounting, so the change can be proposed as it is.
 - **Drop** when upstream pops CREATE2's salt after the init-code charge and the memory expansion.
 
-### `0f50973c` ModExp's EIP-7823 bound order
-
-- **API.** None: `run_inner` charges the minimum price, reads the three lengths, refuses an Osaka input over EIP-7823's 1,024-byte bound with `ModexpEip7823LimitSize`, and only then prices the input by its formula, as revm-precompile's `run_inner` does (the same order in revm-precompile 43.0.3, which `next/` locks, and in the reference's revm `4c8f0d43`: minimum gas, the length casts, the EIP-7823 bound, the formula price, the zero-length case).
-  An over-bound input costs the minimum price whatever its formula, and gas below the minimum is still out of gas (`oversized_lengths_are_rejected_after_the_minimum_price`, which replaces upstream's test of the old order).
-- **Why.** Satin decides a precompile call under detention from its price (the engine's `precompile_price_of` probes the failed charges): with the formula first, an over-bound input was priced at the cost of a computation that is never made, so a detained call the reference runs and burns was stopped, and one the reference stops ran.
-  Without detention only the error of an over-bound input whose gas lies between the minimum and the formula price changes, from out of gas to the EIP-7823 error; the call's gas is burned either way.
-  revm also refuses a base or modulus length that does not fit a `usize` with the EIP-7823 error on every fork; evm2 charges it out of gas before Osaka (the same gas), which this patch leaves.
-  No switch: the order is evm2's own.
-- **Upstream.** Not yet proposed; written to be proposed as it is.
-- **Drop** when upstream checks the EIP-7823 bound before the formula price.
-
-### `8751da2b` the first-frame hook
+### `cee7bfb4` the first-frame hook
 
 - **API.** `TxHandlerHooks::before_initial_frame(host, envelope, tx_gas) -> HandlerResult<Option<MessageResult<T>>>` runs in every standard `execute_prepared` (legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702) after the pre-execution changes and the transaction environment, immediately before `prepare_initial_frame`, on the transaction-level gas tracker; EIP-7702 runs it after its authorizations are applied, and not when their charges ran out of gas (that transaction settles as a halted first frame first).
   A family may charge `tx_gas` (the charge is the transaction's, kept whatever the first frame's execution does; its spill is unwound by a reservoir the first frame returns), or return a result that `settle_transaction` settles without a frame (an EIP-7702 transaction then keeps none of its delegations).
@@ -187,6 +176,8 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 
 ## Dropped from the earlier series
 
+- `0f50973c`, which checked ModExp's EIP-7823 bound before its formula price (revm's order): the Satin specification follows upstream's order, the formula price charged before the bound, so an over-bound input is priced, and decided under gas detention, by its formula ([#874](https://github.com/alloy-rs/evm2/pull/874)).
+  The engine's two-step price probe (`precompile_price_of`) reads the minimum, then the rest of the formula price, for such an input too; the `edge_modexp_*` scenarios show the order.
 - The rebase of open upstream PR [#523](https://github.com/alloy-rs/evm2/pull/523) (native precompile calls): the engine answers `MegaLimitControl` and `MegaAccessControl` from `MessageHooks::before`, which runs before dispatch.
 - Input-only precompile gas quotes: the engine prices the fixed-formula entries itself (`precompile_price`) and probes the others (`precompile_price_of`).
 - Formatting and call-site glue: folded into the commits it repaired.

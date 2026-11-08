@@ -59,10 +59,16 @@ A fix on the reference's side is a change to the Satin implementation itself; un
 A difference fails a gate unless `diff/known-differences.toml` lists it: by scenario for the synthetic gate, and by set, block, transaction index and hash for the engine replay gate.
 A listed entry that differs otherwise, or no longer differs, fails too; the summaries count the accepted ones as `known=`.
 Each entry states its reason and whether the owner has signed it off.
-Three classes of differences are accepted by their shape instead of case by case (`[[class]]` tables), because generated and probed inputs reach them under any name.
+Six classes of differences are accepted by their shape instead of case by case (`[[class]]` tables), because generated and probed inputs reach them under any name.
 `halted_first_frame` (`gate::halted_first_frame`) is evm2 #871's halted first frame: a case without an entry of its own whose only difference is that the reference recorded no frame and the engine one halted level-0 frame, of a transaction that ran out of gas or is a failed deposit.
 `invalid_immediate_label` (`gate::invalid_immediate_label`) is the halt label of DUPN, SWAPN and EXCHANGE with an immediate EIP-8024 rejects: a case whose only difference is `halt`, `OpcodeNotFound` against `InvalidImmediateEncoding`.
 `dup_stack_label` (`gate::dup_stack_label`) is the halt label of a failed DUP (`DUP1` to `DUP16` or `DUPN` deeper than the stack): a case whose only difference is `halt`, `StackOverflow` against `StackUnderflow`.
+Three more are the differences of three changes the owner decided on 2026-11-08 for both implementations, which the engine has made and the reference has not yet; each goes once the reference makes its change.
+What such a change makes differ is the program's to decide, so each is checked the same way (`gate::scenario_verdict`): the case is of the class only when the engine, run again under the reference's rule (`Lite::reference_rule`, feature `compare` only), has no difference from the reference at all:
+`auth_preflight_reads` (`SATIN-AUTH-005`): every EIP-7702 list is simulated whatever its length, so a list that runs out of gas before the first frame has loaded more authorities; rerun without the simulation of a list too short to cross a limit;
+`modexp_formula_price` (`SATIN-PCMP-007`, `SATIN-DET-023`): ModExp charges its formula price before EIP-7823's bound, so an over-bound input with gas between the 500 minimum and the formula price is labelled `PrecompileOOG` against `PrecompileError`, and under gas detention it is priced by its formula against the reference's 500; rerun with the bound checked first;
+`slotnum_zero` (`SATIN-BASE-005`): `SLOTNUM` pushes zero; rerun with `SLOTNUM` pushing the block environment's slot number.
+The engine replay gate runs no rerun, so a case of these classes there differs.
 Such a case is accepted and counted as `class=`; any other field that differs, or any other shape, fails it.
 The `class=` counts are pinned like the others: `MAIN_EXPECT`, `SAMPLE_FUZZ_CLASS` and `FULL_FUZZ_CLASS` in `diff/scripts/common.sh`, and `count_expected.py` for the replay gate (an applied transaction no entry lists whose reference recorded no frame).
 
@@ -77,7 +83,8 @@ An input that finds a difference belongs in a scenario of the gates once the dif
 ## Switches and negative controls
 
 Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`; `MEGA_EVM2_DISABLE=<name>,…` turns it off, with feature `compare` only, and without that feature `off` is a constant `false`.
-A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root, a keyless deployment with EIP-3607 disabled) has no switch; an engine test in `mega-evm2/tests` proves it instead.
+A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root, a keyless deployment with EIP-3607 disabled, a creation of type 0, 1 or 2 from a sender whose nonce cannot be bumped, the destruction table's rows for a slot whose original value is not zero, a call past the call-stack limit at an interceptor, the per-transaction limits and detention caps the engine fixes, SALT's production bucket mapping, the delegation indicator's state gas rebuilt from the cost per state byte) has no switch; an engine test in `mega-evm2/tests` or a unit test proves it instead.
+A change the engine made that the reference has not made yet (an accepted class above) has no switch either: turned off, the engine would match the reference, which no control can catch; the class's pinned `class=` count catches the change being undone, and an engine test proves it.
 The harness's fixture choices that make the engine's inputs match the reference's are switches too, `off("<name>")` in `diff`.
 
 `diff/negative-controls.toml` names, for each switch, one gate case that must differ when the switch is off, and in `why` what the fix does.

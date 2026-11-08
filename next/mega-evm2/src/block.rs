@@ -150,6 +150,9 @@ pub struct BlockExecutor<'a> {
 }
 
 impl<'a> BlockExecutor<'a> {
+    /// An executor over `evm`. Its transactions run under Satin's limits and detention caps
+    /// ([`crate::TxLimits::SATIN`]) whatever the EVM was set up with ([`Self::run_transaction`]):
+    /// they are block validity.
     pub fn new(
         evm: Evm<'a, MegaTypes>,
         parent_hash: alloy_primitives::B256,
@@ -257,6 +260,8 @@ impl<'a> BlockExecutor<'a> {
         if self.only_deposits && !is_deposit {
             return Err("unexpected non-deposit transaction in an activation block".into());
         }
+        // Satin's limits, whatever was set on the EVM.
+        self.evm.ext_mut().limits = crate::TxLimits::SATIN;
         let tx_size = encoded.len() as u64;
         let da_size = estimated_da_size(encoded);
         let gas_limit = env.gas_limit();

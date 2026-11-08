@@ -21,7 +21,7 @@ pub mod eip7702;
 pub mod intercept;
 pub mod keyless;
 pub mod ledger;
-#[cfg(feature = "salt-ahash")]
+#[cfg(not(feature = "salt-test-hasher"))]
 pub mod salt_hash;
 pub mod satin_ext;
 pub mod tx;
@@ -205,7 +205,7 @@ pub const fn satin_table() -> OpcodeConfig<MegaTypes> {
     c.set_instruction::<ins::dupn<MegaTypes>>(op::DUPN, 3);
     c.set_instruction::<ins::swapn<MegaTypes>>(op::SWAPN, 3);
     c.set_instruction::<ins::exchange<MegaTypes>>(op::EXCHANGE, 3);
-    c.set_instruction::<ins::slotnum<MegaTypes>>(op::SLOTNUM, 2);
+    c.set_instruction::<mega_slotnum>(op::SLOTNUM, 2);
     c.set_static_gas(op::EXTCODESIZE, 200);
     c.set_static_gas(op::EXTCODECOPY, 200);
     c.set_instruction::<mega_sstore>(op::SSTORE, c.static_gas(op::SSTORE));
@@ -247,14 +247,29 @@ impl EvmConfigSelector<MegaTypes> for MegaSelector {
 /// 98/100 forward, 512 KiB / 1 MiB size limits, 200M execution cap, and no EIP-8037 total gas
 /// cap: a transaction's gas limit is bounded by the block's gas limit alone.
 pub fn satin_version() -> Version {
+    satin_version_at(CPSB)
+}
+
+/// [`satin_version`] with every EIP-8037 state-gas entry rebuilt at `cost_per_state_byte`: a fresh
+/// slot's 64 bytes, a new account's and a created contract's 120, deployed code's 1 per byte and
+/// an EIP-7702 delegation indicator's 23 (Amsterdam's entries are built at its own cost per state
+/// byte).
+pub fn satin_version_at(cost_per_state_byte: u64) -> Version {
     let mut v = Version::new(SpecId::OSAKA);
     v.features.insert(EvmFeatures::EIP8037 | EvmFeatures::EIP2780 | EvmFeatures::EIP7708);
     v.gas_params = Version::new(SpecId::AMSTERDAM).gas_params;
+    let entry = |bytes: u64| {
+        bytes
+            .checked_mul(cost_per_state_byte)
+            .and_then(|gas| u32::try_from(gas).ok())
+            .expect("a state-gas entry fits the schedule's 32 bits")
+    };
     let p = &mut v.gas_params;
-    p.set(GasId::SstoreSetState, (64 * CPSB) as u32);
-    p.set(GasId::NewAccountState, (120 * CPSB) as u32);
-    p.set(GasId::CreateState, (120 * CPSB) as u32);
-    p.set(GasId::CodeDepositState, CPSB as u32);
+    p.set(GasId::SstoreSetState, entry(64));
+    p.set(GasId::NewAccountState, entry(120));
+    p.set(GasId::CreateState, entry(120));
+    p.set(GasId::CodeDepositState, entry(1));
+    p.set(GasId::TxEip7702PerAuthState, entry(23));
     p.set(GasId::CallStipendReduction, 50);
     v.tx_gas_limit_cap = EXECUTION_CAP;
     v.tx_total_gas_cap = u64::MAX;
@@ -281,6 +296,17 @@ pub fn precompile_map() -> &'static PrecompileMap<MegaTypes> {
             } else {
                 p
             };
+            #[cfg(feature = "compare")]
+            let p = if a == Address::with_last_byte(0x05) {
+                MODEXP.get_or_init(|| p.run());
+                evm2::precompiles::Precompile::new(
+                    a,
+                    evm2::precompiles::PrecompileId::ModExp,
+                    modexp_compare,
+                )
+            } else {
+                p
+            };
             out.insert(p);
         }
         out
@@ -293,6 +319,43 @@ pub fn precompiles() -> Precompiles<MegaTypes> {
     Precompiles::new(std::borrow::Cow::Borrowed(precompile_map()))
 }
 
+/// evm2's ModExp, which the comparison's [`modexp_compare`] runs.
+#[cfg(feature = "compare")]
+static MODEXP: OnceLock<evm2::precompiles::PrecompileFn<MegaTypes>> = OnceLock::new();
+
+/// ModExp under the comparison: evm2's own, or, under the reference's rule
+/// ([`ReferenceRule::ModexpBoundFirst`]), the order of the implementation under review: an input
+/// over EIP-7823's bound costs its 500 minimum and fails before its formula price (so the price
+/// probe reads 500 for it).
+#[cfg(feature = "compare")]
+fn modexp_compare(
+    evm: &mut Evm<'_, MegaTypes>,
+    msg: &Message<MegaTypes>,
+    gas: &mut GasTracker,
+) -> evm2::precompiles::PrecompileResult {
+    use evm2::{PrecompileError, precompiles::PrecompileHalt};
+    if evm.ext().reference_rule == Some(ReferenceRule::ModexpBoundFirst) &&
+        modexp_over_bound(&msg.input)
+    {
+        gas.spend(500).map_err(|_| PrecompileError::Halt(PrecompileHalt::OutOfGas))?;
+        return Err(PrecompileError::Halt(PrecompileHalt::ModexpEip7823LimitSize));
+    }
+    (MODEXP.get().expect("the map holds evm2's ModExp"))(evm, msg, gas)
+}
+
+/// Whether `input`, read as ModExp's header (three 32-byte lengths, right-padded with zeros), has
+/// a base, exponent or modulus length over EIP-7823's 1,024 bytes (comparison only).
+#[cfg(feature = "compare")]
+fn modexp_over_bound(input: &[u8]) -> bool {
+    (0..3).any(|i| {
+        let mut word = [0u8; 32];
+        let part = input.get(32 * i..).unwrap_or_default();
+        let n = part.len().min(32);
+        word[..n].copy_from_slice(&part[..n]);
+        U256::from_be_bytes(word) > U256::from(1_024)
+    })
+}
+
 fn kzg100k(
     evm: &mut Evm<'_, MegaTypes>,
     msg: &Message<MegaTypes>,
@@ -303,6 +366,41 @@ fn kzg100k(
         .map_err(|_| evm2::PrecompileError::Halt(evm2::precompiles::PrecompileHalt::OutOfGas))?;
     let mut free = GasTracker::new(u64::MAX / 2);
     evm2::precompiles::kzg_point_evaluation::run(&msg.input, &mut free)
+}
+
+/// SLOTNUM (EIP-7843) pushes zero in every block: MegaETH has no slot, so the block environment's
+/// slot number is not read. It stays a volatile read (the `Volatile` wrapper of `wrap_table`).
+#[instruction(EvmTypes = MegaTypes)]
+pub fn mega_slotnum(cx: _) -> Result<out> {
+    *out = if under_reference_rule(cx.state.host().ext(), ReferenceRuleId::SlotNumber) {
+        cx.state.host().block().slot_num
+    } else {
+        Word::ZERO
+    };
+}
+
+/// The changed rules [`under_reference_rule`] names, also without the `compare` feature.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReferenceRuleId {
+    SlotNumber,
+    ShortListUnsimulated,
+}
+
+/// Whether the engine runs under the implementation under review's rule `id` instead of its own
+/// (`Lite::reference_rule`, comparison only); always `false` without the `compare` feature.
+#[cfg(feature = "compare")]
+pub(crate) fn under_reference_rule(ext: &Lite, id: ReferenceRuleId) -> bool {
+    matches!(
+        (ext.reference_rule, id),
+        (Some(ReferenceRule::SlotNumber), ReferenceRuleId::SlotNumber) |
+            (Some(ReferenceRule::ShortListUnsimulated), ReferenceRuleId::ShortListUnsimulated)
+    )
+}
+
+#[cfg(not(feature = "compare"))]
+#[inline(always)]
+pub(crate) fn under_reference_rule(_: &Lite, _: ReferenceRuleId) -> bool {
+    false
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -626,6 +724,9 @@ pub fn mega_selfdestruct(cx: _) -> Result {
     let mut give_back = [0i64; 3];
     let mut refill_state = 0u64;
     let mut refill_bytes = 0u64;
+    // The records the deletion makes: a loaded slot whose original is not zero and that still
+    // holds it.
+    let mut deleted = 0i64;
     if eligible {
         let ext = state.host().ext();
         let slots: Vec<_> = ext
@@ -665,7 +766,12 @@ pub fn mega_selfdestruct(cx: _) -> Result {
             })
             .sum();
         let slot_gas = slot_gas.map_err(|e| state.fail(evm2::HostError::from(e)))?;
-        let records = slots.len() as u64 + (absent_at_start || off("sd_existing_record")) as u64;
+        // The records the table takes back: each slot made non-zero from zero, and the account's
+        // when its leaf was absent at the start. A slot whose original is not zero keeps the
+        // record its write made ("non-zero / any": the record stands).
+        let records = fresh + (absent_at_start || off("sd_existing_record")) as u64;
+        deleted = unchanged_original_slots(state, me)
+            .map_err(|e| state.fail(evm2::HostError::from(e)))? as i64;
         give_back = [
             -((records * WRITE_RECORD_SIZE + code_len) as i64),
             -(records as i64),
@@ -691,9 +797,9 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         changed(host, target) as i64 - target_changed as i64
     };
     let growth = (moves && target_empty) as i64;
-    let ds = (me_delta + target_delta) * WRITE_RECORD_SIZE as i64 +
-        if moves { TRANSFER_LOG_SIZE as i64 } else { 0 };
-    let delta = [ds + give_back[0], me_delta + target_delta + give_back[1], growth + give_back[2]];
+    let made = me_delta + target_delta + deleted;
+    let ds = made * WRITE_RECORD_SIZE as i64 + if moves { TRANSFER_LOG_SIZE as i64 } else { 0 };
+    let delta = [ds + give_back[0], made + give_back[1], growth + give_back[2]];
     if let Some(stop) = state.host().ext_mut().draw(delta) {
         return stop_frame(gas, state, stop);
     }
@@ -709,7 +815,7 @@ pub fn mega_selfdestruct(cx: _) -> Result {
             ext.destroyed.push(me);
         }
     }
-    let net = me_delta + target_delta;
+    let net = made;
     if net > 0 {
         charge_history(gas, state, net as u64 * WRITE_RECORD_SIZE, false)?;
     } else if net < 0 {
@@ -720,6 +826,29 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         beneficiary_read(gas, state, me);
     }
     Err(InstrStop::SelfDestruct)
+}
+
+/// The slots of `address`, an account created in the transaction, that the transaction loaded
+/// while they held a value other than zero and that still hold it: the destruction deletes each
+/// with the account, which makes its write record. Only a slot loaded before the creation can have
+/// such an original (one first loaded after it reads zero), which no instruction reaches: the
+/// account then has no code to run in, and an access list only pre-warms.
+fn unchanged_original_slots(
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    address: Address,
+) -> core::result::Result<u64, evm2::DatabaseError> {
+    let s = state.host().state_mut();
+    let keys: Vec<U256> = s
+        .loaded_accounts()
+        .find(|(a, _)| **a == address)
+        .map(|(_, keys)| keys.copied().collect())
+        .unwrap_or_default();
+    let mut n = 0;
+    for key in keys {
+        let slot = s.storage_slot(&address, key)?;
+        n += (!slot.original().is_zero() && slot.current() == slot.original()) as u64;
+    }
+    Ok(n)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1047,6 +1176,12 @@ impl MessageHooks<MegaTypes> for StartHooks {
         Option<evm2::interpreter::MessageResult<MegaTypes>>,
         evm2::ExecutionError,
     > {
+        // A message past the call-stack limit reaches no interceptor, counts no hint and is held
+        // by no limit: evm2 answers it with `CallTooDeep`, its forward and reservoir share
+        // returned whole. The depth gate comes before every other decision about the message.
+        if msg.depth > evm.version().max_call_depth() {
+            return Ok(None);
+        }
         // A transaction whose sender or recipient is the block beneficiary, or whose
         // recipient delegates to it, reads volatile data from its start: detained at compute 0.
         // A creation has no recipient: its created address is no recipient even when it is the
@@ -1231,4 +1366,24 @@ impl MessageHooks<MegaTypes> for StartHooks {
 
 pub fn word_u256(w: &Word) -> U256 {
     *w
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every EIP-8037 state-gas entry is rebuilt at the cost per state byte, the delegation
+    /// indicator's 23 bytes included: Amsterdam builds that entry at its own 1,530 per byte, which
+    /// only equals Satin's while the two costs per state byte are equal.
+    #[test]
+    fn test_every_state_gas_entry_is_rebuilt_at_the_cost_per_state_byte() {
+        let p = satin_version_at(1_000).gas_params;
+        assert_eq!(p.get(GasId::SstoreSetState), 64_000);
+        assert_eq!(p.get(GasId::NewAccountState), 120_000);
+        assert_eq!(p.get(GasId::CreateState), 120_000);
+        assert_eq!(p.get(GasId::CodeDepositState), 1_000);
+        assert_eq!(p.get(GasId::TxEip7702PerAuthState), 23_000);
+        // Satin's own: 23 × 1,530.
+        assert_eq!(satin_version().gas_params.get(GasId::TxEip7702PerAuthState), 35_190);
+    }
 }

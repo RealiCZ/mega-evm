@@ -2,8 +2,9 @@
 //! unlisted difference, a mismatching value or frame and a stale entry all fail.
 
 use mega_evm2_diff::gate::{
-    DUP_STACK_LABEL, HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, Known, Verdict, classify,
-    compared_frames, known_classes, known_differences, known_replay_differences,
+    AUTH_PREFLIGHT_READS, DUP_STACK_LABEL, HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, Known,
+    MODEXP_FORMULA_PRICE, SLOTNUM_ZERO, Verdict, classify, compared_frames, known_classes,
+    known_differences, known_replay_differences,
 };
 use serde_json::{Value, json};
 
@@ -177,11 +178,25 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             ("p6_exchange_invalid_immediate", "halt", label.0, label.1),
         ]
     );
-    assert_eq!(known_classes(), [DUP_STACK_LABEL, INVALID_IMMEDIATE_LABEL, HALTED_FIRST_FRAME]);
+    assert_eq!(
+        known_classes(),
+        [
+            DUP_STACK_LABEL,
+            INVALID_IMMEDIATE_LABEL,
+            HALTED_FIRST_FRAME,
+            AUTH_PREFLIGHT_READS,
+            MODEXP_FORMULA_PRICE,
+            SLOTNUM_ZERO,
+        ]
+    );
     let text = include_str!("../known-differences.toml");
     assert_eq!(text.matches(HALTED_FIRST_FRAME_ENTRY).count(), 2);
     // Five entries, three classes and two replay entries.
     assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 10);
+    // The three classes of the decided changes the reference has not made yet, each by its rule.
+    for rule in ["SATIN-AUTH-005", "SATIN-PCMP-007", "SATIN-BASE-005"] {
+        assert_eq!(text.matches(&format!("owner decision 2026-11-08 ({rule})")).count(), 1);
+    }
 }
 
 #[test]
@@ -439,4 +454,116 @@ fn test_the_dup_class_accepts_exactly_its_label() {
     assert_eq!(classify(&[], &dupn(), "s", halt(), &r2, &c2, NO_FRAMES), Verdict::Differ(halt()));
     // A case with an entry of its own is held to it.
     assert_eq!(classify(&known(), &dupn(), "s", halt(), &r, &c, NO_FRAMES), Verdict::Known);
+}
+
+// --- the classes checked by a run under the reference's rule: `slotnum_zero`,
+// `auth_preflight_reads`, `modexp_formula_price` ----------------------------------------
+
+/// The engine's records of `s` (plain, inspected), as its harness renders them.
+fn engine_runs(s: &mega_evm2_scenarios::Scenario) -> (Value, Value) {
+    (mega_evm2_diff::driver::run(s, false), mega_evm2_diff::driver::run(s, true))
+}
+
+/// The engine's records `(plain, inspected)` shaped as a reference record: no price record, the
+/// inspected run's frames, the two runs equal.
+fn as_reference((plain, inspected): (Value, Value)) -> Value {
+    let mut r = plain;
+    let o = r.as_object_mut().unwrap();
+    o.remove("priced");
+    o.insert("frames".into(), inspected["frames"].clone());
+    o.insert("inspected_equal".into(), json!(true));
+    r
+}
+
+fn scenario(name: &str) -> mega_evm2_scenarios::Scenario {
+    let mut s = mega_evm2_scenarios::by_name(name).expect("a scenario");
+    mega_evm2_scenarios::add_chain_accounts(&mut s);
+    s
+}
+
+/// The verdict of `s` against `reference`, with the accepted `classes` and the engine's reruns.
+fn rerun_verdict(
+    classes: &[String],
+    s: &mega_evm2_scenarios::Scenario,
+    reference: &Value,
+) -> Verdict {
+    use mega_evm2_diff::{driver::runs_under, gate::scenario_verdict};
+    let (plain, inspected) = engine_runs(s);
+    scenario_verdict(&[], classes, s.name, reference, &plain, &inspected, |rule| {
+        runs_under(s, rule)
+    })
+}
+
+#[test]
+fn test_a_rerun_class_takes_a_case_whose_only_difference_is_its_rule() {
+    use mega_evm2::ReferenceRule;
+    use mega_evm2_diff::driver::runs_under;
+    let both = vec![
+        SLOTNUM_ZERO.to_string(),
+        AUTH_PREFLIGHT_READS.to_string(),
+        MODEXP_FORMULA_PRICE.to_string(),
+    ];
+    for (name, rule, class) in [
+        ("edge_slotnum_returned", ReferenceRule::SlotNumber, SLOTNUM_ZERO),
+        ("p6_slotnum", ReferenceRule::SlotNumber, SLOTNUM_ZERO),
+        (
+            "e17_authority_charges_out_of_gas",
+            ReferenceRule::ShortListUnsimulated,
+            AUTH_PREFLIGHT_READS,
+        ),
+        // The label (gas between the minimum and the formula price), and detained calls decided
+        // the other way from their price, in both directions.
+        (
+            "edge_modexp_huge_lengths_forward_below_formula",
+            ReferenceRule::ModexpBoundFirst,
+            MODEXP_FORMULA_PRICE,
+        ),
+        (
+            "edge_modexp_over_bound_detained_allowance_above_500",
+            ReferenceRule::ModexpBoundFirst,
+            MODEXP_FORMULA_PRICE,
+        ),
+        (
+            "edge_modexp_over_bound_detained_allowance_below_500",
+            ReferenceRule::ModexpBoundFirst,
+            MODEXP_FORMULA_PRICE,
+        ),
+    ] {
+        let s = scenario(name);
+        // The reference runs under its own rule: the engine's run under that rule.
+        let reference = as_reference(runs_under(&s, rule));
+        assert_eq!(rerun_verdict(&both, &s, &reference), Verdict::Class(class), "{name}");
+        // Off unless the file enables it.
+        let others: Vec<String> = both.iter().filter(|c| *c != class).cloned().collect();
+        assert!(matches!(rerun_verdict(&others, &s, &reference), Verdict::Differ(_)), "{name}");
+        // Any other difference: the run under the reference's rule no longer matches.
+        let mut other = reference.clone();
+        other["gas_used"] = json!(other["gas_used"].as_u64().unwrap() + 1);
+        assert!(matches!(rerun_verdict(&both, &s, &other), Verdict::Differ(_)), "{name}");
+    }
+}
+
+#[test]
+fn test_a_rerun_class_takes_no_extra_read_its_rule_does_not_make() {
+    // A transaction without a list that ran out of gas before its first frame, whose reference
+    // read one account less: the read set has the preflight class's look, and is not the class.
+    let s = scenario("edge_start_record_unpaid_absent_recipient");
+    let both = vec![
+        SLOTNUM_ZERO.to_string(),
+        AUTH_PREFLIGHT_READS.to_string(),
+        MODEXP_FORMULA_PRICE.to_string(),
+    ];
+    let mut reference = as_reference(engine_runs(&s));
+    let accounts = reference["reads"]["accounts"].as_array_mut().unwrap();
+    assert!(accounts.len() > 1);
+    accounts.pop();
+    assert!(matches!(rerun_verdict(&both, &s, &reference), Verdict::Differ(_)));
+    // A case that differs in nothing matches; one that runs neither rule's code and differs is no
+    // class.
+    let s = scenario("p6_add");
+    let reference = as_reference(engine_runs(&s));
+    assert_eq!(rerun_verdict(&both, &s, &reference), Verdict::Match);
+    let mut other = reference.clone();
+    other["gas_used"] = json!(other["gas_used"].as_u64().unwrap() + 1);
+    assert!(matches!(rerun_verdict(&both, &s, &other), Verdict::Differ(_)));
 }
