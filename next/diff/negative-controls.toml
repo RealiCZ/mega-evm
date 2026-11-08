@@ -4,10 +4,12 @@
 # in `next/mega-evm2/src`, which reads `MEGA_EVM2_DISABLE=<name>,...` (a comma-separated list;
 # feature `compare` only, otherwise a constant `false`). Each engine switch has a `[[control]]`
 # table. A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block
-# system call, a block without a parent beacon block root, a keyless deployment with EIP-3607
-# disabled, among others: `next/README.md` lists them) has no switch; an engine test in
-# `next/mega-evm2/tests` proves it instead. Neither has a change the reference has not made yet
-# (a class of `known-differences.toml`): turned off, the engine would match the reference. The gate
+# system call, a block without a parent beacon block root, among others: `next/README.md` lists
+# them) has no switch; an engine test in `next/mega-evm2/tests` proves it instead. A fix only a
+# scenario's simulation switch reaches (a keyless deployment or a system sender with a validation
+# switch off, a creation whose sender's nonce cannot be bumped) has none either: its scenario
+# differs when the fix is undone. Nor has a change the reference has not made yet (a class of
+# `known-differences.toml`): turned off, the engine would match the reference. The gate
 # harness has switches of its own, `off("<name>")` in `next/diff`, for fixture choices that make
 # the engine's inputs match the reference's (absent accounts, delegation code, reads of absent
 # storage); each has a `[[harness]]` table with the same keys.
@@ -23,7 +25,7 @@
 #   switch    the name in `off("…")`
 #   gate      main | fuzz | replay | block
 #   scenario  (main) the scenario name
-#   mode      (fuzz) the generator mode, 1..=14
+#   mode      (fuzz) the generator mode, 1..=15
 #   seed      (fuzz) the seed
 #   block     (replay, block) the recorded block, `<set>:<number>`
 #   scope     sample: the case is in the in-repo sample (run by CI on every change);
