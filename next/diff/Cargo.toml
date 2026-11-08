@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autobenches = false
 
 [dependencies]
 # megaeth
@@ -31,3 +32,7 @@ criterion = { package = "codspeed-criterion-compat", version = "=5.0.1", default
 [[bench]]
 name = "engine"
 harness = false
+
+[[bin]]
+name = "bench-blocks"
+path = "benches/blocks.rs"

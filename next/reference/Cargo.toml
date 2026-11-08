@@ -13,6 +13,7 @@ edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 publish = false
+autobenches = false
 
 [dependencies]
 # The Satin implementation under review: mega-evm at PR #409 (5e3f30ad), the head of that pull
@@ -39,6 +40,13 @@ op-alloy-consensus = { git = "https://github.com/ethereum-optimism/optimism", re
 # misc
 serde_json = { version = "1.0" }
 
+[dev-dependencies]
+criterion = { package = "codspeed-criterion-compat", version = "=5.0.1", default-features = false }
+
+[[bench]]
+name = "engine"
+harness = false
+
 # Patches are not inherited from a dependency: these are the blocks of mega-evm's own root
 # Cargo.toml at the pinned revision.
 [patch.crates-io]
@@ -62,8 +70,11 @@ revm-inspector = { git = "https://github.com/megaeth-labs/revm", rev = "4c8f0d43
 # against the revm pin above.
 op-revm = { git = "https://github.com/megaeth-labs/op-revm", rev = "8c0db939291e1c4cbf2375782d1483bc371d6b94" }
 
-# The reference builds are for output, not for measurement: skip debug info and link-time
-# optimization to keep the build short. The outputs do not depend on either.
+# Match Cargo's default release settings used by the engine workspace.
 [profile.release]
 debug = "none"
 lto = false
+
+[[bin]]
+name = "bench-blocks"
+path = "benches/blocks.rs"

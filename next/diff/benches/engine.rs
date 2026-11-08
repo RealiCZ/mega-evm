@@ -26,143 +26,55 @@
 //! |               | system address, which the executor promotes to deposits) through the block      |
 //! |               | executor: pre-block changes, every transaction, commit                          |
 //!
+//! The first six workloads (`bench_workloads`) and the block are shared with the reference's
+//! benchmark; `bench-engine.sh` runs both and compares the six's outcomes with the reference's
+//! records before timing. `failed_deposit` and `protocol_caller` are the engine's own.
+//!
 //! The block needs `zstd` on the path (the gate scripts need it too): it is unpacked once into
-//! the system temp directory.
+//! the Cargo target directory.
 
-use alloy_primitives::Address;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use evm2::Evm;
 use mega_evm2::{MegaTypes, block::BlockExecutor};
 use mega_evm2_diff::{
     driver::{
         self, Frames,
-        scenarios::{self, A, Asm, EMPTY, Limits, Scenario, acct, init_returning, op, scenario},
+        scenarios::{self, A, Scenario},
     },
     replay::{self, Evm2Db, blockdb},
 };
 use std::{cell::RefCell, collections::HashMap, hint::black_box, rc::Rc};
 
-const CALL_LOOP_ITERATIONS: u64 = 200;
-const DETAINED_LOOP_ITERATIONS: u64 = 1_000;
-const CREATE_CODE_BYTES: u64 = 2_000;
-const BLAKE2F_ROUNDS: u32 = 40_000;
-const BLOCK_SET: &str = "p9";
-const BLOCK_NUMBER: u64 = 26_400_004;
+#[path = "../shared/src/bench_recorded.rs"]
+mod bench_recorded;
+use bench_recorded::BLOCK_SET;
 
-/// `<prefix>; PUSH2 n; JUMPDEST; <body>; PUSH1 1; SWAP1; SUB; DUP1; PUSH1 <JUMPDEST>; JUMPI; POP;
-/// STOP`: `body` runs `n` times and must leave the stack as it found it.
-fn counted_loop(prefix: &[u8], n: u64, body: &[u8]) -> Vec<u8> {
-    let mut code = prefix.to_vec();
-    code.extend_from_slice(&[0x61, (n >> 8) as u8, n as u8]);
-    let jumpdest = code.len() as u8;
-    code.push(op::JUMPDEST);
-    code.extend_from_slice(body);
-    code.extend_from_slice(&[
-        op::PUSH1,
-        1,
-        op::SWAP1,
-        op::SUB,
-        op::DUP1,
-        op::PUSH1,
-        jumpdest,
-        op::JUMPI,
-        op::POP,
-        op::STOP,
-    ]);
-    code
-}
+#[path = "../shared/src/bench_workloads.rs"]
+mod bench_workloads;
 
-fn call_loop() -> Scenario {
-    // CALL(gas, EMPTY, 0, 0, 0, 0, 0); POP
-    let body = Asm::new()
-        .push(0)
-        .push(0)
-        .push(0)
-        .push(0)
-        .push(0)
-        .push_addr(EMPTY)
-        .op(op::GAS)
-        .op(op::CALL)
-        .op(op::POP)
-        .build();
-    scenario(
-        "bench_call_loop",
-        vec![acct(A, counted_loop(&[], CALL_LOOP_ITERATIONS, &body))],
-        5_000_000,
-        Limits::default(),
-    )
-}
-
-fn detained() -> Scenario {
-    // body: 1 + 2, discarded
-    let code = counted_loop(
-        &[op::TIMESTAMP, op::POP],
-        DETAINED_LOOP_ITERATIONS,
-        &[op::PUSH1, 1, op::PUSH1, 2, op::ADD, op::POP],
-    );
-    scenario(
-        "bench_detained",
-        vec![acct(A, code)],
-        5_000_000,
-        Limits { block_env_cap: Some(100_000), ..Limits::default() },
-    )
-}
-
-fn sstore() -> Scenario {
-    let mut code = Asm::new();
-    for slot in 1..=8 {
-        code = code.sstore(slot, 1).sstore(slot, 0).sstore(slot, 1);
-    }
-    scenario("bench_sstore", vec![acct(A, code.stop().build())], 10_000_000, Limits::default())
-}
-
-fn create() -> Scenario {
-    let code = Asm::new().create(&init_returning(CREATE_CODE_BYTES), 0).op(op::POP).stop().build();
-    scenario("bench_create", vec![acct(A, code)], 50_000_000, Limits::default())
-}
-
-fn precompile() -> Scenario {
-    let mut input = vec![0u8; 213];
-    input[..4].copy_from_slice(&BLAKE2F_ROUNDS.to_be_bytes());
-    let blake2f = Address::with_last_byte(9);
-    let code = scenarios::q8::mem_call(
-        Asm::new().op(op::NUMBER).op(op::POP),
-        op::CALL,
-        blake2f,
-        0,
-        3_000_000,
-        &input,
-    )
-    .op(op::POP)
-    .stop()
-    .build();
-    scenario(
-        "bench_precompile",
-        vec![acct(A, code)],
-        10_000_000,
-        Limits { block_env_cap: Some(25_000), ..Limits::default() },
-    )
-}
-
-fn deposit() -> Scenario {
-    let mut s = scenario(
-        "bench_deposit",
-        vec![acct(A, Asm::new().sstore(1, 1).stop().build())],
-        1_000_000,
-        Limits::default(),
-    );
-    s.deposit = Some(0);
-    s
-}
-
-/// Checks the workload once outside the measurement, including the deliberately failed deposit.
-fn check(s: &Scenario, expected_status: &str) {
+/// Checks the workload once outside the measurement against its expected status (the
+/// deliberately failed deposit halts). A workload `shared` with the reference's benchmark is also
+/// compared with the reference's record of it when `BENCH_WORKLOAD_RECORDS` names them.
+fn check(s: &Scenario, expected_status: &str, shared: bool) {
     let out = driver::run(s, false);
     assert_eq!(out["status"], expected_status, "{} unexpected outcome: {out}", s.name);
+    println!("WORKLOAD {} gas_used={}", s.name, out["gas_used"]);
+    if !shared {
+        return;
+    }
+    if let Ok(dir) = std::env::var("BENCH_WORKLOAD_RECORDS") {
+        let reference = std::fs::read_to_string(format!("{dir}/{}.json", s.name))
+            .expect("reference workload record");
+        let reference = serde_json::from_str(&reference).expect("workload json");
+        let inspected = driver::run(s, true);
+        let differences = mega_evm2_diff::gate::scenario_differences(&reference, &out, &inspected);
+        assert!(differences.is_empty(), "{} differs: {differences:?}", s.name);
+        println!("WORKLOAD_MATCH {}", s.name);
+    }
 }
 
-fn bench_scenario(c: &mut Criterion, name: &str, s: Scenario, expected_status: &str) {
-    check(&s, expected_status);
+fn bench_scenario(c: &mut Criterion, name: &str, s: Scenario, expected_status: &str, shared: bool) {
+    check(&s, expected_status, shared);
     for inspected in [false, true] {
         let id = format!("{name}/{}", if inspected { "inspected" } else { "plain" });
         c.bench_function(&id, |b| {
@@ -182,41 +94,6 @@ fn bench_scenario(c: &mut Criterion, name: &str, s: Scenario, expected_status: &
             )
         });
     }
-}
-
-/// The recorded block and the 2718 bytes of its transactions, unpacked once.
-struct RecordedBlock {
-    path: String,
-    raws: Vec<alloy_primitives::Bytes>,
-}
-
-fn unpack(from: String, to: &std::path::Path) {
-    let status = std::process::Command::new("zstd")
-        .args(["-q", "-d", "-f", "-o"])
-        .arg(to)
-        .arg(from)
-        .status()
-        .expect("run zstd");
-    assert!(status.success(), "unpack the recorded block");
-}
-
-fn recorded_block() -> RecordedBlock {
-    let dir = std::env::temp_dir().join("mega-evm2-bench-blocks");
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let data = env!("CARGO_MANIFEST_DIR");
-    let block = dir.join(format!("{BLOCK_SET}-{BLOCK_NUMBER}.json"));
-    unpack(format!("{data}/data/real-blocks/{BLOCK_SET}/{BLOCK_NUMBER}.json.zst"), &block);
-    // The replay reference holds each transaction's 2718 bytes, which the block does not.
-    let replay = dir.join(format!("{BLOCK_SET}-{BLOCK_NUMBER}.jsonl"));
-    unpack(format!("{data}/data/replay/{BLOCK_SET}/{BLOCK_NUMBER}.jsonl.zst"), &replay);
-    let raws = std::fs::read_to_string(replay)
-        .expect("replay lines")
-        .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("replay line"))
-        .filter(|l| l["kind"] == "tx")
-        .map(|l| blockdb::bytes(&l["raw"]))
-        .collect();
-    RecordedBlock { path: block.to_str().expect("utf-8 path").to_owned(), raws }
 }
 
 /// Runs every transaction of the block through the executor and commits it.
@@ -242,7 +119,7 @@ fn run_block(b: blockdb::Block, raws: &[alloy_primitives::Bytes], inspected: boo
 }
 
 fn bench_block(c: &mut Criterion) {
-    let rec = recorded_block();
+    let rec = bench_recorded::recorded_block(env!("CARGO_MANIFEST_DIR"));
     for inspected in [false, true] {
         let included = run_block(blockdb::load_block(&rec.path, BLOCK_SET), &rec.raws, inspected);
         assert_eq!(included, rec.raws.len(), "every transaction of the block is included");
@@ -258,22 +135,21 @@ fn bench_block(c: &mut Criterion) {
 }
 
 fn engine(c: &mut Criterion) {
-    bench_scenario(c, "call_loop", call_loop(), "success");
-    bench_scenario(c, "detained", detained(), "success");
-    bench_scenario(c, "sstore", sstore(), "success");
-    bench_scenario(c, "create", create(), "success");
-    bench_scenario(c, "precompile", precompile(), "success");
-    bench_scenario(c, "deposit", deposit(), "success");
-    let mut failed = deposit();
+    for (name, scenario) in bench_workloads::workloads() {
+        bench_scenario(c, name, scenario, "success", true);
+    }
+    let (_, mut failed) =
+        bench_workloads::workloads().into_iter().find(|(name, _)| *name == "deposit").unwrap();
     // Replace STOP with INVALID so the slot written before the halt is returned as a read.
     let code = &mut failed.accounts.iter_mut().find(|a| a.address == A).unwrap().code;
     *code.last_mut().unwrap() = 0xfe;
-    bench_scenario(c, "failed_deposit", failed, "halt");
+    bench_scenario(c, "failed_deposit", failed, "halt", false);
     bench_scenario(
         c,
         "protocol_caller",
         scenarios::by_name("edge_protocol_caller_legacy").unwrap(),
         "success",
+        false,
     );
     bench_block(c);
 }
