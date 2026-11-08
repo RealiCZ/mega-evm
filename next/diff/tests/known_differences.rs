@@ -558,7 +558,7 @@ fn price_case() -> (Value, Value, Value, Value, Vec<String>) {
     let r =
         json!({"status": "success", "halt": null, "gas_used": 21_023_443, "regular": 20_996_163});
     let c = json!({"status": "success", "halt": null, "gas_used": 20_023_443, "regular": 19_996_163,
-                   "priced": [[33_282, 18_841, true, MODEXP.to_string()]]});
+                   "priced": [[33_282, 18_841, true, MODEXP.to_string(), true]]});
     let fr = json!([top(8_976_557), call("halt", "0x".into(), 0)]);
     let fc = json!([top(9_976_557), call("revert", compute_stop(20_000_002), 1_000_000)]);
     let d =
@@ -586,7 +586,7 @@ fn test_the_modexp_price_class_accepts_exactly_its_shape() {
     let r2 =
         json!({"status": "success", "halt": null, "gas_used": 20_042_033, "regular": 20_014_753});
     let c2 = json!({"status": "success", "halt": null, "gas_used": 20_062_033, "regular": 20_034_753,
-                    "priced": [[33_282, 251, false, MODEXP.to_string()]]});
+                    "priced": [[33_282, 251, false, MODEXP.to_string(), true]]});
     let fr2 = json!([top(9_957_967), call("revert", compute_stop(20_000_002), 20_000)]);
     let fc2 = json!([top(9_937_967), call("halt", "0x".into(), 0)]);
     let d2 = vec![
@@ -669,12 +669,15 @@ fn test_the_modexp_price_class_takes_no_other_case() {
     let m = MODEXP.to_string();
     for priced in [
         json!([]),
-        json!([[33_282, 18_841, false, m]]),
-        json!([[1_000_001, 18_841, true, m]]),
-        json!([[33_282, 499, true, m]]),
-        json!([[33_282, 18_841, true, m], [33_282, 18_841, true, m]]),
-        json!([[33_282, 18_841, true, Address::with_last_byte(8).to_string()]]),
-        json!([[33_282, 18_841, true]]),
+        json!([[33_282, 18_841, false, m, true]]),
+        json!([[1_000_001, 18_841, true, m, true]]),
+        json!([[33_282, 499, true, m, true]]),
+        json!([[33_282, 18_841, true, m, true], [33_282, 18_841, true, m, true]]),
+        json!([[33_282, 18_841, true, Address::with_last_byte(8).to_string(), true]]),
+        // An input within EIP-7823's bound: a price the two implementations disagree on is no
+        // decided difference.
+        json!([[33_282, 18_841, true, m, false]]),
+        json!([[33_282, 18_841, true, m]]),
     ] {
         let mut c1 = c.clone();
         c1["priced"] = priced;
@@ -768,4 +771,97 @@ fn test_a_rerun_class_takes_no_extra_read_its_rule_does_not_make() {
     let mut other = reference.clone();
     other["gas_used"] = json!(other["gas_used"].as_u64().unwrap() + 1);
     assert!(matches!(rerun_verdict(&both, &s, &other), Verdict::Differ(_)));
+}
+
+/// The other direction (the reference answered the stop, the engine ran the call), held to its own
+/// price conditions.
+#[test]
+fn test_the_modexp_price_class_holds_the_other_direction_to_its_prices() {
+    let call = |status: &str, output: String, left: u64| {
+        json!({"kind": "Call", "level": 1, "gas_limit": 20_000, "reservoir": 0, "value": "0",
+               "status": status, "output": output, "gas_left": left, "reservoir_left": 0})
+    };
+    let top = |left: u64| {
+        json!({"kind": "Call", "level": 0, "gas_limit": 29_957_720, "reservoir": 0, "value": "0",
+               "status": "success", "output": "0x", "gas_left": left, "reservoir_left": 0})
+    };
+    let r =
+        json!({"status": "success", "halt": null, "gas_used": 20_042_033, "regular": 20_014_753});
+    let fr = json!([top(9_957_967), call("revert", compute_stop(20_000_002), 20_000)]);
+    let fc = json!([top(9_937_967), call("halt", "0x".into(), 0)]);
+    let d = vec![
+        "gas_used".to_string(),
+        "regular".into(),
+        "frame 0 gas_left: 9957967 vs 9937967".into(),
+    ];
+    let m = MODEXP.to_string();
+    let verdict = |priced: Value| {
+        let c = json!({"status": "success", "halt": null, "gas_used": 20_062_033,
+                       "regular": 20_034_753, "priced": priced});
+        classify(&[], &formula_price(), "s", d.clone(), &r, &c, (&fr, &fc))
+    };
+    assert_eq!(
+        verdict(json!([[33_282, 251, false, m, true]])),
+        Verdict::Class(MODEXP_FORMULA_PRICE)
+    );
+    for priced in [
+        // Held, or an allowance the reference's 500 fits, or a formula price within the forward,
+        // or an input within the bound.
+        json!([[33_282, 251, true, m, true]]),
+        json!([[33_282, 500, false, m, true]]),
+        json!([[19_999, 251, false, m, true]]),
+        json!([[33_282, 251, false, m, false]]),
+    ] {
+        assert!(matches!(verdict(priced.clone()), Verdict::Differ(_)), "{priced}");
+    }
+}
+
+/// A ModExp call two frames deep, after a sibling call of its caller's caller: the frames running
+/// when it was called (the transaction's own and its caller) have the forward more left on the
+/// engine's side, the sibling the same.
+#[test]
+fn test_the_modexp_price_class_shifts_exactly_the_running_frames() {
+    let frame = |level: u64, limit: u64, status: &str, output: String, left: u64| {
+        json!({"kind": "Call", "level": level, "gas_limit": limit, "reservoir": 0, "value": "0",
+               "status": status, "output": output, "gas_left": left, "reservoir_left": 0})
+    };
+    let f = 1_000_000;
+    let r =
+        json!({"status": "success", "halt": null, "gas_used": 21_000_000, "regular": 20_900_000});
+    let c = json!({"status": "success", "halt": null, "gas_used": 20_000_000, "regular": 19_900_000,
+                   "priced": [[33_282, 18_841, true, MODEXP.to_string(), true]]});
+    let frames = |top: u64, sibling: u64, caller: u64, stopped: bool| {
+        let call = if stopped {
+            frame(2, f, "revert", compute_stop(20_000_002), f)
+        } else {
+            frame(2, f, "halt", "0x".into(), 0)
+        };
+        json!([
+            frame(0, 29_000_000, "success", "0x".into(), top),
+            frame(1, 50_000, "success", "0x".into(), sibling),
+            frame(1, 5_000_000, "success", "0x".into(), caller),
+            call
+        ])
+    };
+    let d = vec!["gas_used".to_string(), "regular".into(), "frame 0 gas_left: 1 vs 2".into()];
+    let fr = frames(7_000_000, 10_000, 3_000_000, false);
+    let classify_frames =
+        |fc: &Value| classify(&[], &formula_price(), "s", d.clone(), &r, &c, (&fr, fc));
+    assert_eq!(
+        classify_frames(&frames(8_000_000, 10_000, 4_000_000, true)),
+        Verdict::Class(MODEXP_FORMULA_PRICE)
+    );
+    // The sibling shifted too, or the caller not.
+    assert!(matches!(
+        classify_frames(&frames(8_000_000, 1_010_000, 4_000_000, true)),
+        Verdict::Differ(_)
+    ));
+    assert!(matches!(
+        classify_frames(&frames(8_000_000, 10_000, 3_000_000, true)),
+        Verdict::Differ(_)
+    ));
+    assert!(matches!(
+        classify_frames(&frames(7_000_000, 10_000, 4_000_000, true)),
+        Verdict::Differ(_)
+    ));
 }

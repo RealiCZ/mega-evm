@@ -518,8 +518,8 @@ fn run_with(s: &Scenario, inspected: bool, rule: Option<ReferenceRule>) -> Value
                 ext.detention
                     .priced
                     .iter()
-                    .map(|(price, allowance, held, address)| {
-                        json!([price, allowance, held, format!("{address}")])
+                    .map(|(price, allowance, held, address, over_bound)| {
+                        json!([price, allowance, held, format!("{address}"), over_bound])
                     })
                     .collect::<Vec<_>>()
             ),

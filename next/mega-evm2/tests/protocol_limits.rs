@@ -113,10 +113,24 @@ fn test_an_unconfigured_engine_detains_at_satins_cap() {
     assert_eq!(U256::from_be_slice(&out[36..68]), U256::from(20_000_002u64));
 }
 
+/// A transaction of a block runs under Satin's limits whatever the EVM was set to, before or after
+/// the executor was built: with limits of nothing, its 310 body bytes would be refused.
 #[test]
-fn test_the_block_executor_installs_satins_limits() {
-    let mut evm = satin_evm(&[0x00]);
-    evm.ext_mut().limits = TxLimits { tx: [0; 3], cap: 0, oracle_cap: 0 };
-    let executor = BlockExecutor::new(evm, B256::ZERO, Some(B256::repeat_byte(0x11)));
-    assert_eq!(executor.evm.ext().limits, TxLimits::SATIN);
+fn test_the_block_executor_runs_every_transaction_under_satins_limits() {
+    let nothing = TxLimits { tx: [0; 3], cap: 0, oracle_cap: 0 };
+    for after in [false, true] {
+        let mut evm = satin_evm(&[0x00]);
+        if !after {
+            evm.ext_mut().limits = nothing;
+        }
+        let mut executor = BlockExecutor::new(evm, B256::ZERO, Some(B256::repeat_byte(0x11)));
+        if after {
+            executor.evm.ext_mut().limits = nothing;
+        }
+        let tx = call(100_000);
+        let executed = executor.run_transaction(&tx, &tx.inner().enveloped_tx().cloned().unwrap());
+        let executed = executed.unwrap_or_else(|e| panic!("refused (after: {after}): {e}"));
+        assert!(executed.result.status, "after: {after}: {:?}", executed.result);
+        assert_eq!(executor.evm.ext().limits, TxLimits::SATIN);
+    }
 }

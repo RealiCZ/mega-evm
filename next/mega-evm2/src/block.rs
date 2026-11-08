@@ -150,14 +150,14 @@ pub struct BlockExecutor<'a> {
 }
 
 impl<'a> BlockExecutor<'a> {
-    /// An executor over `evm`, whose transactions run under Satin's limits and detention caps
-    /// ([`crate::TxLimits::SATIN`]) whatever the EVM was set up with: they are block validity.
+    /// An executor over `evm`. Its transactions run under Satin's limits and detention caps
+    /// ([`crate::TxLimits::SATIN`]) whatever the EVM was set up with ([`Self::run_transaction`]):
+    /// they are block validity.
     pub fn new(
-        mut evm: Evm<'a, MegaTypes>,
+        evm: Evm<'a, MegaTypes>,
         parent_hash: alloy_primitives::B256,
         parent_beacon_block_root: Option<alloy_primitives::B256>,
     ) -> Self {
-        evm.ext_mut().limits = crate::TxLimits::SATIN;
         let block_gas_limit = evm.block().gas_limit.saturating_to();
         Self {
             evm,
@@ -260,6 +260,8 @@ impl<'a> BlockExecutor<'a> {
         if self.only_deposits && !is_deposit {
             return Err("unexpected non-deposit transaction in an activation block".into());
         }
+        // Satin's limits, whatever was set on the EVM.
+        self.evm.ext_mut().limits = crate::TxLimits::SATIN;
         let tx_size = encoded.len() as u64;
         let da_size = estimated_da_size(encoded);
         let gas_limit = env.gas_limit();

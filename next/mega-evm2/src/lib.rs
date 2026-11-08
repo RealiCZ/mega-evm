@@ -258,12 +258,18 @@ pub fn satin_version_at(cost_per_state_byte: u64) -> Version {
     let mut v = Version::new(SpecId::OSAKA);
     v.features.insert(EvmFeatures::EIP8037 | EvmFeatures::EIP2780 | EvmFeatures::EIP7708);
     v.gas_params = Version::new(SpecId::AMSTERDAM).gas_params;
+    let entry = |bytes: u64| {
+        bytes
+            .checked_mul(cost_per_state_byte)
+            .and_then(|gas| u32::try_from(gas).ok())
+            .expect("a state-gas entry fits the schedule's 32 bits")
+    };
     let p = &mut v.gas_params;
-    p.set(GasId::SstoreSetState, (64 * cost_per_state_byte) as u32);
-    p.set(GasId::NewAccountState, (120 * cost_per_state_byte) as u32);
-    p.set(GasId::CreateState, (120 * cost_per_state_byte) as u32);
-    p.set(GasId::CodeDepositState, cost_per_state_byte as u32);
-    p.set(GasId::TxEip7702PerAuthState, (23 * cost_per_state_byte) as u32);
+    p.set(GasId::SstoreSetState, entry(64));
+    p.set(GasId::NewAccountState, entry(120));
+    p.set(GasId::CreateState, entry(120));
+    p.set(GasId::CodeDepositState, entry(1));
+    p.set(GasId::TxEip7702PerAuthState, entry(23));
     p.set(GasId::CallStipendReduction, 50);
     v.tx_gas_limit_cap = EXECUTION_CAP;
     v.tx_total_gas_cap = u64::MAX;

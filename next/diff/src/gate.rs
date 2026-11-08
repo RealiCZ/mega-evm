@@ -171,7 +171,10 @@ pub const AUTH_PREFLIGHT_READS: &str = "auth_preflight_reads";
 /// which [`modexp_bound_label`] checks: the only difference of the case is `halt`, normalized
 /// `PrecompileError` on the reference's side and `PrecompileOOG` on the engine's, both runs
 /// halted, each side recorded one frame, the transaction's own call: level 0, `Call`, halted, and
-/// the transaction's recipient is ModExp ([`MODEXP`]).
+/// the transaction's recipient is ModExp ([`MODEXP`]). The reference's ModExp reports
+/// `PrecompileError` for EIP-7823's bound alone (a length that does not fit its `usize`
+/// included), so with these labels the input is over the bound, and the engine ran out of gas
+/// before its formula price.
 pub const MODEXP_BOUND_LABEL: &str = "modexp_bound_label";
 
 /// ModExp's address.
@@ -194,8 +197,9 @@ pub const MODEXP: Address = Address::with_last_byte(5);
 /// - every frame that was running when it was called has `F` more gas left on that side, and every
 ///   other frame is equal;
 /// - the engine's price record holds exactly one call priced as above, a call of ModExp
-///   ([`MODEXP`]): price `P` and allowance `A`, either `A ≥ 500` and `A < P ≤ F`, held (the engine
-///   reverted), or `A < 500 ≤ F < P`, not held (the reference reverted).
+///   ([`MODEXP`]) whose input is over EIP-7823's bound: price `P` and allowance `A`, either `A ≥
+///   500` and `A < P ≤ F`, held (the engine reverted), or `A < 500 ≤ F < P`, not held (the
+///   reference reverted).
 pub const MODEXP_FORMULA_PRICE: &str = "modexp_formula_price";
 
 /// `SLOTNUM` pushes zero in the engine, the reference's slot number in the reference (the other
@@ -335,7 +339,8 @@ pub fn modexp_formula_price(
     let [j] = differing[..] else { return false };
     let (r, e) = (&fr[j], &fe[j]);
     let same = ["kind", "level", "gas_limit", "reservoir", "value", "reservoir_left"];
-    let Some(level) = r["level"].as_u64() else { return false };
+    // A frame is at most 1,024 calls deep.
+    let Some(level) = r["level"].as_u64().filter(|l| *l <= 1_024) else { return false };
     let Some(forward) = r["gas_limit"].as_u64() else { return false };
     if same.iter().any(|k| r.get(*k).is_none() || r.get(*k) != e.get(*k)) ||
         level == 0 ||
@@ -380,12 +385,12 @@ pub fn modexp_formula_price(
     // where the reference's 500 minimum does not.
     let Some(priced) = candidate["priced"].as_array() else { return false };
     let straddles = |p: &Value| {
-        let (Some(price), Some(allowance), Some(held), Some(address)) =
-            (p[0].as_u64(), p[1].as_u64(), p[2].as_bool(), p[3].as_str())
+        let (Some(price), Some(allowance), Some(held), Some(address), Some(over_bound)) =
+            (p[0].as_u64(), p[1].as_u64(), p[2].as_bool(), p[3].as_str(), p[4].as_bool())
         else {
             return false;
         };
-        if address.parse::<Address>().ok() != Some(MODEXP) {
+        if address.parse::<Address>().ok() != Some(MODEXP) || !over_bound {
             return false;
         }
         const MINIMUM: u64 = 500;
