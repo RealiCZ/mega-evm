@@ -1,0 +1,11 @@
+# Mutation-testing suppressions for the engine crates of `next/`.
+#
+# A suppressed mutant survives the gates but is not a missing scenario: it is an equivalent
+# mutant (no input can observe it) or dead code. Adding an entry is a reviewed decision.
+# Format and matching rules are those of the root crate's mutants/suppressions.toml,
+# read by scripts/mutation_gate.py:
+#   kind = "function"  a regex over the mutant name, handed to cargo-mutants as --exclude-re
+#   kind = "line"      the exact mutant text of a survivor or a timeout, as in missed.txt
+# Every entry carries category ("equivalent" or "dead"), justification and reviewer.
+#
+# No entry yet: the first full run decides which survivors are equivalent.

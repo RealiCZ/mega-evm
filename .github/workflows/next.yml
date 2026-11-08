@@ -19,6 +19,15 @@ name: next
 #             (repository variable, else secret of the same name) and runs
 #             gate.sh full, then controls.sh full. Succeeds with a notice when
 #             the URL is unset.
+# coverage  — every pull request and push that touches next/** or this file, and daily.
+#             Runs next/scripts/coverage.sh (branch coverage of the engine crates under
+#             the unit tests and the sample gate) and uploads lcov.info to Codecov with
+#             the flag `next`. The upload never fails the job (a fork has no token).
+# mutants   — pull requests: cargo-mutants on the engine lines the pull request changes.
+#             Daily and workflow_dispatch: the full engine, sharded. The oracle is the
+#             unit tests plus the sample gate (next/scripts/mutants.sh); a surviving or
+#             timed-out mutant that diff/mutants/suppressions.toml does not list fails
+#             the pull request run; the daily run reports and does not fail.
 
 on:
   pull_request:
@@ -235,3 +244,160 @@ jobs:
           MEGA_EVM2_CORPUS_DIR=$corpus bash next/diff/scripts/gate.sh full
           echo "Running controls.sh full on the downloaded corpus."
           MEGA_EVM2_CORPUS_DIR=$corpus bash next/diff/scripts/controls.sh full
+
+  coverage:
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: mega-evm
+    steps:
+      - name: Checkout mega-evm
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mega-evm
+          persist-credentials: false
+
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
+
+      - name: Install the next/ toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          rust-src-dir: mega-evm/next
+          components: llvm-tools-preview
+          rustflags: ""
+          cache: true
+          cache-shared-key: next-coverage
+
+      - name: Install zstd
+        run: bash next/scripts/install-zstd.sh
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage reports
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
+          COV_DIR: ${{ github.workspace }}/mega-evm/next/target/coverage/next
+        run: bash next/scripts/coverage.sh
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-coverage
+          path: mega-evm/next/target/coverage/next
+          if-no-files-found: error
+
+      - name: Upload coverage to Codecov
+        # The token is a repository secret: a pull request from a fork has none, and then
+        # the report stays in the artifact above.
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
+          fail_ci_if_error: false
+          files: mega-evm/next/target/coverage/next/lcov.info
+          flags: next
+          name: next
+          verbose: true
+
+  mutants-plan:
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - name: Plan the shards
+        id: plan
+        run: |
+          # One job on a pull request (the changed lines only); eight shards of the full set otherwise.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo 'shards=["pr"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'shards=["0/8","1/8","2/8","3/8","4/8","5/8","6/8","7/8"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  mutants:
+    name: mutants (${{ matrix.shard }})
+    needs: mutants-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.mutants-plan.outputs.shards) }}
+    defaults:
+      run:
+        working-directory: mega-evm
+    steps:
+      - name: Checkout mega-evm
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mega-evm
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
+
+      - name: Install the next/ toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          rust-src-dir: mega-evm/next
+          rustflags: ""
+          cache: true
+          cache-shared-key: next-mutants
+
+      - name: Install zstd
+        run: bash next/scripts/install-zstd.sh
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          # Pinned: a new release can change the set of generated mutants.
+          tool: cargo-mutants@27.1.0
+
+      - name: Run mutation testing
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
+          OUT: ${{ github.workspace }}/mega-evm/next/target/mutants
+          SHARD: ${{ matrix.shard }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$SHARD" = "pr" ]; then
+            # The base is fetched over https without the token (the repository is public).
+            git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" "$BASE_SHA"
+            bash next/scripts/mutants.sh pr "$BASE_SHA"
+          else
+            bash next/scripts/mutants.sh shard "$SHARD"
+          fi
+
+      - name: Score and gate
+        # Fail closed: the scorer refuses a results directory that exists without
+        # caught.txt and missed.txt, and an unsuppressed survivor or timeout fails.
+        # The daily run reports only.
+        run: |
+          rc=0
+          python3 -I scripts/mutation_gate.py report \
+            --results next/target/mutants/mutants.out \
+            --suppressions next/diff/mutants/suppressions.toml \
+            --summary "$GITHUB_STEP_SUMMARY" || rc=$?
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            exit "$rc"
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::mutation survivors or an incomplete run (status $rc); see the report and the artifact"
+          fi
+
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-mutants-${{ strategy.job-index }}
+          path: |
+            mega-evm/next/target/mutants/mutants.out
+            mega-evm/next/target/mutants.diff
+          if-no-files-found: ignore
