@@ -13,15 +13,6 @@
 kind = "function"
 category = "equivalent"
 file = "mega-evm2/src/satin_ext.rs"
-pattern = "satin_ext\\.rs:[0-9]+:[0-9]+: delete field hints from struct Self expression in MechanismState::reset"
-why = "MechanismState::reset empties the hint list (hints.clear()) before it rebuilds the state, so the default empty list that replaces it is equal; only the vector's capacity differs, which nothing reads."
-justification = "Equivalent: the list is cleared on the line above, so keeping it or defaulting it gives the same empty list."
-reviewer = "pending"
-
-[[suppress]]
-kind = "function"
-category = "equivalent"
-file = "mega-evm2/src/satin_ext.rs"
 pattern = "satin_ext\\.rs:[0-9]+:53: replace \\|\\| with && in hold_caller"
 why = "hold_caller returns early when no hint bytes were counted; without a hint no dimension can be over its limit as a caller resumes, because every mutation site stops at its crossing, so running the check anyway finds nothing."
 justification = "Equivalent: the early return on hint_bytes == 0 is an optimization. A system-originated transaction, the one case that can be over a limit without a hint, returns on the first operand, which a separate mutant of the same line (caught by port_hold_caller_system_exempt) pins."
