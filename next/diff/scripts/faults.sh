@@ -8,10 +8,13 @@
 # disagree, a known difference that no longer matches, ...); the
 # relevant gate then runs through `gate_run` of `gate-lib.sh`, the code `gate.sh` accepts and
 # rejects with. A fault is rejected only when that gate fails and its output shows the check the
-# fault names (`faults.py list`) while the unmutated run's output does not; a gate that fails
-# some other way does not prove the check, and the fault counts as accepted (`UNPROVEN`). Each
-# gate (and the main gate with a copied `known-differences.toml`) first runs on the unmutated
-# copy: these baselines must pass.
+# fault names (`faults.py list`) while the unmutated run's output does not, and every test of the
+# run completed (it printed its libtest result and exited with that result's status); a gate that
+# fails some other way, or a run killed or crashed before its result, does not prove the check,
+# and the fault counts as accepted (`UNPROVEN`). A fault of evidence `killed:<regex>` checks that
+# rule itself: its run is killed after its difference, and it is rejected only when the run is
+# taken for one that did not complete. Each gate (and the main gate with a copied
+# `known-differences.toml`) first runs on the unmutated copy: these baselines must pass.
 #
 # Usage: faults.sh
 #
@@ -92,7 +95,7 @@ baseline_job() {
 
 # fault_job <id> <gate> <evidence> <dir>: applies the fault and runs its gate.
 fault_job() {
-  local id=$1 gate=$2 evidence=$3 dir=$4 extra=() line lines note
+  local id=$1 gate=$2 evidence=$3 dir=$4 extra=() line lines note label
   fresh "$dir"
   if ! lines=$(python3 -I "$here/scripts/faults.py" apply "$id" "$dir" 2> "$dir/apply.log"); then
     echo "NOT_APPLIED $id: $(cat "$dir/apply.log")"
@@ -100,24 +103,45 @@ fault_job() {
   fi
   while IFS= read -r line; do [ -n "$line" ] && extra+=("$line"); done <<< "$lines"
   note=$(sed -n 's/^target: //p' "$dir/apply.log")
+  label="$id ($gate${note:+, $note})"
   if run "$dir" "$gate" ${extra[@]+"${extra[@]}"}; then
-    echo "ACCEPTED $id ($gate${note:+, $note}): the gate passed: $(cat "$dir/summary")"
+    echo "ACCEPTED $label: the gate passed: $(cat "$dir/summary")"
     return
   fi
+  case "$evidence" in
+    killed:*)
+      # The run was killed after its difference: what the verdict of an ordinary fault would make
+      # of it, which must be that the run did not complete.
+      line=$(verdict "$label" "$gate" "${evidence#killed:}" "$dir")
+      case "$line" in
+        "UNPROVEN $label: a test did not complete"*)
+          echo "REJECTED $label: killed after its difference, the run is not taken for a rejection" ;;
+        *) echo "ACCEPTED $label: killed after its difference, the run was taken for: $line" ;;
+      esac
+      ;;
+    *) verdict "$label" "$gate" "$evidence" "$dir" ;;
+  esac
+}
+
+# verdict <label> <gate> <evidence> <dir>: the line for a fault whose gate failed.
+verdict() {
+  local label=$1 gate=$2 evidence=$3 dir=$4
   if [ "$evidence" = summary ]; then
     if completed "$dir/logs"; then
-      echo "REJECTED $id ($gate${note:+, $note}): by the expected summary"
+      echo "REJECTED $label: by the expected summary"
     else
-      echo "UNPROVEN $id ($gate${note:+, $note}): a test failed or did not complete, so the summary check is not what rejected it (see $dir)"
+      echo "UNPROVEN $label: a test failed or did not complete, so the summary check is not what rejected it (see $dir)"
     fi
     return
   fi
-  if ! shows "$dir" "$evidence"; then
-    echo "UNPROVEN $id ($gate${note:+, $note}): the gate failed, but its output does not show /$evidence/ (see $dir)"
+  if ! finished "$dir/logs"; then
+    echo "UNPROVEN $label: a test did not complete (no libtest result, or an exit status its result does not give), so its output proves no check (see $dir)"
+  elif ! shows "$dir" "$evidence"; then
+    echo "UNPROVEN $label: the gate failed, but its output does not show /$evidence/ (see $dir)"
   elif shows "$work/baseline-$gate" "$evidence"; then
-    echo "UNPROVEN $id ($gate${note:+, $note}): /$evidence/ also matches the unmutated run's output"
+    echo "UNPROVEN $label: /$evidence/ also matches the unmutated run's output"
   else
-    echo "REJECTED $id ($gate${note:+, $note})"
+    echo "REJECTED $label"
   fi
 }
 
@@ -131,6 +155,26 @@ completed() {
     found=1
     [ "$(cat "$status")" = 0 ] || return 1
     grep -q '^test result: ok' "${status%.status}" || return 1
+  done
+  [ "$found" = 1 ]
+}
+
+# finished <logs>: whether every test of a run ran to its libtest result and exited with the
+# status that result gives: 0 after `test result: ok`, 101 (cargo's failed tests) after
+# `test result: FAILED`. A test killed by a signal, or one whose run crashed or failed to build
+# before its result, did not finish: its output stops wherever it was cut, so a difference it
+# printed is not shown to be the check that failed the gate.
+finished() {
+  local status code found=0
+  for status in "$1"/*.log.status; do
+    [ -e "$status" ] || return 1
+    found=1
+    code=$(cat "$status")
+    case "$code" in
+      0) grep -q '^test result: ok' "${status%.status}" || return 1 ;;
+      101) grep -q '^test result: FAILED' "${status%.status}" || return 1 ;;
+      *) return 1 ;;
+    esac
   done
   [ "$found" = 1 ]
 }

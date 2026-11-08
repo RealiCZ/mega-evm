@@ -3,7 +3,10 @@
 Each fault changes one thing in the reference data (or the run's environment) that a gate must
 reject, and names the check that must catch it: a regular expression that must match the gate's
 log or comparison output (and not the unmutated run's), or `summary` when the gate's tests pass
-and only the comparison of its summary line with the expected counts can reject it.
+and only the comparison of its summary line with the expected counts can reject it. A fault whose
+evidence is `killed:<regex>` faults `faults.sh` itself: its run is killed right after a line
+matching <regex>, before the test's result, and only the rule that a run which did not complete
+proves no check can reject it.
 
 Usage:
   faults.py list               prints `<id> <gate> <evidence regex>` per fault (tab-separated)
@@ -15,7 +18,7 @@ replaces the links on the path to every file it changes with copies, so the shar
 never written. Targets are picked by rule (for example "the first scenario with logs"), in file
 order, so they follow a regenerated sample; a rule that matches nothing is an error.
 """
-import json, os, re, shutil, sys
+import json, os, re, shutil, stat, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KNOWN = os.path.join(HERE, "..", "known-differences.toml")
@@ -160,6 +163,39 @@ def expect(var, f):
 
 def count(word, delta):
     return lambda v: re.sub(r"\b%s=(\d+)" % word, lambda m: "%s=%d" % (word, int(m.group(1)) + delta), v, count=1)
+
+KILLER = """#!%(python)s -I
+# `cargo` for one fault's gate run: runs the real cargo in a session of its own and kills that
+# session with SIGKILL once a line of its output matches the fault's evidence, before the test
+# prints its result; the run then ends with status 137, as one killed by a signal does.
+import os, re, signal, subprocess, sys
+p = subprocess.Popen([%(cargo)r] + sys.argv[1:], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                     start_new_session=True)
+for line in p.stdout:
+    sys.stdout.buffer.write(line)
+    sys.stdout.flush()
+    if re.search(%(evidence)r, line.decode(errors="replace")):
+        os.killpg(p.pid, signal.SIGKILL)
+        p.wait()
+        sys.exit(137)
+sys.exit(p.wait())
+"""
+
+def killed_after(evidence, fault):
+    """Applies `fault`, and runs its gate with a `cargo` that kills the run after the first line
+    of output matching `evidence`."""
+    def apply(work):
+        extra = fault(work) or []
+        cargo = shutil.which("cargo")
+        if not cargo:
+            raise SystemExit("faults.py: no cargo on PATH")
+        os.mkdir(os.path.join(work, "bin"))
+        p = os.path.join(work, "bin", "cargo")
+        with open(p, "w") as h:
+            h.write(KILLER % {"python": sys.executable, "cargo": cargo, "evidence": evidence})
+        os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
+        return extra + ["PATH=%s%s%s" % (os.path.join(work, "bin"), os.pathsep, os.environ["PATH"])]
+    return apply
 
 # --- the block gates (replay and block) -----------------------------------------------------------
 
@@ -319,6 +355,7 @@ SUMMARY = "summary"
 FAULTS = [
     # main: a compared field, an inspected frame, the reference's plain and inspected runs, entries, the expected count
     ("main-gas-used", "main", diff("gas_used"), scen_field(M, "gas_used", ok)),
+    ("main-killed-after-differ", "main", "killed:" + diff("gas_used"), killed_after(diff("gas_used"), scen_field(M, "gas_used", ok))),
     ("main-frame-gas-left", "main", r"^DIFFER .*frame 0 gas_left", frame_field(M, "gas_left")),
     ("main-frame-count", "main", r"^DIFFER .*frame count", scen_field(M, "frames", lambda o: ok(o) and len(o["frames"]) > 1, lambda v: v[:-1])),
     ("main-reference-inspected", "main", diff("reference_plain_vs_inspected"), scen_field(M, "inspected_equal", ok, lambda v: False)),

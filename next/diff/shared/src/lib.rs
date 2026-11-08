@@ -409,27 +409,35 @@ pub fn add_chain_accounts(s: &mut Scenario) {
 }
 
 /// Merges the account entries `s` holds for one address into its first, so that every fixture
-/// builder sees one entry per address (a generator can list an address twice). A later entry's
-/// balance, code and nonce replace the earlier ones when they are not zero or empty, and its slots
-/// are written over the earlier ones: what a builder that writes each entry's set fields in turn
-/// makes of the list.
+/// builder sees one entry per address and one slot per key (a generator can list an address, or
+/// a slot, twice). A later entry's balance, code and nonce replace the earlier ones when they are
+/// not zero or empty, and every slot, of the first entry as of the later ones, is written over an
+/// earlier one of its key: what a builder that writes each entry's set fields in turn makes of the
+/// list.
 pub fn merge_duplicate_accounts(s: &mut Scenario) {
     let mut merged: Vec<Account> = Vec::with_capacity(s.accounts.len());
-    for a in s.accounts.drain(..) {
-        let Some(m) = merged.iter_mut().find(|m| m.address == a.address) else {
-            merged.push(a);
-            continue;
+    for mut a in s.accounts.drain(..) {
+        let storage = core::mem::take(&mut a.storage);
+        let m = match merged.iter().position(|m| m.address == a.address) {
+            Some(i) => {
+                let m = &mut merged[i];
+                if !a.balance.is_zero() {
+                    m.balance = a.balance;
+                }
+                if !a.code.is_empty() {
+                    m.code = a.code;
+                }
+                if a.nonce > 0 {
+                    m.nonce = a.nonce;
+                }
+                m
+            }
+            None => {
+                merged.push(a);
+                merged.last_mut().unwrap()
+            }
         };
-        if !a.balance.is_zero() {
-            m.balance = a.balance;
-        }
-        if !a.code.is_empty() {
-            m.code = a.code;
-        }
-        if a.nonce > 0 {
-            m.nonce = a.nonce;
-        }
-        for (k, v) in a.storage {
+        for (k, v) in storage {
             match m.storage.iter_mut().find(|(key, _)| *key == k) {
                 Some(slot) => slot.1 = v,
                 None => m.storage.push((k, v)),
@@ -970,6 +978,21 @@ mod merge_tests {
             (a.balance, a.code.clone(), a.storage.clone()),
             (U256::from(7), vec![0], vec![(1, 1), (2, 5)])
         );
+    }
+
+    /// A slot listed twice is written last-wins, within one entry and across entries: what the
+    /// reference's builder, which writes every slot of every entry in turn, leaves in the slot.
+    #[test]
+    fn test_a_duplicate_slot_keeps_its_last_write() {
+        let mut s = scenario("", vec![], BELOW_CAP, Limits::default());
+        s.accounts = vec![
+            Account { address: A, storage: vec![(1, 1), (1, 2), (2, 7)], ..Account::default() },
+            Account { address: B, storage: vec![(3, 1), (3, 4)], ..Account::default() },
+            Account { address: A, storage: vec![(1, 3)], ..Account::default() },
+        ];
+        merge_duplicate_accounts(&mut s);
+        let slots: Vec<_> = s.accounts.iter().map(|a| (a.address, a.storage.clone())).collect();
+        assert_eq!(slots, vec![(A, vec![(1, 3), (2, 7)]), (B, vec![(3, 4)])]);
     }
 }
 
