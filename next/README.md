@@ -37,6 +37,20 @@ cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads
 Every gate script refuses to run when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set, so an inherited selection cannot narrow an official run; a direct `cargo test -p mega-evm2-diff` with such a variable prints `PARTIAL GATE` lines and is for debugging.
 Each script extracts its inputs afresh into its own directory under `<target>/mega-evm2-diff/`, so different scripts can run at the same time; do not run one script twice at once on the same cargo target.
 
+## Coverage and mutation testing in CI
+
+The `coverage` job of `.github/workflows/next.yml` runs `scripts/coverage.sh`: branch coverage (`cargo llvm-cov`) of `mega-evm2` and `op-evm2` under their own tests and the sample gate's test targets, which run every scenario, fuzz seed and recorded block of the sample through the engine.
+The diff harness is only the driver and is left out of the report.
+It writes `lcov.info`, `summary.txt` (a `TOTAL` line and per-crate line and branch totals) and an HTML report to `$COV_DIR`, uploads them as an artifact and `lcov.info` to Codecov with the flag `next`.
+The upload needs the repository secret `CODECOV_TOKEN` and never fails the job, so a fork without the secret keeps the artifact only.
+
+The `mutants` job runs `scripts/mutants.sh` with cargo-mutants (pinned in the workflow; configuration in `.cargo/mutants.toml`).
+The oracle is `cargo test` over the engine crates and the harness with the sample gate's environment: the main scenarios, recorded-block replay and block execution (one synthetic run takes one reference file, so the fuzz batches are not part of it).
+A mutant is caught when any unit test or gate turns red; a survivor is a scenario the gates lack, or code no input reaches.
+On a pull request only the changed engine lines are mutated, and a survivor or timeout that `diff/mutants/suppressions.toml` does not list fails the job.
+The daily run mutates the full engine in eight shards and reports without failing.
+Locally, `bash scripts/mutants.sh smoke` runs a fixed set (the mutants of `mega-evm2/src/satin_ext.rs`) and writes `mutants.out/outcomes.json` under `$OUT`; `scripts/mutants.sh pr <base>`, `shard <k>/<n>` and `full` are the modes CI uses.
+
 ## The gates and their accepted differences
 
 The gates run every scenario, fuzz seed and recorded transaction on both sides, plain and inspected, and compare every emitted field outside the exclusion list in `diff/src/gate.rs`, which states a reason for each entry.

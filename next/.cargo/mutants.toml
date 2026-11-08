@@ -1,0 +1,24 @@
+# cargo-mutants configuration for the engine crates of `next/`; used through
+# next/scripts/mutants.sh, which also sets up the oracle (the sample gate's inputs).
+#
+# The oracle is `cargo test` over the engine crates and the diff harness with the sample
+# gate's environment (synthetic scenarios, recorded-block replay and block execution), so
+# a mutant is caught when any unit test or any gate turns red. A surviving mutant is a
+# scenario the gates do not have, or code no input reaches.
+
+test_tool = "cargo"
+test_package = ["mega-evm2", "op-evm2", "mega-evm2-scenarios", "mega-evm2-diff"]
+
+# The gates run in release (gate-lib.sh); mutants are built and tested the same way.
+additional_cargo_args = ["--locked", "--release"]
+
+# Never mutate generated code or test-only helpers.
+exclude_globs = ["**/tests/**", "**/benches/**", "**/test_utils/**"]
+
+# The baseline is measured alone; mutants run `--jobs` at a time. A timeout is "could not
+# decide", not a survivor, and the scorer fails on an unsuppressed one.
+minimum_test_timeout = 300
+timeout_multiplier = 6.0
+
+# Seed each scratch build from the warm target directory.
+copy_target = true
