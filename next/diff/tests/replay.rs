@@ -232,7 +232,7 @@ fn test_replay_matches_reference_plain_and_inspected() {
                         if !listed.is_empty() {
                             evaluated.push(index);
                         }
-                        let accepted = gate::classify_case(
+                        let accepted = gate::classify(
                             &listed,
                             &classes,
                             &key,
@@ -240,7 +240,6 @@ fn test_replay_matches_reference_plain_and_inspected() {
                             satin,
                             &plain,
                             (&line["frames"], &frames),
-                            alloy_consensus::Transaction::to(tx.inner()),
                         );
                         d = match &accepted {
                             Verdict::Differ(d) => d.clone(),

@@ -296,6 +296,17 @@ pub fn precompile_map() -> &'static PrecompileMap<MegaTypes> {
             } else {
                 p
             };
+            #[cfg(feature = "compare")]
+            let p = if a == Address::with_last_byte(0x05) {
+                MODEXP.get_or_init(|| p.run());
+                evm2::precompiles::Precompile::new(
+                    a,
+                    evm2::precompiles::PrecompileId::ModExp,
+                    modexp_compare,
+                )
+            } else {
+                p
+            };
             out.insert(p);
         }
         out
@@ -306,6 +317,43 @@ pub fn precompile_map() -> &'static PrecompileMap<MegaTypes> {
 /// contracts are not in it; the `before` message hook answers them.
 pub fn precompiles() -> Precompiles<MegaTypes> {
     Precompiles::new(std::borrow::Cow::Borrowed(precompile_map()))
+}
+
+/// evm2's ModExp, which the comparison's [`modexp_compare`] runs.
+#[cfg(feature = "compare")]
+static MODEXP: OnceLock<evm2::precompiles::PrecompileFn<MegaTypes>> = OnceLock::new();
+
+/// ModExp under the comparison: evm2's own, or, under the reference's rule
+/// ([`ReferenceRule::ModexpBoundFirst`]), the order of the implementation under review: an input
+/// over EIP-7823's bound costs its 500 minimum and fails before its formula price (so the price
+/// probe reads 500 for it).
+#[cfg(feature = "compare")]
+fn modexp_compare(
+    evm: &mut Evm<'_, MegaTypes>,
+    msg: &Message<MegaTypes>,
+    gas: &mut GasTracker,
+) -> evm2::precompiles::PrecompileResult {
+    use evm2::{PrecompileError, precompiles::PrecompileHalt};
+    if evm.ext().reference_rule == Some(ReferenceRule::ModexpBoundFirst) &&
+        modexp_over_bound(&msg.input)
+    {
+        gas.spend(500).map_err(|_| PrecompileError::Halt(PrecompileHalt::OutOfGas))?;
+        return Err(PrecompileError::Halt(PrecompileHalt::ModexpEip7823LimitSize));
+    }
+    (MODEXP.get().expect("the map holds evm2's ModExp"))(evm, msg, gas)
+}
+
+/// Whether `input`, read as ModExp's header (three 32-byte lengths, right-padded with zeros), has
+/// a base, exponent or modulus length over EIP-7823's 1,024 bytes (comparison only).
+#[cfg(feature = "compare")]
+fn modexp_over_bound(input: &[u8]) -> bool {
+    (0..3).any(|i| {
+        let mut word = [0u8; 32];
+        let part = input.get(32 * i..).unwrap_or_default();
+        let n = part.len().min(32);
+        word[..n].copy_from_slice(&part[..n]);
+        U256::from_be_bytes(word) > U256::from(1_024)
+    })
 }
 
 fn kzg100k(

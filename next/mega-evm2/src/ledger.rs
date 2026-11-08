@@ -219,6 +219,9 @@ pub enum ReferenceRule {
     /// An EIP-7702 list too short to cross the transaction's KV or state-growth limit is applied
     /// without the simulation, which then loads none of its authorities.
     ShortListUnsimulated,
+    /// ModExp checks EIP-7823's bound before its formula price: an input over the bound costs the
+    /// 500 minimum and fails, and is priced at that minimum.
+    ModexpBoundFirst,
 }
 
 /// Withheld gas a code deposit drew (its state spill, its history), which an admission refusal

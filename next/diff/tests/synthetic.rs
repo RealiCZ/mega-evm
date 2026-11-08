@@ -12,7 +12,7 @@
 //! debugging run, does not check for extra entries, and prints `PARTIAL GATE ...`.
 
 use mega_evm2_diff::{
-    driver::{recipient, run, runs_under, scenarios},
+    driver::{run, runs_under, scenarios},
     gate::{self, Verdict},
 };
 use serde_json::{Value, json};
@@ -56,16 +56,9 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
         let plain = run(&s, false);
         let insp = run(&s, true);
         let group = groups.entry(s.group).or_default();
-        let verdict = gate::scenario_verdict(
-            &known,
-            &classes,
-            s.name,
-            o,
-            &plain,
-            &insp,
-            recipient(&s),
-            |rule| runs_under(&s, rule),
-        );
+        let verdict = gate::scenario_verdict(&known, &classes, s.name, o, &plain, &insp, |rule| {
+            runs_under(&s, rule)
+        });
         match &verdict {
             Verdict::Match => {
                 matched += 1;

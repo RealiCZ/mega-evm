@@ -20,7 +20,7 @@
 //! switches off as in the gates.
 
 use mega_evm2_diff::{
-    driver::{recipient, run, runs_under},
+    driver::{run, runs_under},
     gate::{self, Verdict},
 };
 use mega_evm2_scenarios::probe;
@@ -79,7 +79,6 @@ fn judge(probes: &[mega_evm2_scenarios::Scenario], records: &[Value]) -> bool {
             reference,
             &plain,
             &inspected,
-            recipient(s),
             |rule| runs_under(s, rule),
         );
         match verdict {

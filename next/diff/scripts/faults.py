@@ -396,7 +396,7 @@ FAULTS = [
     ("preflight-class-not-enabled", "main", r'^DIFFER %s \["reads"\]$' % PREFLIGHT, known_toml(lambda t: drop_class(t, "auth_preflight_reads"))),
     ("modexp-label-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % MODEXP_LABEL, scen_edit(M, named(MODEXP_LABEL, bumped("gas_used")))),
     ("modexp-label-class-other-label", "main", r'^DIFFER %s \["halt"\]$' % MODEXP_LABEL, scen_edit(M, named(MODEXP_LABEL, lambda o: o.update(halt="Base(OutOfGas(Basic))")))),
-    ("modexp-label-class-not-enabled", "main", r'^DIFFER %s \["halt"\]$' % MODEXP_LABEL, known_toml(lambda t: drop_class(t, "modexp_bound_label"))),
+    ("modexp-label-class-not-enabled", "main", r'^DIFFER %s \["halt"\]$' % MODEXP_LABEL, known_toml(lambda t: drop_class(t, "modexp_formula_price"))),
     ("modexp-price-class-other-gas", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, scen_edit(M, named(MODEXP_PRICE, bumped("gas_used")))),
     ("modexp-price-class-other-frame", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, scen_edit(M, named(MODEXP_PRICE, lambda o: o["frames"][1].update(status="revert")))),
     ("modexp-price-class-not-enabled", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, known_toml(lambda t: drop_class(t, "modexp_formula_price"))),

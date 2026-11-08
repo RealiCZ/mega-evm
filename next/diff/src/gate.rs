@@ -12,8 +12,7 @@
 //! Accepted differences are listed by case (`[[difference]]`, `[[replay_difference]]`) or, for a
 //! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
 //! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUP_STACK_LABEL`],
-//! [`AUTH_PREFLIGHT_READS`], [`MODEXP_BOUND_LABEL`], [`MODEXP_FORMULA_PRICE`], [`SLOTNUM_ZERO`]).
-use alloy_primitives::Address;
+//! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`SLOTNUM_ZERO`]).
 use mega_evm2::ReferenceRule;
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
@@ -163,43 +162,16 @@ pub const DUP_STACK_LABEL: &str = "dup_stack_label";
 /// inspected, has no difference from the reference at all ([`scenario_verdict`]).
 pub const AUTH_PREFLIGHT_READS: &str = "auth_preflight_reads";
 
-/// The halt label of a transaction whose own call is ModExp with an input over EIP-7823's bound
-/// and gas between the 500 minimum and the formula price: the engine charges the formula price
-/// before it checks the bound (evm2 upstream's order, the specification's), so the call runs out
-/// of gas, `PrecompileOOG`; the reference checks the bound first, `PrecompileError` (the other
-/// implementation has not made the decided change yet). Both burn the call's gas. Its shape, all of
-/// which [`modexp_bound_label`] checks: the only difference of the case is `halt`, normalized
-/// `PrecompileError` on the reference's side and `PrecompileOOG` on the engine's, both runs
-/// halted, each side recorded one frame, the transaction's own call: level 0, `Call`, halted, and
-/// the transaction's recipient is ModExp ([`MODEXP`]). The reference's ModExp reports
-/// `PrecompileError` for EIP-7823's bound alone (a length that does not fit its `usize`
-/// included), so with these labels the input is over the bound, and the engine ran out of gas
-/// before its formula price.
-pub const MODEXP_BOUND_LABEL: &str = "modexp_bound_label";
-
-/// ModExp's address.
-pub const MODEXP: Address = Address::with_last_byte(5);
-
-/// A ModExp call under gas detention, decided from its price: the engine prices an input over
-/// EIP-7823's bound by its formula, the reference at its 500 minimum (the other implementation has
-/// not made the decided change yet), and the two prices straddle the call's allowance or its
-/// forward. Either the engine's formula price lies above an allowance of at least 500 and within
-/// the forward, so the engine answers the call with the compute stop on its untouched forward
-/// where the reference runs it and burns the forward; or the allowance is below 500 and the forward
-/// between 500 and the formula price, so the reference answers the stop where the engine runs the
-/// call and burns the forward. Its shape, all of which [`modexp_formula_price`] checks:
-/// - the only differences of the case are `gas_used`, `regular` and the frames, the first two by
-///   the same amount, the call's forward `F`;
-/// - one frame differs: a call at level 1 or deeper with the same kind, level, gas limit `F`,
-///   reservoir, value and reservoir left on both sides, halted with nothing left on one side and
-///   reverted with `MegaLimitExceeded(2, limit)` and `F` left on the other, the side that used `F`
-///   less of the transaction's gas being the one that reverted;
-/// - every frame that was running when it was called has `F` more gas left on that side, and every
-///   other frame is equal;
-/// - the engine's price record holds exactly one call priced as above, a call of ModExp
-///   ([`MODEXP`]) whose input is over EIP-7823's bound: price `P` and allowance `A`, either `A ≥
-///   500` and `A < P ≤ F`, held (the engine reverted), or `A < 500 ≤ F < P`, not held (the
-///   reference reverted).
+/// ModExp charges its 500 minimum, then its formula price, and only then checks EIP-7823's bound
+/// (evm2 upstream's order, the specification's); the reference checks the bound first, so an
+/// over-bound input costs it the 500 minimum and is priced at it (the other implementation has not
+/// made the decided change yet). The difference shows as a halt label (`PrecompileOOG` against
+/// `PrecompileError` when the gas lies between the two prices), and under gas detention as a call
+/// decided differently from its price, the compute stop on one side where the other runs the call
+/// and burns its forward, with whatever the program then does with the gas it has. So the shape is
+/// checked by running the case again on the engine with the reference's order
+/// ([`ReferenceRule::ModexpBoundFirst`]): the case is of the class when that run, plain and
+/// inspected, has no difference from the reference at all ([`scenario_verdict`]).
 pub const MODEXP_FORMULA_PRICE: &str = "modexp_formula_price";
 
 /// `SLOTNUM` pushes zero in the engine, the reference's slot number in the reference (the other
@@ -209,17 +181,16 @@ pub const MODEXP_FORMULA_PRICE: &str = "modexp_formula_price";
 /// ([`ReferenceRule::SlotNumber`]): the case is of the class when that run, plain and inspected,
 /// has no difference from the reference at all ([`scenario_verdict`]).
 ///
-/// The engine replay gate checks neither this class nor [`AUTH_PREFLIGHT_READS`]: it runs no case
-/// again, and a case of either there differs.
+/// The engine replay gate checks none of the three classes run again ([`RERUN_CLASSES`]): it runs
+/// no case again, and a case of one there differs.
 pub const SLOTNUM_ZERO: &str = "slotnum_zero";
 
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 7] = [
+const CLASSES: [&str; 6] = [
     HALTED_FIRST_FRAME,
     INVALID_IMMEDIATE_LABEL,
     DUP_STACK_LABEL,
     AUTH_PREFLIGHT_READS,
-    MODEXP_BOUND_LABEL,
     MODEXP_FORMULA_PRICE,
     SLOTNUM_ZERO,
 ];
@@ -281,128 +252,6 @@ pub fn dup_stack_label(diffs: &[String], reference: &Value, candidate: &Value) -
     halt_label_only(diffs, reference, candidate, ("StackOverflow", "StackUnderflow"))
 }
 
-/// Whether the differences `diffs` of one case, whose outcomes are `reference` and `candidate`
-/// (not normalized) and whose recorded frames are `frames` (reference, inspected engine), are
-/// exactly the shape of [`MODEXP_BOUND_LABEL`].
-pub fn modexp_bound_label(
-    diffs: &[String],
-    reference: &Value,
-    candidate: &Value,
-    frames: (&Value, &Value),
-    recipient: Option<Address>,
-) -> bool {
-    let top_call_halted = |f: &Value| {
-        f.as_array().map(Vec::as_slice).is_some_and(|f| {
-            matches!(f, [frame] if frame["level"] == 0 && frame["kind"] == "Call" &&
-                frame["status"] == "halt")
-        })
-    };
-    recipient == Some(MODEXP) &&
-        halt_label_only(diffs, reference, candidate, ("PrecompileError", "PrecompileOOG")) &&
-        top_call_halted(frames.0) &&
-        top_call_halted(frames.1)
-}
-
-/// Whether the differences `diffs` of one case, whose outcomes are `reference` and `candidate`
-/// (not normalized; the engine's carries its price record, `priced`) and whose recorded frames are
-/// `frames` (reference, inspected engine), are exactly the shape of [`MODEXP_FORMULA_PRICE`].
-pub fn modexp_formula_price(
-    diffs: &[String],
-    reference: &Value,
-    candidate: &Value,
-    frames: (&Value, &Value),
-) -> bool {
-    // The three differences: the transaction's gas, its regular gas and the frames.
-    let [x, y, z] = diffs else { return false };
-    if x != "gas_used" || y != "regular" || !is_frames_difference(z) {
-        return false;
-    }
-    let (a, b) = (canonical(reference), canonical(candidate));
-    let num = |o: &Value, k: &str| o[k].as_u64().map(i128::from);
-    let (Some(gr), Some(ge), Some(rr), Some(re)) =
-        (num(&a, "gas_used"), num(&b, "gas_used"), num(&a, "regular"), num(&b, "regular"))
-    else {
-        return false;
-    };
-    // `d` > 0: the engine used `d` less, so it is the side that answered with the stop.
-    let d = gr - ge;
-    if d == 0 || rr - re != d {
-        return false;
-    }
-    let (Some(fr), Some(fe)) = (frames.0.as_array(), frames.1.as_array()) else { return false };
-    if fr.len() != fe.len() {
-        return false;
-    }
-    let differing: Vec<usize> = (0..fr.len())
-        .filter(|&i| FRAME_KEYS.iter().any(|k| k != &"gas_left" && fr[i].get(*k) != fe[i].get(*k)))
-        .collect();
-    let [j] = differing[..] else { return false };
-    let (r, e) = (&fr[j], &fe[j]);
-    let same = ["kind", "level", "gas_limit", "reservoir", "value", "reservoir_left"];
-    // A frame is at most 1,024 calls deep.
-    let Some(level) = r["level"].as_u64().filter(|l| *l <= 1_024) else { return false };
-    let Some(forward) = r["gas_limit"].as_u64() else { return false };
-    if same.iter().any(|k| r.get(*k).is_none() || r.get(*k) != e.get(*k)) ||
-        level == 0 ||
-        r["kind"] == "Create" ||
-        d.unsigned_abs() != u128::from(forward)
-    {
-        return false;
-    }
-    let (stopped, ran) = if d > 0 { (e, r) } else { (r, e) };
-    let stop_output = |f: &Value| {
-        let Some(out) = f["output"].as_str() else { return false };
-        let Some(limit) =
-            out.get(out.len().saturating_sub(16)..).and_then(|h| u64::from_str_radix(h, 16).ok())
-        else {
-            return false;
-        };
-        out == record::hex(&mega_evm2::limit_exceeded_output(2, limit))
-    };
-    if !(stopped["status"] == "revert" &&
-        stopped["gas_left"] == forward &&
-        stop_output(stopped) &&
-        ran["status"] == "halt" &&
-        ran["gas_left"] == 0 &&
-        ran["output"] == "0x")
-    {
-        return false;
-    }
-    // The frames running when frame `j` was called have `d` more left on the engine's side; every
-    // other frame is equal.
-    let running: BTreeSet<usize> =
-        (0..level).filter_map(|l| (0..j).rev().find(|&i| fr[i]["level"] == l)).collect();
-    for i in (0..fr.len()).filter(|&i| i != j) {
-        let (Some(lr), Some(le)) = (fr[i]["gas_left"].as_u64(), fe[i]["gas_left"].as_u64()) else {
-            return false;
-        };
-        let shift = if running.contains(&i) { d } else { 0 };
-        if i128::from(le) - i128::from(lr) != shift {
-            return false;
-        }
-    }
-    // The engine's price of the call: the formula price straddles the allowance or the forward
-    // where the reference's 500 minimum does not.
-    let Some(priced) = candidate["priced"].as_array() else { return false };
-    let straddles = |p: &Value| {
-        let (Some(price), Some(allowance), Some(held), Some(address), Some(over_bound)) =
-            (p[0].as_u64(), p[1].as_u64(), p[2].as_bool(), p[3].as_str(), p[4].as_bool())
-        else {
-            return false;
-        };
-        if address.parse::<Address>().ok() != Some(MODEXP) || !over_bound {
-            return false;
-        }
-        const MINIMUM: u64 = 500;
-        if d > 0 {
-            held && allowance >= MINIMUM && allowance < price && price <= forward
-        } else {
-            !held && allowance < MINIMUM && MINIMUM <= forward && forward < price
-        }
-    };
-    priced.iter().filter(|p| straddles(p)).count() == 1
-}
-
 /// Whether the only difference `diffs` holds is the halt label, normalized `labels.0` on the
 /// reference's side and `labels.1` on the engine's, both runs halted.
 fn halt_label_only(
@@ -440,8 +289,7 @@ pub enum Verdict {
 /// candidate recorded. Only a difference in exactly the listed field, with exactly the listed
 /// normalized values (for `frames`, exactly the listed frames), is accepted; a scenario without an
 /// entry is accepted as a class of `classes` only when its differences are exactly that class's
-/// shape. A listed scenario is held to its entries alone. [`classify_case`] with no recipient
-/// known: a class that needs the transaction's recipient takes nothing.
+/// shape. A listed scenario is held to its entries alone.
 pub fn classify(
     known: &[Known],
     classes: &[String],
@@ -450,22 +298,6 @@ pub fn classify(
     reference: &Value,
     candidate: &Value,
     frames: (&Value, &Value),
-) -> Verdict {
-    classify_case(known, classes, name, diffs, reference, candidate, frames, None)
-}
-
-/// [`classify`] of a case whose transaction's recipient is `recipient` (`None` for a creation),
-/// which [`MODEXP_BOUND_LABEL`] reads.
-#[allow(clippy::too_many_arguments)]
-pub fn classify_case(
-    known: &[Known],
-    classes: &[String],
-    name: &str,
-    diffs: Vec<String>,
-    reference: &Value,
-    candidate: &Value,
-    frames: (&Value, &Value),
-    recipient: Option<Address>,
 ) -> Verdict {
     let entries: Vec<&Known> = known.iter().filter(|k| k.scenario == name).collect();
     if entries.is_empty() {
@@ -482,16 +314,6 @@ pub fn classify_case(
         }
         if enabled(DUP_STACK_LABEL) && dup_stack_label(&diffs, reference, candidate) {
             return Verdict::Class(DUP_STACK_LABEL);
-        }
-        if enabled(MODEXP_BOUND_LABEL) &&
-            modexp_bound_label(&diffs, reference, candidate, frames, recipient)
-        {
-            return Verdict::Class(MODEXP_BOUND_LABEL);
-        }
-        if enabled(MODEXP_FORMULA_PRICE) &&
-            modexp_formula_price(&diffs, reference, candidate, frames)
-        {
-            return Verdict::Class(MODEXP_FORMULA_PRICE);
         }
         return Verdict::Differ(diffs);
     }
@@ -567,18 +389,17 @@ pub fn scenario_differences(reference: &Value, plain: &Value, inspected: &Value)
 
 /// The classes checked by running the case again on the engine under the reference's rule, each
 /// with that rule.
-pub const RERUN_CLASSES: [(&str, ReferenceRule); 2] = [
+pub const RERUN_CLASSES: [(&str, ReferenceRule); 3] = [
     (SLOTNUM_ZERO, ReferenceRule::SlotNumber),
     (AUTH_PREFLIGHT_READS, ReferenceRule::ShortListUnsimulated),
+    (MODEXP_FORMULA_PRICE, ReferenceRule::ModexpBoundFirst),
 ];
 
 /// The verdict of the synthetic gate on scenario `name`: its [`scenario_differences`],
 /// [`classify`]d against the accepted differences `known`. A case without an entry that no class
 /// of [`classify`] takes is of a class of [`RERUN_CLASSES`], when that class is accepted, if
 /// `under(rule)` — the case run again on the engine, plain and inspected, under that class's
-/// reference rule — has no difference from the reference at all. `recipient` is the transaction's
-/// recipient (`None` for a creation).
-#[allow(clippy::too_many_arguments)]
+/// reference rule — has no difference from the reference at all.
 pub fn scenario_verdict(
     known: &[Known],
     classes: &[String],
@@ -586,11 +407,10 @@ pub fn scenario_verdict(
     reference: &Value,
     plain: &Value,
     inspected: &Value,
-    recipient: Option<Address>,
     under: impl Fn(ReferenceRule) -> (Value, Value),
 ) -> Verdict {
     let diffs = scenario_differences(reference, plain, inspected);
-    let verdict = classify_case(
+    let verdict = classify(
         known,
         classes,
         name,
@@ -598,7 +418,6 @@ pub fn scenario_verdict(
         reference,
         plain,
         (&reference["frames"], &inspected["frames"]),
-        recipient,
     );
     let listed = known.iter().any(|k| k.scenario == name);
     if !matches!(verdict, Verdict::Differ(_)) || listed {

@@ -462,11 +462,6 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
     run_with(s, inspected, None)
 }
 
-/// The recipient of `s`'s transaction: none for a creation.
-pub fn recipient(s: &Scenario) -> Option<alloy_primitives::Address> {
-    (!s.create).then_some(s.to)
-}
-
 /// Both runs of `s`, plain then inspected, with the engine under the reference's `rule`
 /// (`Lite::reference_rule`): the runs a class of a change the reference has not made yet is
 /// checked with (`gate::scenario_verdict`).
@@ -512,18 +507,7 @@ fn run_with(s: &Scenario, inspected: bool, rule: Option<ReferenceRule>) -> Value
         ("group", json!(s.group)),
         ("reads", read_set),
         ("frames", json!(frames)),
-        (
-            "priced",
-            json!(
-                ext.detention
-                    .priced
-                    .iter()
-                    .map(|(price, allowance, held, address, over_bound)| {
-                        json!([price, allowance, held, format!("{address}"), over_bound])
-                    })
-                    .collect::<Vec<_>>()
-            ),
-        ),
+        ("priced", json!(ext.detention.priced.iter().map(|p| json!(p)).collect::<Vec<_>>())),
         (
             "hints",
             json!(

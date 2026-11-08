@@ -43,10 +43,9 @@ pub struct DetentionState {
     pub stipends: u64,
     pub burned: u64,
     pub crossings: u64,
-    /// Precompile calls decided from their price for the report: price, allowance, held, called
-    /// address, and whether the input is a ModExp input over EIP-7823's bound.
+    /// Precompile calls decided from their input-only price (held, crossing) for the report.
     #[cfg(feature = "compare")]
-    pub priced: Vec<(u64, u64, bool, alloy_primitives::Address, bool)>,
+    pub priced: Vec<(u64, u64, bool)>,
 }
 
 impl DetentionState {
@@ -479,27 +478,8 @@ pub fn hold_precompile(
     let allowance = allowance_at_start(&evm.ext().detention, msg, limit);
     let crosses = price > allowance && price <= msg.gas_limit;
     #[cfg(feature = "compare")]
-    evm.ext_mut().detention.priced.push((
-        price,
-        allowance,
-        crosses,
-        msg.call_target,
-        modexp_over_bound(&msg.input),
-    ));
+    evm.ext_mut().detention.priced.push((price, allowance, crosses));
     crosses.then(|| crossing_answer(evm, msg, limit))
-}
-
-/// Whether `input`, read as ModExp's header (three 32-byte lengths, right-padded with zeros), has
-/// a base, exponent or modulus length over EIP-7823's 1,024 bytes (the price report only).
-#[cfg(feature = "compare")]
-fn modexp_over_bound(input: &[u8]) -> bool {
-    (0..3).any(|i| {
-        let mut word = [0u8; 32];
-        let part = input.get(32 * i..).unwrap_or_default();
-        let n = part.len().min(32);
-        word[..n].copy_from_slice(&part[..n]);
-        U256::from_be_bytes(word) > U256::from(1_024)
-    })
 }
 
 /// The compute a message's own charges may make before it crosses the detention limit `limit`:
