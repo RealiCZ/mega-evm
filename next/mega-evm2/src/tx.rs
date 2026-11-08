@@ -255,10 +255,10 @@ fn check_system_sender(
 impl TxHandlerHooks<MegaTypes> for MegaHooks {
     fn adjust_intrinsic_gas(
         host: &mut Evm<'_, MegaTypes>,
-        _envelope: &OpTxEnvelope,
-        _intrinsic: &mut u64,
+        envelope: &OpTxEnvelope,
+        intrinsic: &mut u64,
         initial_state_gas: &mut u64,
-        _floor_gas: &mut u64,
+        floor_gas: &mut u64,
     ) -> HandlerResult<()> {
         if let Some(entries) = host.ext_mut().mechanisms.body_check.take() {
             admits_body(host, entries)?;
@@ -268,13 +268,13 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         // the floor after the intrinsic gas, which carries the history from here on. A gas limit
         // that covers the first and not the floor is refused for the floor, as in Satin: only the
         // reason of a refusal changes, never whether the transaction is refused.
-        let gas_limit = _envelope.gas_limit();
-        if gas_limit >= _intrinsic.saturating_add(*initial_state_gas) &&
-            gas_limit < *_floor_gas &&
+        let gas_limit = envelope.gas_limit();
+        if gas_limit >= intrinsic.saturating_add(*initial_state_gas) &&
+            gas_limit < *floor_gas &&
             !crate::off("floor_before_history")
         {
             return Err(evm2::registry::HandlerError::GasLimitBelowFloor {
-                required: *_floor_gas,
+                required: *floor_gas,
                 got: gas_limit,
             });
         }
@@ -284,7 +284,10 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         if crate::off("start_at_runtime") {
             *initial_state_gas += host.ext().tx_start_charge;
         }
-        host.ext_mut().mechanisms.prepared = Some((*_intrinsic, *initial_state_gas, *_floor_gas));
+        // The EIP-7702 handler is the one that reads it: it executes a `PreparedTx` it cannot read.
+        if envelope.as_eip7702().is_some() {
+            host.ext_mut().mechanisms.prepared = Some((*intrinsic, *initial_state_gas, *floor_gas));
+        }
         Ok(())
     }
 

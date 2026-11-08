@@ -23,8 +23,9 @@ pub fn refuse(reason: &'static str) -> evm2::registry::HandlerError {
 
 #[derive(Clone, Debug, Default)]
 pub struct MechanismState {
-    /// What `adjust_intrinsic_gas` settled (intrinsic, initial state gas, floor), for handlers
-    /// that execute a `PreparedTx` they cannot read.
+    /// What `adjust_intrinsic_gas` settled (intrinsic, initial state gas, floor) for an EIP-7702
+    /// transaction, whose handler executes a `PreparedTx` it cannot read; no other envelope
+    /// records it.
     pub prepared: Option<(u64, u64, u64)>,
     /// How the first frame's start charge was paid when it was charged on the transaction's gas
     /// after validation (types 0, 1 and 2 in `before_initial_frame`, EIP-7702 in its handler): the
