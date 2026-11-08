@@ -18,6 +18,7 @@ use mega_evm::{
 use mega_evm2_reference::{Fixed, Frames, SatinDb, Test, block_env, blockdb, synthetic};
 use mega_evm2_scenarios::{self as scenarios, Scenario};
 use revm::{
+    DatabaseCommit,
     context::{BlockEnv, CfgEnv, TxEnv},
     database::State,
 };
@@ -112,11 +113,23 @@ fn bench_scenario(c: &mut Criterion, name: &str, s: Scenario) {
         let outcome = evm.execute_transaction(tx).expect("workload executes");
         assert!(outcome.result.is_success());
         assert_eq!(outcome.result.tx_gas_used(), expected["gas_used"].as_u64().expect("gas"));
+        let (accounts, storage) = mega_evm2_reference::changed_json(&outcome.state);
+        assert_eq!(serde_json::json!(accounts), expected["accounts"]);
+        assert_eq!(serde_json::json!(storage), expected["storage"]);
+        assert_eq!(
+            blockdb::hex(outcome.result.output().map(|bytes| bytes.as_ref()).unwrap_or_default()),
+            expected["output"].as_str().expect("output")
+        );
+        evm.db_mut().commit(outcome.result_and_state.state);
         let id = format!("{name}/{}", if inspected { "inspected" } else { "plain" });
         c.bench_function(&id, |b| {
             b.iter_batched(
                 setup,
-                |(mut evm, tx)| black_box(evm.execute_transaction(tx).expect("transact")),
+                |(mut evm, tx)| {
+                    let outcome = evm.execute_transaction(tx).expect("transact");
+                    evm.db_mut().commit(outcome.result_and_state.state);
+                    black_box(outcome.result_and_state.result)
+                },
                 BatchSize::LargeInput,
             )
         });

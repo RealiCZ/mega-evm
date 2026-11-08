@@ -73,7 +73,9 @@ Raw timings and gate logs remain under `<target>/mega-evm2-diff/bench-sample` or
 
 `bench-engine.sh` runs the six shared synthetic workloads and the fixed 24-transaction block, plain and inspected, on both implementations.
 It checks synthetic outcomes using the existing scenario comparison before engine measurement; the block is covered by the block script's gate.
-Criterion excludes per-iteration setup for synthetic workloads, while the fixed-block workload includes executor construction and transaction decoding, matching the original engine benchmark.
+Criterion excludes per-iteration setup for synthetic workloads and includes execution and state commit on both sides.
+The engine commits to its accepted state overlay; the reference commits to its in-memory database.
+The fixed-block workload includes executor construction and transaction decoding, matching the original engine benchmark.
 Criterion's samples and estimates remain in each target directory's `criterion/` directory.
 Extra arguments are forwarded to Criterion, for example `bash diff/scripts/bench-engine.sh --save-baseline comparison`.
 Both scripts print load averages before and after each side; run without competing jobs and repeat measurements taken under load.
