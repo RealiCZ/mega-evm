@@ -33,7 +33,7 @@ SAMPLE_FUZZ_BATCHES=(
 # place that states them. Adding a scenario or a known difference means changing it here (and the
 # data under `next/diff/data`, see `data/README.md`); `gate-lib.sh`, `check-reference.sh` and
 # `regen-reference.sh` read it.
-MAIN_EXPECT="total=2687 match=2515 known=5 class=167"
+MAIN_EXPECT="total=2691 match=2519 known=5 class=167"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (mode 11's first-frame window and mode 14's pairs, `halted_first_frame`; mode 14's pairs,
 # `modexp_formula_price`; mode 14's pairs and mode 4's seeds, `auth_preflight_reads`); every other

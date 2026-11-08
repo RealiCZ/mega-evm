@@ -1173,6 +1173,7 @@ pub fn all() -> Vec<Scenario> {
     v.extend(deposit_creation_nonce_max());
     v.extend(creation_onto_beneficiary());
     v.extend(slotnum_returned());
+    v.extend(protocol_caller());
     v
 }
 
@@ -1231,6 +1232,30 @@ fn creation_onto_beneficiary() -> Vec<Scenario> {
         s.create = true;
         s.data = remaining.clone();
         s.beneficiary = beneficiary;
+        v.push(s);
+    }
+    v
+}
+
+/// The reserved protocol caller is exempt regardless of envelope type, even outside a block.
+fn protocol_caller() -> Vec<Scenario> {
+    let mut v = Vec::new();
+    for (name, ty, deposit) in [
+        ("edge_protocol_caller_legacy", 0, None),
+        ("edge_protocol_caller_access_list", 1, None),
+        ("edge_protocol_caller_dynamic_fee", 2, None),
+        ("edge_protocol_caller_deposit", 0, Some(0)),
+    ] {
+        let mut s = edge(
+            name,
+            vec![acct(A, hex!("425060015f5500").to_vec())],
+            BELOW_CAP,
+            Limits { data: Some(0), block_env_cap: Some(0), ..Limits::default() },
+        );
+        s.sender = address!("fffffffffffffffffffffffffffffffffffffffe");
+        s.tx_type = ty;
+        s.deposit = deposit;
+        s.salt = vec![(A, Some(0), 3)];
         v.push(s);
     }
     v

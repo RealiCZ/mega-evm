@@ -648,3 +648,10 @@ gate = "main"
 scenario = "edge_deposit_create_nonce_max"
 scope = "sample"
 why = "A deposit creating from a sender at nonce u64::MAX, whose nonce cannot be bumped, is answered as revm answers it: a success, nothing created, the frame's gas untouched and the created account's state gas not kept (a start the caller's account refuses counts nothing). Off, the creation runs and deploys at the sender's u64::MAX address (gas, state and the counts differ)."
+
+[[control]]
+switch = "protocol_origin"
+gate = "main"
+scenario = "edge_protocol_caller_legacy"
+scope = "sample"
+why = "Every envelope from the protocol caller is exempt from history, bucket pricing, detention and limits. Off, the zero body limit refuses the transaction before its storage write."

@@ -143,6 +143,11 @@ pub struct BlockExecutor<'a> {
     pub receipts: Vec<Receipt>,
     /// The block's change set (revm's bundle counterpart).
     pub changes: BlockStateAccumulator,
+    /// Whole pre-block states in commit order, including read-only accounts and slots.
+    pub pre_block_states: Vec<PendingState>,
+    /// Valid SALT lookups across every execution in this block, including discarded candidates.
+    #[cfg(feature = "witness")]
+    pub bucket_reads: std::collections::BTreeSet<u64>,
     pub parent_hash: alloy_primitives::B256,
     pub parent_beacon_block_root: Option<alloy_primitives::B256>,
     /// An activation block admits only deposits (false for every replayed block).
@@ -164,76 +169,105 @@ impl<'a> BlockExecutor<'a> {
             limiter: BlockLimiter { block_gas_limit, ..Default::default() },
             receipts: Vec::new(),
             changes: BlockStateAccumulator::new(),
+            pre_block_states: Vec::new(),
+            #[cfg(feature = "witness")]
+            bucket_reads: Default::default(),
             parent_hash,
             parent_beacon_block_root,
             only_deposits: false,
         }
     }
 
-    fn system_call(&mut self, target: Address, data: Bytes) -> Result<(), String> {
+    fn system_call(&mut self, target: Address, data: Bytes) -> Result<PendingState, String> {
         self.evm.ext_mut().begin_system_call();
         let executed = self
             .evm
             .system_call(SystemTx::new(target, data))
             .map_err(|e| format!("system call {target}: {e:?}"))?;
-        let r = executed.commit_to(&mut self.changes);
+        let TxResultWithState { result: r, pending_state, .. } = executed.detach();
         if !r.status {
             return Err(format!("system call {target} failed: {:?}", r.stop));
         }
-        Ok(())
+        Ok(pending_state)
+    }
+
+    fn commit_pre_block_state(&mut self, state: PendingState) {
+        self.evm.commit_source(&state);
+        let _ = state.visit(&mut self.changes);
+        self.pre_block_states.push(state);
     }
 
     /// Whether the registry has a role change due in this block (Satin
     /// `is_apply_pending_changes_due`), read off the block's state: each role's pending value, and
     /// its activation block when one is pending. A read the database cannot serve is an error.
     pub fn registry_due(&mut self) -> Result<bool, String> {
+        self.read_registry_due().map(|(due, _)| due)
+    }
+
+    fn read_registry_due(&mut self) -> Result<(bool, PendingState), String> {
         let number = self.evm.block().number;
         let state = self.evm.state_mut();
         let failed = |e: evm2::DatabaseError| format!("registry read: {e:?}");
-        if state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(failed)?.is_none() {
-            return Ok(false);
-        }
+        let info = state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(failed)?;
+        let mut reads = PendingState::default();
+        reads.insert_account(SEQUENCER_REGISTRY, info.clone(), info.clone());
         let mut due = false;
-        for (p, a) in REGISTRY_PENDING {
-            let pending = state
-                .storage_slot_untracked(&SEQUENCER_REGISTRY, &U256::from(p))
-                .map_err(failed)?;
-            if pending.is_zero() {
-                continue;
+        if info.is_some() {
+            for (p, a) in REGISTRY_PENDING {
+                let key = U256::from(p);
+                let pending =
+                    state.storage_slot_untracked(&SEQUENCER_REGISTRY, &key).map_err(failed)?;
+                reads.insert_storage(SEQUENCER_REGISTRY, key, pending, pending);
+                if pending.is_zero() {
+                    continue;
+                }
+                let key = U256::from(a);
+                let activation =
+                    state.storage_slot_untracked(&SEQUENCER_REGISTRY, &key).map_err(failed)?;
+                reads.insert_storage(SEQUENCER_REGISTRY, key, activation, activation);
+                due |= number >= activation;
             }
-            let activation = state
-                .storage_slot_untracked(&SEQUENCER_REGISTRY, &U256::from(a))
-                .map_err(failed)?;
-            due |= number >= activation;
         }
-        Ok(due)
+        Ok((due, reads))
     }
 
     /// Satin `apply_pre_execution_changes` (no activation block: the predeploy check is not made).
     /// A block without a parent beacon block root is refused at the EIP-4788 step.
     pub fn apply_pre_execution_changes(&mut self) -> Result<(), String> {
         let parent = Bytes::from(self.parent_hash.0.to_vec());
-        self.system_call(HISTORY_STORAGE, parent)?;
+        let state = self.system_call(HISTORY_STORAGE, parent)?;
+        self.commit_pre_block_state(state);
         // A block without a parent beacon block root is invalid (EIP-4788).
         let root = self
             .parent_beacon_block_root
             .ok_or_else(|| "missing parent beacon block root (EIP-4788)".to_owned())?;
-        self.system_call(BEACON_ROOTS, Bytes::from(root.0.to_vec()))?;
-        if self.registry_due()? {
-            self.system_call(
+        let state = self.system_call(BEACON_ROOTS, Bytes::from(root.0.to_vec()))?;
+        self.commit_pre_block_state(state);
+        let (due, reads) = self.read_registry_due()?;
+        self.commit_pre_block_state(reads);
+        if due {
+            let state = self.system_call(
                 SEQUENCER_REGISTRY,
                 Bytes::from(keccak256("applyPendingChanges()")[..4].to_vec()),
             )?;
+            self.commit_pre_block_state(state);
         }
         // Satin `read_l1_block_info`: the account, then its slots when it exists. A read the
         // database cannot serve fails the block.
         let state = self.evm.state_mut();
         let failed = |e: evm2::DatabaseError| format!("L1 block info read: {e:?}");
-        if state.account_info_untracked(&L1_BLOCK_CONTRACT).map_err(failed)?.is_some() {
-            for s in L1_BLOCK_INFO_SLOTS {
-                state.storage_slot_untracked(&L1_BLOCK_CONTRACT, &U256::from(s)).map_err(failed)?;
+        let info = state.account_info_untracked(&L1_BLOCK_CONTRACT).map_err(failed)?;
+        let mut reads = PendingState::default();
+        reads.insert_account(L1_BLOCK_CONTRACT, info.clone(), info.clone());
+        if info.is_some() {
+            for slot in L1_BLOCK_INFO_SLOTS {
+                let key = U256::from(slot);
+                let value =
+                    state.storage_slot_untracked(&L1_BLOCK_CONTRACT, &key).map_err(failed)?;
+                reads.insert_storage(L1_BLOCK_CONTRACT, key, value, value);
             }
         }
+        self.commit_pre_block_state(reads);
         Ok(())
     }
 
@@ -279,11 +313,15 @@ impl<'a> BlockExecutor<'a> {
         let sender = tx.signer();
         let before =
             self.evm.read_account_info(&sender).map_err(|e| format!("{e:?}"))?.unwrap_or_default();
-        let executed = self
-            .evm
-            .transact(tx)
-            .map_err(|e| format!("EVM reported invalid transaction: {e:?}"))?;
-        let TxResultWithState { result, pending_state, .. } = executed.detach();
+        #[cfg(feature = "witness")]
+        self.evm.ext_mut().bucket_reads.clear();
+        let executed = self.evm.transact(tx).map(|executed| executed.detach());
+        // Capture successful capacity answers even if a later lookup aborts the transaction.
+        // Committing an outcome executed elsewhere deliberately contributes no reads here.
+        #[cfg(feature = "witness")]
+        self.bucket_reads.extend(self.evm.ext().bucket_reads.iter().copied());
+        let TxResultWithState { result, pending_state, .. } =
+            executed.map_err(|e| format!("EVM reported invalid transaction: {e:?}"))?;
         let ext = self.evm.ext();
         let usage = ext.usage(result.status);
         let (history, history_bytes) = ext.history(result.status);

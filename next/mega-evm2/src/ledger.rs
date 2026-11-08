@@ -323,6 +323,9 @@ impl Lite {
         let budget =
             core::array::from_fn(|i| limits[i].saturating_sub(self.tx_net[i].max(0) as u64));
         self.frames.push(Entry { budget, ..Entry::default() });
+        if sender == evm2::evm::SYSTEM_ADDRESS && !crate::off("protocol_origin") {
+            self.set_system_originated();
+        }
     }
 
     /// Resets the ledger for a pre-block system call: the protocol's own work, and a system call
