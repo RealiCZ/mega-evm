@@ -35,10 +35,11 @@ SAMPLE_FUZZ_BATCHES=(
 # `regen-reference.sh` read it.
 MAIN_EXPECT="total=2687 match=2515 known=5 class=167"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
-# gate (mode 11's first-frame window and mode 14's pairs, `halted_first_frame`; mode 14's pairs and
-# mode 4, `modexp_bound_label` and `auth_preflight_reads`); every other seed must match.
+# gate (mode 11's first-frame window and mode 14's pairs, `halted_first_frame`; mode 14's pairs,
+# `modexp_bound_label` and `modexp_formula_price`; mode 14's pairs and mode 4's seeds,
+# `auth_preflight_reads`); every other seed must match.
 SAMPLE_FUZZ_CLASS=53
-FULL_FUZZ_CLASS=394
+FULL_FUZZ_CLASS=420
 # The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
 MAIN_TOTAL=${MAIN_EXPECT#total=}
 MAIN_TOTAL=${MAIN_TOTAL%% *}
