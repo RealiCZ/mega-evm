@@ -8,4 +8,31 @@
 #   kind = "line"      the exact mutant text of a survivor or a timeout, as in missed.txt
 # Every entry carries category ("equivalent" or "dead"), justification and reviewer.
 #
-# No entry yet: the first full run decides which survivors are equivalent.
+
+[[suppress]]
+kind = "line"
+category = "equivalent"
+file = "mega-evm2/src/satin_ext.rs"
+mutant = "delete field hints from struct Self expression in MechanismState::reset"
+why = "MechanismState::reset empties the hint list (hints.clear()) before it rebuilds the state, so the default empty list that replaces it is equal; only the vector's capacity differs, which nothing reads."
+justification = "Equivalent: the list is cleared on the line above, so keeping it or defaulting it gives the same empty list."
+reviewer = "pending"
+
+[[suppress]]
+kind = "line"
+category = "equivalent"
+file = "mega-evm2/src/satin_ext.rs"
+mutant = "replace || with && in hold_caller"
+why = "hold_caller returns early when no hint bytes were counted; without a hint no dimension can be over its limit as a caller resumes, because every mutation site stops at its crossing, so running the check anyway finds nothing."
+justification = "Equivalent: the early return on hint_bytes == 0 is an optimization. A system-originated transaction, the one case that can be over a limit without a hint, returns on the first operand, which a separate mutant of the same line (caught by port_hold_caller_system_exempt) pins."
+reviewer = "pending"
+
+[[suppress]]
+kind = "line"
+category = "equivalent"
+file = "mega-evm2/src/satin_ext.rs"
+mutant = "replace + with - in hold_caller"
+why = "The transaction's state growth enters the total of the state-growth dimension only; that dimension is never over its limit as a caller resumes, since each rise of it is checked against the same total when it is made, so the sign of the term cannot change the decision."
+justification = "Equivalent: only a hint's data-size bytes stay counted when the frame that sent them fails; the growth dimension cannot be over its limit at the resume. The term's other use (added to the other dimensions by a wrong index) is pinned by port_hold_caller_at_limit."
+reviewer = "pending"
+
