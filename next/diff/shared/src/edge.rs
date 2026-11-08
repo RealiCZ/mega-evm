@@ -11,7 +11,8 @@
 //!   the leaf's state gas, its unit of state growth and its write record, whichever charge made it;
 //!   an account that existed empty at the start keeps its leaf;
 //! - a transaction-level precompile call detained from the start (sender or recipient is the
-//!   beneficiary): priced and held as a child call is;
+//!   beneficiary): priced and held as a child call is, also when the precompile's address holds an
+//!   EIP-7702 delegation (the precompile runs, not its delegate);
 //! - a SALT bucket that reports a capacity below the minimum bucket: the transaction fails;
 //! - per-transaction limits at or above 2^63: compared over the whole `u64` range;
 //! - a `keylessDeploy` call whose `bytes` offset is the largest machine word: malformed encoding;
@@ -42,12 +43,14 @@
 //!   the class of their label;
 //! - a value the recipient returns to the sender (a call, a destruction): the start record is taken
 //!   back in the first frame, and the reservoir it returns unwinds the transaction's spill.
+//! - a creation transaction whose created address is the block beneficiary: a creation has no
+//!   recipient, so it is not detained from its start (its sender still is).
 #![allow(dead_code)]
 use super::{
     A, Account, Asm, Auth, B, BELOW_CAP, BLOCK_GAS_LIMIT, D, EMPTY, IDENTITY, KEYLESS, Limits,
     ORACLE, SENDER, SEQUENCER_REGISTRY, Scenario, acct, funded, init_returning, op, scenario,
 };
-use alloy_primitives::{Address, B256, U256, b256, hex, keccak256};
+use alloy_primitives::{Address, B256, U256, address, b256, hex, keccak256};
 
 /// The system address the registry names in these scenarios.
 pub const SYSTEM: Address = Address::with_last_byte(0x5a);
@@ -59,6 +62,7 @@ const REGISTRY_CODE_HASH: B256 =
     b256!("abd7e8f1c8f0f9ca0346df585b65d9791a7e9ba5c431cc4eda5d2c2f1f5e9c43");
 const RIPEMD160: Address = Address::with_last_byte(0x03);
 const BLAKE2F: Address = Address::with_last_byte(0x09);
+const P256VERIFY: Address = address!("0x0000000000000000000000000000000000000100");
 pub(crate) const ONE_ETHER: u64 = 1_000_000_000_000_000_000;
 
 fn edge(name: &'static str, accounts: Vec<Account>, gas: u64, limits: Limits) -> Scenario {
@@ -257,6 +261,19 @@ fn top_level_precompile() -> Vec<Scenario> {
         s.to = RIPEMD160;
         s.data = vec![0; 32];
         s.beneficiary = beneficiary;
+        v.push(s);
+    }
+    // A precompile address that holds an EIP-7702 delegation (to B) still runs the precompile, so
+    // it is priced and held as the precompile, not as its delegate: RIPEMD160 (an input-only price)
+    // and P256VERIFY (priced by a run), under a cap of 10 with the sender as the beneficiary.
+    for (name, precompile, data) in [
+        ("edge_top_delegated_precompile_ripemd160", RIPEMD160, vec![0; 32]),
+        ("edge_top_delegated_precompile_p256verify", P256VERIFY, vec![0; 160]),
+    ] {
+        let mut s = edge(name, vec![acct(precompile, delegation(B))], BELOW_CAP, cap);
+        s.to = precompile;
+        s.data = data;
+        s.beneficiary = SENDER;
         v.push(s);
     }
     v
@@ -1152,5 +1169,59 @@ pub fn all() -> Vec<Scenario> {
     v.extend(value_returned_to_sender());
     v.extend(modexp_over_bound());
     v.extend(deposit_creation_nonce_max());
+    v.extend(creation_onto_beneficiary());
+    v
+}
+
+/// A creation transaction whose created address (`SENDER.create(0)`) is the block beneficiary: a
+/// creation has no recipient, and its loads of the created address are its own checks, so nothing
+/// detains it from its start. At a cap of 1 (legacy, EIP-1559 and deposit envelopes) BASEFEE
+/// detains the constructor and the POP after it is the crossing; at the default cap the
+/// constructor stores what `remainingComputeGas()` answers, which a detention from the start would
+/// lower to the cap. Controls: another beneficiary at the default cap, and a sender that is the
+/// beneficiary, which detains the creation from its start.
+fn creation_onto_beneficiary() -> Vec<Scenario> {
+    let created = super::SENDER.create(0);
+    // BASEFEE POP PUSH0 PUSH0 RETURN.
+    let basefee = hex!("48505f5ff3").to_vec();
+    let cap_one = Limits { block_env_cap: Some(1), ..Limits::default() };
+    let mut v = Vec::new();
+    for (name, tx_type, deposit) in [
+        ("edge_create_tx_beneficiary_is_created_address_legacy", 0u8, None),
+        ("edge_create_tx_beneficiary_is_created_address_1559", 2, None),
+        ("edge_create_tx_beneficiary_is_created_address_deposit", 0, Some(0)),
+    ] {
+        let mut s = edge(name, vec![], 1_000_000, cap_one);
+        s.create = true;
+        s.data = basefee.clone();
+        s.tx_type = tx_type;
+        s.deposit = deposit;
+        s.beneficiary = created;
+        v.push(s);
+    }
+    let mut s = edge("edge_create_tx_sender_is_beneficiary", vec![], 1_000_000, cap_one);
+    s.create = true;
+    s.data = basefee;
+    s.beneficiary = super::SENDER;
+    v.push(s);
+    // The constructor stores the call's success and RETURNDATASIZE at 0x10 and 0x11, and the
+    // remaining compute gas it is answered at 0x20.
+    let remaining = Asm::new()
+        .mstore_selector(super::remaining_compute_gas_selector())
+        .call_with(op::CALL, super::LIMIT_CONTROL, 0, 500_000, 4)
+        .record_call(0x10)
+        .store_returndata_word(0x20)
+        .stop()
+        .build();
+    for (name, beneficiary) in [
+        ("edge_create_tx_beneficiary_is_created_address_default_cap", created),
+        ("edge_create_tx_beneficiary_is_another_address_default_cap", B),
+    ] {
+        let mut s = edge(name, vec![], 30_000_000, Limits::default());
+        s.create = true;
+        s.data = remaining.clone();
+        s.beneficiary = beneficiary;
+        v.push(s);
+    }
     v
 }

@@ -63,7 +63,7 @@ An input that finds a difference belongs in a scenario of the gates once the dif
 ## Switches and negative controls
 
 Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`; `MEGA_EVM2_DISABLE=<name>,…` turns it off, with feature `compare` only, and without that feature `off` is a constant `false`.
-A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root) has no switch; an engine test in `mega-evm2/tests` proves it instead.
+A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root, a keyless deployment with EIP-3607 disabled) has no switch; an engine test in `mega-evm2/tests` proves it instead.
 The harness's fixture choices that make the engine's inputs match the reference's are switches too, `off("<name>")` in `diff`.
 
 `diff/negative-controls.toml` names, for each switch, one gate case that must differ when the switch is off, and in `why` what the fix does.
@@ -75,7 +75,8 @@ To add a control, run a gate test with `MEGA_EVM2_DISABLE=<name>`, pick a differ
 `faults.sh` injects faults into a copy of the sample's reference data, one at a time, and runs the gate each concerns; the repository is not modified.
 The faults are a representative set, listed in `diff/scripts/faults.py`: for each kind of check a gate makes, one wrong value, entry, count or accepted difference.
 
-A fault counts as rejected only when its gate fails and the output shows the check the fault names, while the unmutated run's output does not; the unmutated copy must pass every gate first.
+A fault counts as rejected only when its gate fails and the output shows the check the fault names, while the unmutated run's output does not, and every test of the run completed: a run killed or crashed before its libtest result proves no check, whatever it printed (the fault `main-killed-after-differ` kills one after its difference to show that).
+The unmutated copy must pass every gate first.
 When a gate gains a new kind of check, add a fault for it.
 
 ## CI

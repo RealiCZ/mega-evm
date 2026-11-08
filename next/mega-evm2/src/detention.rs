@@ -536,9 +536,15 @@ pub fn hold_charge(
 /// and the failed-charge record holds the charge (`GasTracker::failed_charge`), before any of its
 /// work; an input it refuses before any gas check (over a size cap, a malformed length) is priced
 /// at nothing, as Satin's op-revm fork prices it.
+///
+/// The entry is the one evm2 dispatches, at the message's `call_target`: a precompile address
+/// that holds an EIP-7702 delegation still runs (and is priced as) the precompile, not its
+/// delegate.
 pub fn precompile_price_of(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> Option<u64> {
-    let p = crate::precompile_map().get(&msg.code_address)?;
-    if let Some(price) = precompile_price(&msg.code_address, &msg.input) {
+    let address =
+        if crate::off("precompile_price_target") { msg.code_address } else { msg.call_target };
+    let p = crate::precompile_map().get(&address)?;
+    if let Some(price) = precompile_price(&address, &msg.input) {
         return Some(price);
     }
     if crate::off("precompile_catalog") {
@@ -549,7 +555,7 @@ pub fn precompile_price_of(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes
     let first = probe.failed_charge().map_or(0, |(_, cost)| cost);
     // evm2's ModExp charges its 500 minimum, then the rest (`modexp.rs:240`); every
     // other entry charges once. A second probe funded with the first charge reads the rest.
-    if msg.code_address == alloy_primitives::Address::with_last_byte(5) &&
+    if address == alloy_primitives::Address::with_last_byte(5) &&
         first > 0 &&
         !crate::off("modexp_two_step")
     {

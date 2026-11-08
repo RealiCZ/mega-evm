@@ -15,7 +15,7 @@ use crate::{MegaTypes, detention, ledger::*};
 use alloy_consensus::{Signed, TxLegacy, transaction::RlpEcdsaDecodableTx};
 use alloy_primitives::{Address, B256, Bytes, KECCAK256_EMPTY, U256, keccak256};
 use evm2::{
-    Evm, EvmTypesHost,
+    Evm, EvmFeatures, EvmTypesHost,
     bytecode::Bytecode,
     interpreter::{
         Gas, GasTracker, Host, InstrStop, InterpreterState, Message, MessageKind, MessageResult,
@@ -221,10 +221,14 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     }
     let Some(signer) = recover(&signed) else { refuse!(err("InvalidSignature()", &[])) };
     let deploy = signer.create(0);
+    // The signer-code rule is EIP-3607's: with the feature off, the signer's code is neither
+    // loaded nor checked.
+    let checks_code = state.feature(EvmFeatures::EIP3607);
     let loaded = (|| -> core::result::Result<_, evm2::HostError> {
         let mut acc = state.host().state_mut().account(&signer).map_err(evm2::HostError::from)?;
         acc.warm();
-        let code = acc.load_code().map_err(evm2::HostError::from)?;
+        let code =
+            if checks_code { Some(acc.load_code().map_err(evm2::HostError::from)?) } else { None };
         Ok((acc.get().cloned().unwrap_or_default(), code))
     })();
     let (info, code) = loaded.map_err(|e| state.fail(e))?;
@@ -235,7 +239,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     if info.nonce > 1 {
         refuse!(err("SignerNonceTooHigh(uint64)", &[w(info.nonce)]));
     }
-    if !code.is_empty() && !code.is_eip7702() {
+    if code.is_some_and(|code| !code.is_empty() && !code.is_eip7702()) {
         refuse!(err("SignerHasCode()", &[]));
     }
     let signer_account_charged = info.is_empty();

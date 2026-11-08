@@ -1049,12 +1049,14 @@ impl MessageHooks<MegaTypes> for StartHooks {
     > {
         // A transaction whose sender or recipient is the block beneficiary, or whose
         // recipient delegates to it, reads volatile data from its start: detained at compute 0.
+        // A creation has no recipient: its created address is no recipient even when it is the
+        // beneficiary, and its loads of it are the creation's own checks, not volatile reads.
         if msg.depth == 0 && !off("tx_beneficiary") {
             let beneficiary = evm.block().beneficiary;
+            let recipient = !msg.kind.is_create() || off("creation_no_recipient");
             let ext = evm.ext_mut();
             if (msg.caller == beneficiary ||
-                msg.call_target == beneficiary ||
-                msg.code_address == beneficiary) &&
+                recipient && (msg.call_target == beneficiary || msg.code_address == beneficiary)) &&
                 detention::detains(ext) &&
                 ext.detention.cap != u64::MAX
             {
