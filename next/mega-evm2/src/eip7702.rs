@@ -4,9 +4,10 @@
 //! Validation is evm2's `eip7702::prepare_with_hooks` (EIP-2780 intrinsic, 7,816 per entry) with
 //! the Satin body (101 bytes per entry) and a data-size check of the body plus one write record
 //! per entry. Execution follows evm2's `eip7702::execute_prepared` step for step and adds:
-//! - the list rule: a list that would keep more write records or create more accounts than the
-//!   transaction's KV / state-growth limits allow is simulated, skipped whole and the first frame
-//!   stopped before it runs (`MegaLimitExceeded(1|3, tx limit)`);
+//! - the list rule: every list is simulated, whatever its length, loading each authority it
+//!   consults; a list that would keep more write records or create more accounts than the
+//!   transaction's KV / state-growth limits allow is skipped whole and the first frame stopped
+//!   before it runs (`MegaLimitExceeded(1|3, tx limit)`);
 //! - the authorities' records: one KV record and 40 bytes per distinct applied authority other than
 //!   the sender, one unit of growth per authority the application created, kept on the transaction
 //!   whatever the first frame does, their history charged with the first frame's start record
@@ -181,22 +182,26 @@ pub fn execute(
     };
 
     // The list rule: decided before the list is applied, KV first, then state growth, against
-    // the transaction's limits (no frame budget exists yet).
+    // the transaction's limits (no frame budget exists yet). Every list is simulated, whatever its
+    // length: the authorities it consults are loaded whether or not the list is then applied or
+    // runs out of gas part-way, so the accounts the transaction loads (its witness) do not depend
+    // on the list's length or on where an out-of-gas falls.
     let entries = tx.authorizations().len() as u64;
     let (kv_room, growth_room) = {
         let ext = host.ext();
         let room = |i: usize| {
-            crate::room(ext.cfg.limits[i], ext.tx_net[i] + if i == 2 { ext.tx_growth } else { 0 })
+            crate::room(ext.limits.tx[i], ext.tx_net[i] + if i == 2 { ext.tx_growth } else { 0 })
         };
         (room(1), room(2))
     };
     let mut skip = None;
-    if !host.ext().exempt &&
-        !crate::off("auth_list_rule") &&
-        (entries > kv_room || entries > growth_room)
+    let may_cross = entries > kv_room || entries > growth_room;
+    let short_list_unsimulated =
+        crate::under_reference_rule(host.ext(), crate::ReferenceRuleId::ShortListUnsimulated);
+    if !host.ext().exempt && !crate::off("auth_list_rule") && (may_cross || !short_list_unsimulated)
     {
         let (records, created) = simulate(host, chain_id, caller, tx.authorizations())?;
-        let limits = host.ext().cfg.limits;
+        let limits = host.ext().limits.tx;
         if records > kv_room {
             skip = Some((1u8, limits[1]));
         } else if created > growth_room {

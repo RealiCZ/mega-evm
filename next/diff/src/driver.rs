@@ -22,8 +22,9 @@ const _: () = assert!(scenarios::MIN_BUCKET == MIN_BUCKET_SIZE);
 use serde_json::{Map, Value, json};
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
-pub const DEFAULT_LIMITS: [u64; 3] = [13_107_200, 500_000, 1_000];
-pub const DEFAULT_DETENTION_CAP: u64 = 20_000_000;
+/// Satin's transaction limits and detention cap, which a scenario's own `limits` override.
+pub const DEFAULT_LIMITS: [u64; 3] = mega_evm2::TxLimits::SATIN.tx;
+pub const DEFAULT_DETENTION_CAP: u64 = mega_evm2::TxLimits::SATIN.cap;
 
 pub fn status_of(stop: InstrStop) -> String {
     if stop.is_success() {
@@ -328,13 +329,17 @@ pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
     // Read storage of an account the database lacks, as revm does.
     evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
     let ext = evm.ext_mut();
-    ext.cfg.limits = [
-        s.limits.data.unwrap_or(DEFAULT_LIMITS[0]),
-        s.limits.kv.unwrap_or(DEFAULT_LIMITS[1]),
-        s.limits.growth.unwrap_or(DEFAULT_LIMITS[2]),
-    ];
-    ext.cfg.cap = s.limits.block_env_cap.unwrap_or(DEFAULT_DETENTION_CAP);
-    ext.cfg.oracle_cap = s.limits.oracle_cap.unwrap_or(DEFAULT_DETENTION_CAP);
+    // A scenario's own limits are a test's explicit override of Satin's (`TxLimits::SATIN`), as
+    // the reference's harness overrides its spec's limits.
+    ext.limits = mega_evm2::TxLimits {
+        tx: [
+            s.limits.data.unwrap_or(DEFAULT_LIMITS[0]),
+            s.limits.kv.unwrap_or(DEFAULT_LIMITS[1]),
+            s.limits.growth.unwrap_or(DEFAULT_LIMITS[2]),
+        ],
+        cap: s.limits.block_env_cap.unwrap_or(DEFAULT_DETENTION_CAP),
+        oracle_cap: s.limits.oracle_cap.unwrap_or(mega_evm2::TxLimits::SATIN.oracle_cap),
+    };
     for (k, v) in &s.oracle {
         ext.cfg.oracle.insert(U256::from(*k), U256::from(*v));
     }
@@ -454,8 +459,25 @@ pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
 
 /// Runs `s` (plain, or with the frame-recording inspector) and renders the outcome.
 pub fn run(s: &Scenario, inspected: bool) -> Value {
+    run_with(s, inspected, None)
+}
+
+/// The recipient of `s`'s transaction: none for a creation.
+pub fn recipient(s: &Scenario) -> Option<alloy_primitives::Address> {
+    (!s.create).then_some(s.to)
+}
+
+/// Both runs of `s`, plain then inspected, with the engine under the reference's `rule`
+/// (`Lite::reference_rule`): the runs a class of a change the reference has not made yet is
+/// checked with (`gate::scenario_verdict`).
+pub fn runs_under(s: &Scenario, rule: ReferenceRule) -> (Value, Value) {
+    (run_with(s, false, Some(rule)), run_with(s, true, Some(rule)))
+}
+
+fn run_with(s: &Scenario, inspected: bool, rule: Option<ReferenceRule>) -> Value {
     let reads = Rc::new(RefCell::new(Reads::default()));
     let mut evm = evm(s, reads.clone());
+    evm.ext_mut().reference_rule = rule;
     if inspected {
         evm.set_inspector(Frames::default());
     }
@@ -490,7 +512,18 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
         ("group", json!(s.group)),
         ("reads", read_set),
         ("frames", json!(frames)),
-        ("priced", json!(ext.detention.priced.iter().map(|p| json!(p)).collect::<Vec<_>>())),
+        (
+            "priced",
+            json!(
+                ext.detention
+                    .priced
+                    .iter()
+                    .map(|(price, allowance, held, address)| {
+                        json!([price, allowance, held, format!("{address}")])
+                    })
+                    .collect::<Vec<_>>()
+            ),
+        ),
         (
             "hints",
             json!(

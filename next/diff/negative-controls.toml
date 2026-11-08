@@ -5,7 +5,9 @@
 # feature `compare` only, otherwise a constant `false`). Each engine switch has a `[[control]]`
 # table. A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block
 # system call, a block without a parent beacon block root, a keyless deployment with EIP-3607
-# disabled) has no switch; an engine test in `next/mega-evm2/tests` proves it instead. The gate
+# disabled, among others: `next/README.md` lists them) has no switch; an engine test in
+# `next/mega-evm2/tests` proves it instead. Neither has a change the reference has not made yet
+# (a class of `known-differences.toml`): turned off, the engine would match the reference. The gate
 # harness has switches of its own, `off("<name>")` in `next/diff`, for fixture choices that make
 # the engine's inputs match the reference's (absent accounts, delegation code, reads of absent
 # storage); each has a `[[harness]]` table with the same keys.

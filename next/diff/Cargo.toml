@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 # megaeth
-mega-evm2 = { path = "../mega-evm2", features = ["compare"] }
+mega-evm2 = { path = "../mega-evm2", features = ["compare", "salt-test-hasher"] }
 mega-evm2-scenarios = { path = "shared" }
 op-evm2 = { workspace = true, features = ["std"] }
 

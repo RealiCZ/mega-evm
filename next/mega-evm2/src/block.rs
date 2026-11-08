@@ -150,11 +150,14 @@ pub struct BlockExecutor<'a> {
 }
 
 impl<'a> BlockExecutor<'a> {
+    /// An executor over `evm`, whose transactions run under Satin's limits and detention caps
+    /// ([`crate::TxLimits::SATIN`]) whatever the EVM was set up with: they are block validity.
     pub fn new(
-        evm: Evm<'a, MegaTypes>,
+        mut evm: Evm<'a, MegaTypes>,
         parent_hash: alloy_primitives::B256,
         parent_beacon_block_root: Option<alloy_primitives::B256>,
     ) -> Self {
+        evm.ext_mut().limits = crate::TxLimits::SATIN;
         let block_gas_limit = evm.block().gas_limit.saturating_to();
         Self {
             evm,

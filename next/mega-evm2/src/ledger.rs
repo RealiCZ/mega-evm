@@ -29,21 +29,45 @@ pub const ORACLE: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01]);
 pub const SEQUENCER_REGISTRY: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x06]);
+/// The registry slot that holds `_currentSystemAddress`: slot 0, fixed by the protocol.
+pub const REGISTRY_SLOT: U256 = U256::ZERO;
 
-/// What the node configures (persists across transactions).
+/// What the node supplies (persists across transactions): the inputs the protocol leaves to the
+/// node's environment, SALT's bucket capacities and the Oracle service's answers.
 #[derive(Clone, Debug, Default)]
 pub struct Cfg {
-    pub limits: [u64; 3],
-    /// Detention's block-environment cap (`u64::MAX`: off).
-    pub cap: u64,
     /// SALT bucket capacities by bucket id; missing = the minimum bucket.
     pub buckets: HashMap<u64, u64>,
-    /// The registry slot that holds `_currentSystemAddress`.
-    pub registry_slot: U256,
-    /// Detention's Oracle cap (`u64::MAX`: off).
-    pub oracle_cap: u64,
     /// The oracle service's answers by slot (Satin `OracleEnv::get_oracle_storage`).
     pub oracle: HashMap<U256, U256>,
+}
+
+/// The per-transaction limits and gas detention's caps a transaction runs under (Satin
+/// `ProtocolLimits::for_spec(SATIN).tx_runtime_limits`). They are protocol values, not
+/// configuration: [`TxLimits::SATIN`] is the default, and the block executor installs it whatever
+/// an embedder set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TxLimits {
+    /// The transaction limits by pool index: data size, KV updates, state growth.
+    pub tx: [u64; 3],
+    /// Detention's block-environment cap (`u64::MAX`: off).
+    pub cap: u64,
+    /// Detention's Oracle cap (`u64::MAX`: off).
+    pub oracle_cap: u64,
+}
+
+impl TxLimits {
+    /// Satin's: a transaction keeps at most 13,107,200 bytes of data size, 500,000 write records
+    /// and 1,000 new accounts and slots; a read of volatile data caps its compute at the compute at
+    /// the read plus 20,000,000, for the block environment and the Oracle alike.
+    pub const SATIN: Self =
+        Self { tx: [13_107_200, 500_000, 1_000], cap: 20_000_000, oracle_cap: 20_000_000 };
+}
+
+impl Default for TxLimits {
+    fn default() -> Self {
+        Self::SATIN
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -122,6 +146,10 @@ pub struct Settlement {
 #[derive(Clone, Debug, Default)]
 pub struct Lite {
     pub cfg: Cfg,
+    /// The limits every transaction runs under: Satin's ([`TxLimits::SATIN`]), which the block
+    /// executor installs. A tool or a test that runs under other values sets them here; what it
+    /// computes is then a counterfactual, not the chain's result.
+    pub limits: TxLimits,
     pub l1: op_evm2::L1BlockInfo,
     pub sender: Address,
     /// Deposits pay no history (`prices_history`).
@@ -174,6 +202,23 @@ pub struct Lite {
     /// The state of the volatile-access control, hint, authority and keyless mechanisms
     /// (`satin_ext.rs`).
     pub mechanisms: crate::satin_ext::MechanismState,
+    /// Comparison only: a rule of the implementation under review that the engine has changed and
+    /// that implementation has not yet, to run under instead of the engine's; the gates run a case
+    /// again under it to check the accepted class of that difference. Kept across transactions.
+    #[cfg(feature = "compare")]
+    pub reference_rule: Option<ReferenceRule>,
+}
+
+/// A rule of the implementation under review that the engine has changed by a decision that
+/// implementation has not made yet (`Lite::reference_rule`, comparison only).
+#[cfg(feature = "compare")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReferenceRule {
+    /// `SLOTNUM` pushes the block environment's slot number instead of zero.
+    SlotNumber,
+    /// An EIP-7702 list too short to cross the transaction's KV or state-growth limit is applied
+    /// without the simulation, which then loads none of its authorities.
+    ShortListUnsimulated,
 }
 
 /// Withheld gas a code deposit drew (its state spill, its history), which an admission refusal
@@ -247,7 +292,7 @@ impl Lite {
         #[cfg(feature = "compare")]
         self.settlements.clear();
         self.stops = 0;
-        self.detention.reset(self.cfg.cap, self.cfg.oracle_cap);
+        self.detention.reset(self.limits.cap, self.limits.oracle_cap);
         self.tx_start_charge = 0;
         self.tx_start_bytes = 0;
         self.last_caller_remaining = 0;
@@ -271,7 +316,7 @@ impl Lite {
         self.body_bytes = if prices_history { body_bytes } else { 0 };
         self.body_history = self.body_bytes * CPHB;
         self.tx_net = [body_bytes as i64, 0, 0];
-        let limits = self.cfg.limits;
+        let limits = self.limits.tx;
         let budget =
             core::array::from_fn(|i| limits[i].saturating_sub(self.tx_net[i].max(0) as u64));
         self.frames.push(Entry { budget, ..Entry::default() });
@@ -318,8 +363,8 @@ impl Lite {
             }
             let total: i64 =
                 self.tx_net[i] + if i == 2 { self.tx_growth } else { 0 } + self.frames_net[i];
-            if over(total + delta[i], self.cfg.limits[i]) {
-                return Some((KIND[i], self.cfg.limits[i]));
+            if over(total + delta[i], self.limits.tx[i]) {
+                return Some((KIND[i], self.limits.tx[i]));
             }
         }
         let top = self.frames.last_mut().unwrap();
@@ -355,8 +400,8 @@ impl Lite {
             }
             let total: i64 =
                 self.tx_net[i] + if i == 2 { self.tx_growth } else { 0 } + self.frames_net[i];
-            if (draws || hold) && over(total + delta[i].max(0), self.cfg.limits[i]) {
-                return Some((kind, self.cfg.limits[i]));
+            if (draws || hold) && over(total + delta[i].max(0), self.limits.tx[i]) {
+                return Some((kind, self.limits.tx[i]));
             }
         }
         let top = self.frames.last_mut().unwrap();
@@ -379,8 +424,8 @@ impl Lite {
             }
             let total =
                 self.tx_net[i] + if i == 2 { self.tx_growth } else { 0 } + self.frames_net[i];
-            if over(total, self.cfg.limits[i]) {
-                return Some((kind, self.cfg.limits[i]));
+            if over(total, self.limits.tx[i]) {
+                return Some((kind, self.limits.tx[i]));
             }
         }
         None
@@ -596,16 +641,17 @@ pub fn refill_history(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTy
     state.host().ext_mut().book_history(-((bytes * CPHB) as i64), -(bytes as i64));
 }
 
-/// SALT: the bucket id of `key`: the production hasher under `salt-ahash` (the measured build,
-/// as `mega-evme`'s replay uses), else Satin's test hasher.
-#[cfg(feature = "salt-ahash")]
+/// SALT: the bucket id of `key`, by SALT's own production mapping (`salt_hash`), which the
+/// specification takes as an input; feature `salt-test-hasher` swaps in Satin's test hasher.
+#[cfg(not(feature = "salt-test-hasher"))]
 #[inline(always)]
 pub fn bucket_id(key: &[u8]) -> u64 {
     crate::salt_hash::bucket_id(key)
 }
 
-/// SALT: FNV-1a bucket ids of Satin's `TestExternalEnvs` (`SimpleBucketHasher`).
-#[cfg(not(feature = "salt-ahash"))]
+/// SALT: FNV-1a bucket ids of Satin's `TestExternalEnvs` (`SimpleBucketHasher`), which the
+/// differential scenarios name buckets with (feature `salt-test-hasher` only).
+#[cfg(feature = "salt-test-hasher")]
 pub fn bucket_id(key: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for &byte in key {
@@ -678,4 +724,25 @@ pub fn multiplier(
     ext.bucket_reads.insert(id);
     ext.salt_cache.insert(id, m);
     Ok(m)
+}
+
+/// The default build's mapping; under feature `salt-test-hasher` the scenarios' test hasher
+/// replaces it.
+#[cfg(all(test, not(feature = "salt-test-hasher")))]
+mod tests {
+    use super::*;
+
+    /// The bucket an account or a slot lands in is SALT's own mapping: the ids below are
+    /// `salt::state::hasher::bucket_id`'s for these keys (cross-verified against salt v1.0.1 by
+    /// Satin's hasher tests).
+    #[test]
+    fn test_the_default_bucket_mapping_is_salts() {
+        let account = Address::new([
+            0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
+            0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+        ]);
+        assert_eq!(bucket_for(StateGasSite::Account(account)), 12_196_828);
+        assert_eq!(bucket_for(StateGasSite::Storage(account, U256::from(1))), 9_450_146);
+        assert_eq!(bucket_for(StateGasSite::Account(Address::ZERO)), 12_666_336);
+    }
 }

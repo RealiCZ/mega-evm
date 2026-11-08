@@ -25,9 +25,6 @@ use op_evm2::{OpTxEnvelope, TxDeposit};
 use serde_json::{Map, Value, json};
 use std::{cell::RefCell, collections::HashMap, convert::Infallible, rc::Rc};
 
-pub const DEFAULT_LIMITS: [u64; 3] = [13_107_200, 500_000, 1_000];
-pub const DEFAULT_DETENTION_CAP: u64 = 20_000_000;
-
 /// The block state as an evm2 `Database`. Bytecode is kept per hash, analysed once (as a node's
 /// code cache keeps it), so neither the jump-table analysis nor the hashing is in a run.
 pub struct Evm2Db {
@@ -112,11 +109,8 @@ pub fn new_evm(h: &Header, chain_id: u64, db: Evm2Db) -> Evm<'static, MegaTypes>
         mega_evm2::precompiles(),
     );
     // Read storage of an account the database lacks, as revm does.
+    // Satin's limits and detention caps are the engine's defaults (`TxLimits::SATIN`).
     evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
-    let ext = evm.ext_mut();
-    ext.cfg.limits = DEFAULT_LIMITS;
-    ext.cfg.cap = DEFAULT_DETENTION_CAP;
-    ext.cfg.oracle_cap = DEFAULT_DETENTION_CAP;
     evm
 }
 

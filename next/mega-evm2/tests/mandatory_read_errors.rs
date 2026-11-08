@@ -148,10 +148,6 @@ fn satin_evm(fail: Fail) -> Evm<'static, MegaTypes> {
         precompiles(),
     );
     evm.state_mut().set_read_absent_storage(true);
-    let ext = evm.ext_mut();
-    ext.cfg.limits = [13_107_200, 500_000, 1_000];
-    ext.cfg.cap = 20_000_000;
-    ext.cfg.oracle_cap = 20_000_000;
     evm
 }
 

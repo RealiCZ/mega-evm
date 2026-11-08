@@ -106,3 +106,42 @@ candidate = '[{"kind": "Call", "level": 0, "gas_limit": 8200, "reservoir": 0, "v
 class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
 why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
 signoff = "owner sign-off 2026-11-05"
+
+# The owner's decisions of 2026-11-08 change both implementations in three places; the engine has
+# made each change and the reference (the other implementation) has not yet. Until it does, the
+# gates accept exactly the difference each change makes, and nothing else: by its shape
+# (`gate::modexp_bound_label`, `gate::modexp_formula_price`), or by running the case again on the
+# engine under the reference's rule, which must leave no difference at all
+# (`gate::scenario_verdict`: `auth_preflight_reads`, `slotnum_zero`). Each class goes once the
+# reference makes the change.
+
+# Every EIP-7702 list is simulated before it is applied, whatever its length, so every authority
+# whose entry passes the chain-id, nonce and signature gates is loaded: a list that runs out of gas
+# part-way leaves the engine's read set holding authorities the reference's never reached.
+[[class]]
+name = "auth_preflight_reads"
+why = "SATIN-AUTH-005: every authority the authorization preflight consults is loaded, whatever the list's length. The other implementation still skips the simulation for a list too short to cross a limit and has not made this change yet; a list that runs out of gas before its first frame then reads more accounts on the engine's side. A case is of this class only when the engine, run again without that simulation, has no difference from the reference at all."
+signoff = "owner decision 2026-11-08 (SATIN-AUTH-005)"
+
+# ModExp charges its 500 minimum, then its formula price, then checks EIP-7823's bound (evm2
+# upstream's order): an over-bound input with gas between the minimum and the formula price runs
+# out of gas, where the reference reports the bound.
+[[class]]
+name = "modexp_bound_label"
+why = "SATIN-PCMP-007: ModExp checks EIP-7823's bound after its whole formula price is charged. The other implementation still checks the bound first and has not made this change yet; a transaction whose own call is ModExp with an over-bound input and gas below the formula price is then labelled PrecompileOOG on the engine's side and PrecompileError on the reference's. Gas, output and state are equal."
+signoff = "owner decision 2026-11-08 (SATIN-PCMP-007)"
+
+# Under gas detention a precompile call is decided from its price, and an over-bound ModExp input
+# is priced by its formula: where the formula price and the reference's 500 straddle the
+# allowance or the forward, one side answers the compute stop and the other runs the call and
+# burns its forward.
+[[class]]
+name = "modexp_formula_price"
+why = "SATIN-DET-023: a ModExp input is priced by its formula whatever its lengths, an over-bound input included. The other implementation still prices it at the 500 minimum and has not made this change yet; a detained ModExp call whose two prices straddle its allowance or its forward is then answered with the compute stop on one side and run and burned on the other, the forward being the only difference in gas."
+signoff = "owner decision 2026-11-08 (SATIN-DET-023)"
+
+# SLOTNUM pushes zero in every block.
+[[class]]
+name = "slotnum_zero"
+why = "SATIN-BASE-005: SLOTNUM pushes zero. The other implementation still pushes its block environment's slot number and has not made this change yet; a case is of this class only when the engine, run again with SLOTNUM pushing that slot number, has no difference from the reference at all."
+signoff = "owner decision 2026-11-08 (SATIN-BASE-005)"

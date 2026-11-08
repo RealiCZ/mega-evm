@@ -20,7 +20,7 @@
 //! switches off as in the gates.
 
 use mega_evm2_diff::{
-    driver::run,
+    driver::{recipient, run, runs_under},
     gate::{self, Verdict},
 };
 use mega_evm2_scenarios::probe;
@@ -72,7 +72,17 @@ fn judge(probes: &[mega_evm2_scenarios::Scenario], records: &[Value]) -> bool {
         println!("PROBE {}", s.name);
         println!("  reference {reference}");
         println!("  engine    {engine}");
-        match gate::scenario_verdict(&known, &classes, s.name, reference, &plain, &inspected) {
+        let verdict = gate::scenario_verdict(
+            &known,
+            &classes,
+            s.name,
+            reference,
+            &plain,
+            &inspected,
+            recipient(s),
+            |rule| runs_under(s, rule),
+        );
+        match verdict {
             Verdict::Match => {
                 matched += 1;
                 println!("MATCH {}", s.name);

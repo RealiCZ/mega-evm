@@ -154,7 +154,7 @@ pub(crate) fn admits_body(host: &mut Evm<'_, MegaTypes>, entries: u64) -> Handle
     let ext = host.ext();
     if !crate::off("body_records") &&
         !ext.exempt &&
-        ext.tx_net[0] as u64 + WRITE_RECORD_SIZE * entries > ext.cfg.limits[0]
+        ext.tx_net[0] as u64 + WRITE_RECORD_SIZE * entries > ext.limits.tx[0]
     {
         return Err(crate::satin_ext::refuse(
             "transaction body and authorization records exceed the transaction data-size limit",
@@ -181,7 +181,7 @@ fn read_registry(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<Option<Address>
     if crate::off("registry_read") {
         return Ok(None);
     }
-    let slot = host.ext().cfg.registry_slot;
+    let slot = REGISTRY_SLOT;
     Host::load_account(host, &SEQUENCER_REGISTRY, false, false).map_err(host_error)?;
     // `Host::sload` of a slot of an account the database does not hold reads nothing below the
     // journal; Satin's journal sload reads it, so the read set (witness) holds it: load it.
@@ -321,14 +321,14 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
     /// ([`start_pending`]), right before the first frame.
     fn before_initial_frame(
         host: &mut Evm<'_, MegaTypes>,
-        _envelope: &OpTxEnvelope,
+        envelope: &OpTxEnvelope,
         tx_gas: &mut GasTracker,
     ) -> HandlerResult<Option<MessageResult<MegaTypes>>> {
+        let (limit, reservoir) = (tx_gas.limit(), tx_gas.reservoir());
         // With the switch off the record was charged as intrinsic state gas.
         let charge = if crate::off("start_at_runtime") { 0 } else { host.ext().tx_start_charge };
         if charge > 0 {
-            let untouched = runtime_oog_result(tx_gas.limit(), tx_gas.reservoir());
-            let reservoir = tx_gas.reservoir();
+            let untouched = runtime_oog_result(limit, reservoir);
             if !charge_tx_state(tx_gas, charge) {
                 drop_start(host.ext_mut());
                 return Ok(Some(untouched));
@@ -336,7 +336,7 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
             host.ext_mut().mechanisms.start_from_reservoir = Some(charge.min(reservoir));
         }
         start_pending(host);
-        Ok(None)
+        unbumpable_tx_creation(host, envelope, tx_gas, limit, reservoir)
     }
 
     fn settle_transaction(
@@ -412,7 +412,7 @@ pub fn live_system_address(
     if info.code_hash != SEQUENCER_REGISTRY_CODE_HASH {
         return Ok(None);
     }
-    let slot = host.ext().cfg.registry_slot;
+    let slot = REGISTRY_SLOT;
     let current = host.state_mut().storage_slot_untracked(&SEQUENCER_REGISTRY, &slot)?;
     Ok((!current.is_zero()).then(|| Address::from_word(current.into())))
 }
@@ -711,6 +711,51 @@ fn creation_nonce_unbumpable(
     let balance =
         host.state_mut().account_info_untracked(&tx.from)?.map_or(U256::ZERO, |i| i.balance);
     Ok(balance >= tx.value)
+}
+
+/// A creation transaction of type 0, 1 or 2 whose sender's nonce (`u64::MAX`, which only a run
+/// with the nonce check off admits) cannot be bumped: evm2 would deploy at the address of that
+/// nonce; revm, as for a deposit ([`creation_nonce_unbumpable`]), answers the creation with a
+/// success that creates nothing. The first frame is built as evm2 builds it (its runtime gas phase
+/// loads and prices the created address) on a copy of the transaction's gas, and answered with
+/// [`unbumpable_creation`] on the gas the transaction had before its first frame's start record:
+/// the start makes no record, so its charge is given back, and the created account's state gas is
+/// not kept. `None` for every other transaction, and when the runtime gas phase cannot pay
+/// (evm2 then builds the frame and halts it as usual).
+fn unbumpable_tx_creation(
+    host: &mut Evm<'_, MegaTypes>,
+    envelope: &OpTxEnvelope,
+    tx_gas: &GasTracker,
+    limit: u64,
+    reservoir: u64,
+) -> HandlerResult<Option<MessageResult<MegaTypes>>> {
+    if !envelope.kind().is_create() {
+        return Ok(None);
+    }
+    let caller = host.tx_env().origin;
+    let (nonce, balance) = {
+        let account = host.state_mut().account(&caller)?;
+        (account.original().map(|o| o.nonce), account.balance())
+    };
+    if nonce != Some(u64::MAX) || balance < envelope.value() {
+        return Ok(None);
+    }
+    let mut scratch = *tx_gas;
+    let input = envelope.input().clone();
+    let frame = prepare_initial_frame(
+        host,
+        caller,
+        u64::MAX,
+        TxKind::Create,
+        &input,
+        envelope.value(),
+        &mut scratch,
+    )?;
+    if frame.runtime_oog {
+        return Ok(None);
+    }
+    drop_start(host.ext_mut());
+    unbumpable_creation(host, frame, limit, reservoir).map(Some)
 }
 
 /// revm's answer to that creation: a success with nothing created and the frame's gas untouched;

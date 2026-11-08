@@ -44,7 +44,9 @@
 //! - a value the recipient returns to the sender (a call, a destruction): the start record is taken
 //!   back in the first frame, and the reservoir it returns unwinds the transaction's spill.
 //! - a creation transaction whose created address is the block beneficiary: a creation has no
-//!   recipient, so it is not detained from its start (its sender still is).
+//!   recipient, so it is not detained from its start (its sender still is);
+//! - `SLOTNUM` returned as the output: it pushes zero, which the class `slotnum_zero` accepts until
+//!   the reference makes the same change.
 #![allow(dead_code)]
 use super::{
     A, Account, Asm, Auth, B, BELOW_CAP, BLOCK_GAS_LIMIT, D, EMPTY, IDENTITY, KEYLESS, Limits,
@@ -1170,7 +1172,15 @@ pub fn all() -> Vec<Scenario> {
     v.extend(modexp_over_bound());
     v.extend(deposit_creation_nonce_max());
     v.extend(creation_onto_beneficiary());
+    v.extend(slotnum_returned());
     v
+}
+
+/// `SLOTNUM` returned as the transaction's output (`SLOTNUM PUSH0 MSTORE PUSH1 32 PUSH0 RETURN`):
+/// the pushed word is the only thing the value reaches.
+fn slotnum_returned() -> Vec<Scenario> {
+    let code = hex!("4b5f5260205ff3").to_vec();
+    vec![edge("edge_slotnum_returned", vec![acct(A, code)], 1_000_000, Limits::default())]
 }
 
 /// A creation transaction whose created address (`SENDER.create(0)`) is the block beneficiary: a

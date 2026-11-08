@@ -333,10 +333,25 @@ def frameless_halt(o):
 def drop_class(t, name="halted_first_frame"):
     """`known-differences.toml` without its `[[class]]` table of `name`."""
     a = t.index('[[class]]\nname = "%s"\n' % name)
-    b = t.index("\n\n", a) + 1
+    b = t.find("\n\n", a)
+    b = len(t) if b < 0 else b + 1
     return t[:a] + t[b:]
 
 DUPN = "edge_dupn_deeper_than_stack"
+# A case of each class of the decided changes the reference has not made yet.
+PREFLIGHT = "e17_authority_charges_out_of_gas"
+MODEXP_LABEL = "edge_modexp_huge_lengths_forward_below_formula"
+MODEXP_PRICE = "edge_modexp_over_bound_detained_allowance_above_500"
+SLOTNUM = "p6_slotnum"
+
+
+def reads_also(account):
+    """The reference also read `account`, which the engine did not."""
+    return lambda o: o["reads"]["accounts"].append(account)
+
+
+def bumped(field):
+    return lambda o: o.update({field: o[field] + 1})
 
 
 def diff(field):
@@ -375,6 +390,18 @@ FAULTS = [
     ("dup-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % DUPN, scen_field(M, "gas_used", lambda o: o["name"] == DUPN)),
     ("dup-class-other-label", "main", r'^DIFFER %s \["halt"\]$' % DUPN, scen_edit(M, named(DUPN, lambda o: o.update(halt="Base(OutOfGas(Basic))")))),
     ("dup-class-not-enabled", "main", r'^DIFFER %s \["halt"\]$' % DUPN, known_toml(lambda t: drop_class(t, "dup_stack_label"))),
+    # main: the classes of the decided changes take exactly their shape, only while the file enables them
+    ("preflight-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % PREFLIGHT, scen_edit(M, named(PREFLIGHT, bumped("gas_used")))),
+    ("preflight-class-reference-reads-more", "main", r'^DIFFER %s \["reads"\]$' % PREFLIGHT, scen_edit(M, named(PREFLIGHT, reads_also("0x0000000000000000000000000000000000000AbC")))),
+    ("preflight-class-not-enabled", "main", r'^DIFFER %s \["reads"\]$' % PREFLIGHT, known_toml(lambda t: drop_class(t, "auth_preflight_reads"))),
+    ("modexp-label-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % MODEXP_LABEL, scen_edit(M, named(MODEXP_LABEL, bumped("gas_used")))),
+    ("modexp-label-class-other-label", "main", r'^DIFFER %s \["halt"\]$' % MODEXP_LABEL, scen_edit(M, named(MODEXP_LABEL, lambda o: o.update(halt="Base(OutOfGas(Basic))")))),
+    ("modexp-label-class-not-enabled", "main", r'^DIFFER %s \["halt"\]$' % MODEXP_LABEL, known_toml(lambda t: drop_class(t, "modexp_bound_label"))),
+    ("modexp-price-class-other-gas", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, scen_edit(M, named(MODEXP_PRICE, bumped("gas_used")))),
+    ("modexp-price-class-other-frame", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, scen_edit(M, named(MODEXP_PRICE, lambda o: o["frames"][1].update(status="revert")))),
+    ("modexp-price-class-not-enabled", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, known_toml(lambda t: drop_class(t, "modexp_formula_price"))),
+    ("slotnum-class-other-field", "main", r'^DIFFER %s \[.*"logs"' % SLOTNUM, scen_edit(M, named(SLOTNUM, lambda o: o["logs"].append({"address": "0x00000000000000000000000000000000000000bb", "topics": [], "data": "0x"})))),
+    ("slotnum-class-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % SLOTNUM, known_toml(lambda t: drop_class(t, "slotnum_zero"))),
     # fuzz
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),
     ("fuzz-duplicate-entry", "fuzz", r"duplicate oracle names", scen_edit(F, dup_entry)),

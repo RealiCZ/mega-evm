@@ -32,5 +32,6 @@ default = []
 compare = ["witness"]
 # The read-set recording a witness producer needs beyond the database reads (SALT bucket reads).
 witness = []
-# The production SALT bucket hasher (Satin's `AHashBucketHasher`).
-salt-ahash = []
+# Satin's test SALT bucket hasher (FNV-1a, `TestExternalEnvs`' `SimpleBucketHasher`) in place of
+# SALT's production one, the default: the differential scenarios name their buckets with it.
+salt-test-hasher = []
