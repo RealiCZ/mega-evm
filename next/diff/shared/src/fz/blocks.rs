@@ -18,12 +18,12 @@ use crate::{
 };
 use alloy_primitives::{Address, U256};
 
-const E1: Address = Address::with_last_byte(0xe1);
-const X1: Address = Address::with_last_byte(0xa1);
-const X2: Address = Address::with_last_byte(0xa2);
-const X3: Address = Address::with_last_byte(0xa3);
-const X4: Address = Address::with_last_byte(0xa4);
-const X5: Address = Address::with_last_byte(0xa5);
+const PEER: Address = Address::with_last_byte(0xe1);
+const W1: Address = Address::with_last_byte(0xa1);
+const W2: Address = Address::with_last_byte(0xa2);
+const W3: Address = Address::with_last_byte(0xa3);
+const W4: Address = Address::with_last_byte(0xa4);
+const W5: Address = Address::with_last_byte(0xa5);
 const ONE_ETHER: u64 = 1_000_000_000_000_000_000;
 
 /// The programs a transaction can call.
@@ -46,7 +46,7 @@ fn programs() -> Vec<(Address, Vec<u8>)> {
         .op(op::POP)
         .call_all(op::CALL, B, 0)
         .op(op::POP)
-        .call_all(op::CALL, X3, 0)
+        .call_all(op::CALL, W3, 0)
         .record_call(5)
         .stop()
         .build();
@@ -56,11 +56,11 @@ fn programs() -> Vec<(Address, Vec<u8>)> {
         (B, flip),
         (C, sends_hint),
         (D, reads_time),
-        (X1, plain),
-        (X2, pays),
-        (X3, child),
-        (X4, chain),
-        (X5, sends_hint_reverts),
+        (W1, plain),
+        (W2, pays),
+        (W3, child),
+        (W4, chain),
+        (W5, sends_hint_reverts),
     ]
 }
 
@@ -74,8 +74,8 @@ pub fn generate(seed: u64) -> Vec<Scenario> {
     let mut r = Rng::for_seed(seed);
     let progs = programs();
     let mut accounts: Vec<Account> = progs.iter().map(|(a, c)| acct(*a, c.clone())).collect();
-    accounts.push(funded(E1, Vec::new(), ONE_ETHER));
-    accounts.push(funded(X2, progs[5].1.clone(), 50));
+    accounts.push(funded(PEER, Vec::new(), ONE_ETHER));
+    accounts.push(funded(W2, progs[5].1.clone(), 50));
     accounts.push(Account {
         address: ORACLE,
         code: Asm::new()
@@ -126,7 +126,7 @@ pub fn generate(seed: u64) -> Vec<Scenario> {
     if r.chance(30) {
         s.oracle = vec![(5, 100 + r.below(1_000))];
     }
-    s.beneficiary = r.pick(&[Address::ZERO, A, SENDER, E1, X1]);
+    s.beneficiary = r.pick(&[Address::ZERO, A, SENDER, PEER, W1]);
     let targets: Vec<Address> = progs.iter().map(|(a, _)| *a).collect();
     // The first transaction and the edits of the others.
     let n = steps_of(seed) as usize;
@@ -152,11 +152,11 @@ pub fn generate(seed: u64) -> Vec<Scenario> {
             s.deposit = None;
             s.value = U256::ZERO;
             s.gas_limit = gas;
-            s.sender = if from_e1 { E1 } else { SENDER };
+            s.sender = if from_e1 { PEER } else { SENDER };
             match kind {
                 0..=64 => {
                     s.to = target;
-                    s.value = U256::from(if target == X2 || target == C || target == A {
+                    s.value = U256::from(if target == W2 || target == C || target == A {
                         0
                     } else {
                         value
@@ -164,7 +164,7 @@ pub fn generate(seed: u64) -> Vec<Scenario> {
                 }
                 65..=76 => {
                     // A value transfer to a fresh or an existing account.
-                    s.to = if kind.is_multiple_of(2) { EMPTY } else { E1 };
+                    s.to = if kind.is_multiple_of(2) { EMPTY } else { PEER };
                     s.value = U256::from(1 + value);
                 }
                 77..=84 => {
