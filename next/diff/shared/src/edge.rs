@@ -95,7 +95,7 @@ fn delegation(target: Address) -> Vec<u8> {
 
 /// A transaction from [`SYSTEM`] to `to` on a chain whose registry names it; the system account
 /// is `system` (funded), the Oracle and A store 1 in slot 1.
-fn from_system(name: &'static str, system: Account, to: Address) -> Scenario {
+pub(crate) fn from_system(name: &'static str, system: Account, to: Address) -> Scenario {
     let accounts =
         vec![registry_naming(SYSTEM), system, acct(ORACLE, store_one()), acct(A, store_one())];
     let mut s = edge(name, accounts, BELOW_CAP, Limits::default());
@@ -104,7 +104,7 @@ fn from_system(name: &'static str, system: Account, to: Address) -> Scenario {
     s
 }
 
-fn system_account(code: Vec<u8>, nonce: u64) -> Account {
+pub(crate) fn system_account(code: Vec<u8>, nonce: u64) -> Account {
     Account { nonce, ..funded(SYSTEM, code, ONE_ETHER) }
 }
 
@@ -1181,7 +1181,9 @@ pub fn all() -> Vec<Scenario> {
 /// the pushed word is the only thing the value reaches.
 fn slotnum_returned() -> Vec<Scenario> {
     let code = hex!("4b5f5260205ff3").to_vec();
-    vec![edge("edge_slotnum_returned", vec![acct(A, code)], 1_000_000, Limits::default())]
+    let mut s = edge("edge_slotnum_returned", vec![acct(A, code)], 1_000_000, Limits::default());
+    s.rules = vec!["SATIN-BASE-005"];
+    vec![s]
 }
 
 /// A creation transaction whose created address (`SENDER.create(0)`) is the block beneficiary: a
@@ -1256,6 +1258,7 @@ fn protocol_caller() -> Vec<Scenario> {
         s.tx_type = ty;
         s.deposit = deposit;
         s.salt = vec![(A, Some(0), 3)];
+        s.rules = vec!["SATIN-MST-007"];
         v.push(s);
     }
     v

@@ -29,6 +29,7 @@ MEGA_EVM2_CORPUS_DIR=<corpus> bash diff/scripts/gate.sh full   # the gates on th
 bash diff/scripts/controls.sh sample|full                      # negative controls
 bash diff/scripts/faults.sh                                    # fault injection
 bash diff/scripts/check-reference.sh sample                    # rebuild the reference, compare the sample
+bash diff/scripts/rule-coverage.sh <rules.md>                  # which rule ids of the specification have a scenario
 bash diff/scripts/probe.sh diff/probe-examples.jsonl           # inputs of your own, on both sides
 cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads, plain and inspected
 ```
@@ -83,6 +84,16 @@ The engine replay gate runs no rerun, so a case of these classes there differs.
 Such a case is accepted and counted as `class=`; any other field that differs, or any other shape, fails it.
 The `class=` counts are pinned like the others: `MAIN_EXPECT`, `SAMPLE_FUZZ_CLASS` and `FULL_FUZZ_CLASS` in `diff/scripts/common.sh`, and `count_expected.py` for the replay gate (an applied transaction no entry lists whose reference recorded no frame).
 
+## Blocks of several transactions, simulation switches and rule ids
+
+A scenario can be one transaction of a block (`Scenario::prior` in `diff/shared/src/lib.rs`): both harnesses run the earlier transactions of the block first, on one EVM, committing each outcome, and render the last one alone, with `block_accounts` and `block_storage`, the changes of the block so far.
+A refused earlier transaction leaves nothing.
+The database reads (`reads.accounts`, `storage`, `codes`, `block_hashes`) are recorded for a block's first transaction only, because the engine's state keeps what an earlier transaction loaded; the SALT buckets and the Oracle reads are per transaction on both sides.
+`blk` holds hand-written blocks (`<name>_t1`, `_t2`, …) and fuzz mode 15 draws random ones.
+`Scenario::skip_nonce_check` and `skip_eip3607` switch off the two checks the specification lets a node switch off in a simulation; the limits and the detention caps cannot be switched.
+`Scenario::rules` lists the `SATIN-` rule ids a scenario exercises and is ignored by the comparison; `diff/scripts/rule-coverage.sh <rules.md>` reports which rule ids have a scenario.
+A known difference with `field = "record"` pins both whole normalized records, for a case one side executes and the other refuses.
+
 ## Probing an input on both sides
 
 `diff/scripts/probe.sh <file.jsonl>` runs inputs no gate holds on the reference and on the engine, and judges each as the synthetic gate does (`gate::scenario_verdict`, accepted differences included).
@@ -94,7 +105,8 @@ An input that finds a difference belongs in a scenario of the gates once the dif
 ## Switches and negative controls
 
 Every fix the engine makes on top of stock evm2 sits behind a named switch, `off("<name>")` in `mega-evm2/src`; `MEGA_EVM2_DISABLE=<name>,…` turns it off, with feature `compare` only, and without that feature `off` is a constant `false`.
-A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root, a keyless deployment or system sender with validation switches disabled, a creation of type 0, 1 or 2 from a sender whose nonce cannot be bumped, the destruction table's rows for a slot whose original value is not zero, a call past the call-stack limit at an interceptor, the per-transaction limits and detention caps the engine fixes, SALT's production bucket mapping, the delegation indicator's state gas rebuilt from the cost per state byte, or the contents of returned witness states) has no switch; an engine test in `mega-evm2/tests` or a unit test proves it instead.
+A fix no gate case can show (a database that fails a read, the Oracle read in a pre-block system call, a block without a parent beacon block root, the destruction table's rows for a slot whose original value is not zero, a call past the call-stack limit at an interceptor, the per-transaction limits and detention caps the engine fixes, SALT's production bucket mapping, the delegation indicator's state gas rebuilt from the cost per state byte, or the contents of returned witness states) has no switch; an engine test in `mega-evm2/tests` or a unit test proves it instead.
+The fixes only a simulation switch reaches (a keyless deployment or a system sender with a validation switch off, a creation of type 0, 1 or 2 from a sender whose nonce cannot be bumped) have no switch either: their `port_*` scenarios, run with `skip_nonce_check` or `skip_eip3607`, differ when the fix is undone, and an engine test proves each as well.
 A change the engine made that the reference has not made yet (an accepted class above) has no switch either: turned off, the engine would match the reference, which no control can catch; the class's pinned `class=` count catches the change being undone, and an engine test proves it.
 The harness's fixture choices that make the engine's inputs match the reference's are switches too, `off("<name>")` in `diff`.
 

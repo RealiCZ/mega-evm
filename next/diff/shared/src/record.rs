@@ -56,6 +56,12 @@ pub const REFUSED_FIELDS: [&str; 3] = ["name", "group", "error"];
 /// last two entries of [`FIELDS`]; the reference's refused record carries them too.
 pub const REFERENCE_EXTRA: [&str; 2] = ["inspected_equal", "inspected"];
 
+/// What a transaction that is not the first of its block adds, on both sides (`Scenario::prior`):
+/// `block_accounts` and `block_storage`, the entries of `accounts` and `storage` of every
+/// transaction of the block so far, this one included, a later transaction's entry replacing an
+/// earlier one of the same key. Absent from the record of a transaction that has no predecessor.
+pub const BLOCK_EXTRA: [&str; 2] = ["block_accounts", "block_storage"];
+
 /// What only the engine adds: `priced`, its debug record of the precompile prices it quoted.
 pub const ENGINE_EXTRA: [&str; 1] = ["priced"];
 
@@ -157,8 +163,16 @@ pub fn check_fields<'a>(
     let keys: std::collections::BTreeSet<&str> = keys.into_iter().collect();
     let want = fields(harness, keys.contains("error"));
     let optional = |k: &str| harness == Harness::Reference && k == "inspected";
+    let block = |k: &str| BLOCK_EXTRA.contains(&k);
     let missing: Vec<_> = want.iter().filter(|k| !keys.contains(*k) && !optional(k)).collect();
-    let unexpected: Vec<_> = keys.iter().filter(|k| !want.contains(*k)).collect();
+    let unexpected: Vec<_> = keys
+        .iter()
+        .filter(|k| !want.contains(*k) && !(block(k) && !keys.contains("error")))
+        .collect();
+    // The two block fields come together, or not at all.
+    if keys.contains(BLOCK_EXTRA[0]) != keys.contains(BLOCK_EXTRA[1]) {
+        return Err(format!("record fields: only one of {BLOCK_EXTRA:?}"));
+    }
     if missing.is_empty() && unexpected.is_empty() {
         Ok(())
     } else {
@@ -205,5 +219,16 @@ mod tests {
         assert_eq!(check_fields(Harness::Reference, refused), Ok(()));
         assert_eq!(check_fields(Harness::Engine, ["name", "group", "error"]), Ok(()));
         assert!(check_fields(Harness::Engine, refused).is_err());
+    }
+
+    /// The block fields come as a pair, on both harnesses' records.
+    #[test]
+    fn test_the_block_fields_come_together() {
+        let with: Vec<&str> =
+            fields(Harness::Engine, false).into_iter().chain(BLOCK_EXTRA).collect();
+        assert_eq!(check_fields(Harness::Engine, with.iter().copied()), Ok(()));
+        let only_one: Vec<&str> =
+            fields(Harness::Engine, false).into_iter().chain(["block_accounts"]).collect();
+        assert!(check_fields(Harness::Engine, only_one.iter().copied()).is_err());
     }
 }

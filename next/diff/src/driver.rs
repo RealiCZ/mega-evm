@@ -306,10 +306,15 @@ pub fn db(s: &Scenario) -> InMemoryDB {
 }
 
 pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
-    let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(
-        MegaSpec::Satin,
-        mega_evm2::satin_version(),
-    );
+    // The node's simulation switches (`Scenario::skip_nonce_check`, `skip_eip3607`).
+    let mut version = mega_evm2::satin_version();
+    if s.skip_nonce_check {
+        version.features.remove(evm2::EvmFeatures::NONCE_CHECK);
+    }
+    if s.skip_eip3607 {
+        version.features.remove(evm2::EvmFeatures::EIP3607);
+    }
+    let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, version);
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
@@ -396,7 +401,7 @@ pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
                 .collect();
             let tx = alloy_consensus::TxEip7702 {
                 chain_id: 1,
-                nonce: 0,
+                nonce: s.nonce,
                 gas_limit: s.gas_limit,
                 max_fee_per_gas: s.gas_price as u128,
                 max_priority_fee_per_gas: s.gas_price as u128,
@@ -417,7 +422,7 @@ pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
         None if s.tx_type == 1 => OpTxEnvelope::new(
             alloy_consensus::TxEip2930 {
                 chain_id: 1,
-                nonce: 0,
+                nonce: s.nonce,
                 gas_price: s.gas_price as u128,
                 gas_limit: s.gas_limit,
                 to,
@@ -430,7 +435,7 @@ pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
         None if s.tx_type == 2 => OpTxEnvelope::new(
             alloy_consensus::TxEip1559 {
                 chain_id: 1,
-                nonce: 0,
+                nonce: s.nonce,
                 gas_limit: s.gas_limit,
                 max_fee_per_gas: s.gas_price as u128,
                 max_priority_fee_per_gas: s.gas_price as u128,
@@ -444,7 +449,7 @@ pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
         None => OpTxEnvelope::new(
             TxLegacy {
                 chain_id: s.chain_id,
-                nonce: 0,
+                nonce: s.nonce,
                 gas_price: s.gas_price as u128,
                 gas_limit: s.gas_limit,
                 to,
@@ -457,7 +462,9 @@ pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
     Recovered::new_unchecked(env, s.sender)
 }
 
-/// Runs `s` (plain, or with the frame-recording inspector) and renders the outcome.
+/// Runs `s` (plain, or with the frame-recording inspector) and renders the outcome. The
+/// transactions of its block that ran before it (`Scenario::prior`) run first on the same `Evm`,
+/// each committed; the record is the last transaction's, with the block's changes so far.
 pub fn run(s: &Scenario, inspected: bool) -> Value {
     run_with(s, inspected, None)
 }
@@ -473,9 +480,26 @@ fn run_with(s: &Scenario, inspected: bool, rule: Option<ReferenceRule>) -> Value
     let reads = Rc::new(RefCell::new(Reads::default()));
     let mut evm = evm(s, reads.clone());
     evm.ext_mut().reference_rule = rule;
+    let mut block_accounts = Map::new();
+    let mut block_storage = Map::new();
+    for p in &s.prior {
+        if inspected {
+            evm.set_inspector(Frames::default());
+        }
+        let tx = tx(p);
+        if let Ok(executed) = evm.transact(&tx) {
+            let changes = collect_changes(&executed);
+            let _ = executed.commit();
+            let (a, st) = changed_json(&changes);
+            block_accounts.extend(a);
+            block_storage.extend(st);
+        }
+    }
     if inspected {
         evm.set_inspector(Frames::default());
     }
+    // What the transaction reads is its own: the read set starts empty.
+    *reads.borrow_mut() = Reads::default();
     let tx = tx(s);
     let (r, changes) = {
         let executed = match evm.transact(&tx) {
@@ -491,13 +515,17 @@ fn run_with(s: &Scenario, inspected: bool, rule: Option<ReferenceRule>) -> Value
         Vec::new()
     };
     let ext: &Lite = evm.ext();
-    let mut out = render_outcome(&r, ext, changed_json(&changes));
+    let (accounts, storage) = changed_json(&changes);
+    let mut out = render_outcome(&r, ext, (accounts.clone(), storage.clone()));
     let rd = reads.borrow();
+    // What the database served is the first transaction of a block's alone (`Scenario::prior`): a
+    // later transaction finds in the engine's state what an earlier one loaded.
+    let served = s.prior.is_empty();
     let read_set = json!({
-        "accounts": rd.accounts.iter().map(|a| format!("{a}")).collect::<Vec<_>>(),
-        "storage": rd.storage.iter().map(|(a, k)| record::slot_key(*a, *k)).collect::<Vec<_>>(),
-        "codes": rd.codes.iter().map(|h| format!("{h}")).collect::<Vec<_>>(),
-        "block_hashes": rd.block_hashes.iter().collect::<Vec<_>>(),
+        "accounts": rd.accounts.iter().filter(|_| served).map(|a| format!("{a}")).collect::<Vec<_>>(),
+        "storage": rd.storage.iter().filter(|_| served).map(|(a, k)| record::slot_key(*a, *k)).collect::<Vec<_>>(),
+        "codes": rd.codes.iter().filter(|_| served).map(|h| format!("{h}")).collect::<Vec<_>>(),
+        "block_hashes": rd.block_hashes.iter().filter(|_| served).collect::<Vec<_>>(),
         "buckets": ext.bucket_reads.iter().collect::<Vec<_>>(),
         "oracle_reads": ext.oracle_reads,
     });
@@ -520,6 +548,12 @@ fn run_with(s: &Scenario, inspected: bool, rule: Option<ReferenceRule>) -> Value
         ),
     ] {
         out.insert(k.into(), v);
+    }
+    if !s.prior.is_empty() {
+        block_accounts.extend(accounts);
+        block_storage.extend(storage);
+        out.insert("block_accounts".into(), Value::Object(block_accounts));
+        out.insert("block_storage".into(), Value::Object(block_storage));
     }
     Value::Object(out)
 }

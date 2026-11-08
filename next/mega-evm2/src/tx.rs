@@ -766,8 +766,20 @@ fn unbumpable_tx_creation(
     if frame.runtime_oog {
         return Ok(None);
     }
+    // The start makes no record, so its charge is given back: the start ledger's settlement
+    // reports that charge as its refund, as Satin's does (comparison only).
+    #[cfg(feature = "compare")]
+    let given_back = host.ext().tx_start_charge;
     drop_start(host.ext_mut());
-    unbumpable_creation(host, frame, limit, reservoir).map(Some)
+    let result = unbumpable_creation(host, frame, limit, reservoir)?;
+    #[cfg(feature = "compare")]
+    {
+        settle_first_frame(host.ext_mut(), true);
+        if let Some(s) = host.ext_mut().settlements.last_mut() {
+            s.refund = given_back;
+        }
+    }
+    Ok(Some(result))
 }
 
 /// revm's answer to that creation: a success with nothing created and the frame's gas untouched;
@@ -799,6 +811,10 @@ fn settle_first_frame(_ext: &mut Lite, _success: bool) {}
 
 #[cfg(feature = "compare")]
 fn settle_first_frame(ext: &mut Lite, success: bool) {
+    // Once per transaction: an unbumpable creation settles its start where it answers the frame.
+    if ext.settlements.iter().any(|s| s.depth == 0) {
+        return;
+    }
     if !ext.top_started {
         // No first frame was built (pre-execution out of gas): Satin settles the start at
         // unlimited budgets, nothing counted, nothing refunded.

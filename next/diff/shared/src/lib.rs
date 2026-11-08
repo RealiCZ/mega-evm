@@ -308,6 +308,24 @@ pub struct Scenario {
     pub tx_type: u8,
     /// A legacy transaction's chain id (`None`: one signed without EIP-155).
     pub chain_id: Option<u64>,
+    /// The transaction's nonce (default 0, the nonce of every fixture sender). Ignored by a
+    /// deposit.
+    pub nonce: u64,
+    /// The node's nonce check switched off (`SATIN-MST-005`, `SATIN-LIM-015`): a simulation
+    /// configuration, never a block's.
+    pub skip_nonce_check: bool,
+    /// The node's EIP-3607 check switched off (`SATIN-MST-005`, `SATIN-KEY-007`): a simulation
+    /// configuration, never a block's.
+    pub skip_eip3607: bool,
+    /// The transactions of the same block that ran before this one, in order (each a full
+    /// scenario whose transaction fields are used; the block's world, limits and environments are
+    /// this scenario's). A refused one leaves no state behind. Both harnesses run them on one EVM
+    /// and commit each outcome, then render this transaction alone; when there are any, the record
+    /// also holds the block's changes so far ([`record::BLOCK_EXTRA`]).
+    pub prior: Vec<Scenario>,
+    /// The `SATIN-` rule ids the scenario exercises. Ignored by the comparison; the coverage
+    /// script `diff/scripts/rule-coverage.sh` reads them from the sources.
+    pub rules: Vec<&'static str>,
 }
 
 /// one EIP-7702 authorization, its authority recovered already (`None`: an invalid
@@ -361,11 +379,83 @@ pub fn scenario(
         beneficiary: Address::ZERO,
         tx_type: 0,
         chain_id: None,
+        nonce: 0,
+        skip_nonce_check: false,
+        skip_eip3607: false,
+        prior: Vec::new(),
+        rules: Vec::new(),
     }
+}
+
+/// An edit of a copy of a block's first transaction into a later one ([`block`]).
+pub type Edit = Box<dyn Fn(&mut Scenario)>;
+
+/// The scenarios of one block of several transactions: `first` is the block's world and its first
+/// transaction, and each closure of `rest` edits a copy of it into the next transaction (its
+/// recipient, data, gas, sender, value, envelope). The scenario of step `k` is named
+/// `<name>_t<k>` (from 1) and holds the steps before it in [`Scenario::prior`], so the gates
+/// compare every transaction of the block, each after its predecessors committed. A transaction's
+/// nonce is the number of earlier non-deposit steps of the same sender, unless its closure sets it.
+/// The edits do not change the block's world: the accounts, limits, SALT capacities, Oracle
+/// answers and beneficiary of `first` stay.
+pub fn block(first: Scenario, rest: Vec<Edit>) -> Vec<Scenario> {
+    let mut steps: Vec<Scenario> = Vec::with_capacity(rest.len() + 1);
+    let mut one = first.clone();
+    one.group = "blk";
+    steps.push(one);
+    for edit in &rest {
+        let mut s = first.clone();
+        s.group = "blk";
+        s.nonce = u64::MAX;
+        edit(&mut s);
+        if s.nonce == u64::MAX {
+            s.nonce =
+                steps.iter().filter(|p| p.deposit.is_none() && p.sender == s.sender).count() as u64;
+        }
+        steps.push(s);
+    }
+    let base = first.name;
+    let mut out = Vec::with_capacity(steps.len());
+    for (k, step) in steps.iter().enumerate() {
+        let mut s = step.clone();
+        s.name = Box::leak(format!("{base}_t{}", k + 1).into_boxed_str());
+        s.prior = out
+            .iter()
+            .map(|p: &Scenario| {
+                let mut p = p.clone();
+                p.prior = Vec::new();
+                p
+            })
+            .collect();
+        out.push(s);
+    }
+    out
 }
 
 pub fn growth(n: u64) -> Limits {
     Limits { growth: Some(n), ..Limits::default() }
+}
+
+/// `prefix`, then a loop of `n` iterations (about 26 gas each), then `SSTORE(1, 1)` and `STOP`: a
+/// transaction that computes without reading anything from the block unless `prefix` does.
+pub fn spin_after(prefix: Asm, n: u64) -> Vec<u8> {
+    let head = prefix.push(n);
+    let dest = head.0.len();
+    head.op(op::JUMPDEST)
+        .push(1)
+        .op(op::SWAP1)
+        .op(op::SUB)
+        .op(op::DUP1)
+        .push(dest as u64)
+        .op(op::JUMPI)
+        .sstore(1, 1)
+        .stop()
+        .build()
+}
+
+/// [`spin_after`] with no prefix.
+pub fn spin(n: u64) -> Vec<u8> {
+    spin_after(Asm::new(), n)
 }
 
 /// B writes three fresh slots.
@@ -373,8 +463,8 @@ pub fn three_writes() -> Vec<u8> {
     Asm::new().sstore(1, 1).sstore(2, 1).sstore(3, 1).stop().build()
 }
 
-/// The hand-written scenarios: the base list, then the `p6`, `p7`, `q2`, `q8`, `cap`, `edge` and
-/// `bd` groups, each with the chain's accounts ([`add_chain_accounts`]).
+/// The hand-written scenarios: the base list, then the `p6`, `p7`, `q2`, `q8`, `cap`, `edge`,
+/// `sweep` and `bd` groups, each with the chain's accounts ([`add_chain_accounts`]).
 pub fn hand_written() -> Vec<Scenario> {
     let mut v = all();
     v.extend(p6::all());
@@ -385,6 +475,9 @@ pub fn hand_written() -> Vec<Scenario> {
     v.extend(edge::all());
     v.extend(sweep::all());
     v.extend(bd::all());
+    v.extend(blk::all());
+    v.extend(rev::all());
+    v.extend(port::all());
     v.iter_mut().for_each(add_chain_accounts);
     v
 }
@@ -462,6 +555,9 @@ pub fn everything() -> Vec<Scenario> {
     v.extend(edge::all());
     v.extend(sweep::all());
     v.extend(bd::all());
+    v.extend(blk::all());
+    v.extend(rev::all());
+    v.extend(port::all());
     v.iter_mut().for_each(add_chain_accounts);
     if let Ok(only) = std::env::var("MEGA_EVM2_ONLY") {
         v.retain(|s| only.split(',').any(|name| name == s.name));
@@ -480,16 +576,19 @@ pub const SEQUENCER_REGISTRY: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x06]);
 
 pub mod bd;
+pub mod blk;
 pub mod cap;
 pub mod edge;
 pub mod fz;
 mod json;
 pub mod p6;
 pub mod p7;
+pub mod port;
 pub mod probe;
 pub mod q2;
 pub mod q8;
 pub mod record;
+pub mod rev;
 pub mod sweep;
 
 /// The base scenarios (group "p5").

@@ -26,6 +26,7 @@ use super::{
 };
 use alloy_primitives::{Address, U256};
 
+pub mod blocks;
 mod classes;
 pub mod pairs;
 mod regions;
@@ -62,7 +63,7 @@ const EMPTY2: Address =
 
 /// The generator modes: `(mode, name prefix, seed digits)`. A seed's name is the prefix and the
 /// seed, zero-padded to the digits; the names are part of the reference outputs.
-pub const MODES: [(u8, &str, usize); 14] = [
+pub const MODES: [(u8, &str, usize); 15] = [
     (1, "fz", 3),
     (2, "fh", 4),
     (3, "fq", 4),
@@ -77,6 +78,7 @@ pub const MODES: [(u8, &str, usize); 14] = [
     (12, "fxv", 4),
     (13, "fxk", 4),
     (14, "fxm", 4),
+    (15, "fxb", 4),
 ];
 
 /// The scenario name of seed `seed` of mode `mode`.
@@ -86,8 +88,14 @@ pub fn name(mode: u8, seed: u64) -> String {
     format!("{prefix}{seed:0digits$}")
 }
 
-/// The mode and seed a fuzz scenario name states, if it is one.
+/// The mode and seed a fuzz scenario name states, if it is one. A step of a block (mode 15) states
+/// its position after the seed, `_t<k>` ([`blocks`]); the seed is what comes before it.
 pub fn parse_name(name: &str) -> Option<(u8, u64)> {
+    if let Some((block, step)) = name.rsplit_once("_t") {
+        let k: u64 = step.parse().ok()?;
+        let (mode, seed) = parse_name(block)?;
+        return (mode == 15 && k >= 1 && k <= blocks::steps_of(seed)).then_some((mode, seed));
+    }
     let mut modes = MODES;
     // The longest prefix first: "fqh" before "fq".
     modes.sort_by_key(|m| core::cmp::Reverse(m.1.len()));
@@ -124,9 +132,20 @@ pub fn seeds_from_env() -> (u64, u64) {
         .unwrap_or((1u64, 400u64))
 }
 
-/// The scenarios of seeds `first..=last` of mode `mode`.
+/// The scenarios of seeds `first..=last` of mode `mode`; a seed of mode 15 is a block, whose steps
+/// follow one another ([`blocks::generate`]).
 pub fn generate(mode: u8, first: u64, last: u64) -> Vec<Scenario> {
+    if mode == 15 {
+        return (first..=last).flat_map(steps).collect();
+    }
     (first..=last).map(|seed| seed_scenario(mode, seed)).collect()
+}
+
+/// The steps of the block of seed `seed` of mode 15, each in group "fz".
+fn steps(seed: u64) -> Vec<Scenario> {
+    let mut v = blocks::generate(seed);
+    v.iter_mut().for_each(|s| s.group = "fz");
+    v
 }
 
 /// The scenario of seed `seed` of mode `mode`.
@@ -141,6 +160,7 @@ pub fn seed_scenario(mode: u8, seed: u64) -> Scenario {
         4 => composition(Gen { harsh: true, mechanisms: true, signer_sender: false }, seed),
         11..=13 => regions::generate(mode, seed),
         14 => pairs::generate(seed),
+        15 => unreachable!("mode 15 is a block of steps: fz::generate"),
         _ => classes::generate(mode, seed),
     };
     s.name = Box::leak(name(mode, seed).into_boxed_str());
@@ -151,7 +171,11 @@ pub fn seed_scenario(mode: u8, seed: u64) -> Scenario {
 /// The fuzz scenario named `name`, of any mode ([`parse_name`]), with the chain's accounts.
 pub fn find(name: &str) -> Option<Scenario> {
     let (mode, seed) = parse_name(name)?;
-    let mut s = seed_scenario(mode, seed);
+    let mut s = if mode == 15 {
+        steps(seed).into_iter().find(|s| s.name == name)?
+    } else {
+        seed_scenario(mode, seed)
+    };
     super::add_chain_accounts(&mut s);
     Some(s)
 }

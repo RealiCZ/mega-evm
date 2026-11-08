@@ -197,6 +197,8 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     for rule in ["SATIN-AUTH-005", "SATIN-PCMP-007", "SATIN-BASE-005"] {
         assert_eq!(text.matches(&format!("owner decision 2026-11-08 ({rule})")).count(), 1);
     }
+    // No pending fix: the changes the entries pinned are made.
+    assert_eq!(text.matches("pending fix (SATIN-").count(), 0);
 }
 
 #[test]
@@ -566,4 +568,33 @@ fn test_a_rerun_class_takes_no_extra_read_its_rule_does_not_make() {
     let mut other = reference.clone();
     other["gas_used"] = json!(other["gas_used"].as_u64().unwrap() + 1);
     assert!(matches!(rerun_verdict(&both, &s, &other), Verdict::Differ(_)));
+}
+
+/// A whole-record entry accepts a case only when both records are exactly the pinned ones, and
+/// then takes every field difference of it.
+#[test]
+fn test_a_record_entry_pins_both_whole_records() {
+    let (r, c) = (outcome("OutOfGas"), json!({"error": "InvalidNonce { expected: 1, got: 0 }"}));
+    let pin = |a: &Value, b: &Value| Known {
+        scenario: "s".into(),
+        field: "record".into(),
+        reference: gate_canonical(a).to_string(),
+        candidate: gate_canonical(b).to_string(),
+    };
+    let diffs = || vec!["status".to_string(), "halt".into(), "gas_used".into(), "error".into()];
+    let known = vec![pin(&r, &c)];
+    assert_eq!(classify(&known, NO_CLASS, "s", diffs(), &r, &c, NO_FRAMES), Verdict::Known);
+    // Another candidate record, or an extra difference no field of the record names, differs.
+    let other = json!({"error": "IntrinsicGasTooLow { required: 2, got: 1 }"});
+    assert!(matches!(
+        classify(&known, NO_CLASS, "s", diffs(), &r, &other, NO_FRAMES),
+        Verdict::Differ(_)
+    ));
+    let mut more = diffs();
+    more.push("frame count 0 vs 1".into());
+    assert!(matches!(classify(&known, NO_CLASS, "s", more, &r, &c, NO_FRAMES), Verdict::Differ(_)));
+}
+
+fn gate_canonical(v: &Value) -> Value {
+    mega_evm2_diff::gate::canonical(v)
 }

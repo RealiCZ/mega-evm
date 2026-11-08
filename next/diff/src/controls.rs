@@ -294,7 +294,7 @@ mod tests {
             ("gate = \"main\"\nscenario = \"a\"\nblock = \"d4:1\"", "block"),
             ("gate = \"main\"\nscenario = \"a\"\nseeds = 1", "seeds"),
             ("gate = \"fuzz\"\nmode = 4", "seed"),
-            ("gate = \"fuzz\"\nmode = 15\nseed = 1", "mode"),
+            ("gate = \"fuzz\"\nmode = 16\nseed = 1", "mode"),
             ("gate = \"fuzz\"\nmode = 4\nseed = 0", "seed"),
             ("gate = \"replay\"\nblock = \"2045117\"", "block"),
             ("gate = \"block\"\nblock = \"d4:x\"", "block"),
