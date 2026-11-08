@@ -220,4 +220,15 @@ mod tests {
         assert_eq!(check_fields(Harness::Engine, ["name", "group", "error"]), Ok(()));
         assert!(check_fields(Harness::Engine, refused).is_err());
     }
+
+    /// The block fields come as a pair, on both harnesses' records.
+    #[test]
+    fn test_the_block_fields_come_together() {
+        let with: Vec<&str> =
+            fields(Harness::Engine, false).into_iter().chain(BLOCK_EXTRA).collect();
+        assert_eq!(check_fields(Harness::Engine, with.iter().copied()), Ok(()));
+        let only_one: Vec<&str> =
+            fields(Harness::Engine, false).into_iter().chain(["block_accounts"]).collect();
+        assert!(check_fields(Harness::Engine, only_one.iter().copied()).is_err());
+    }
 }

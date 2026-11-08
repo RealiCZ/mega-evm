@@ -213,3 +213,27 @@ pub fn generate(seed: u64) -> Vec<Scenario> {
 fn r_mint(kind: u64) -> u64 {
     (kind + 1) * 1_000_000_000
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A seed is a block of two to four steps, named after the seed and the position, each
+    /// carrying the steps before it; the same seed draws the same block.
+    #[test]
+    fn test_a_seed_is_a_block_of_named_steps() {
+        for seed in 1..=60 {
+            let a = generate(seed);
+            assert_eq!(a.len() as u64, steps_of(seed));
+            assert!((2..=4).contains(&a.len()));
+            for (k, s) in a.iter().enumerate() {
+                assert_eq!(s.name, format!("{}_t{}", super::super::name(15, seed), k + 1));
+                assert_eq!(s.prior.len(), k);
+                assert_eq!(super::super::parse_name(s.name), Some((15, seed)));
+            }
+            let b = generate(seed);
+            assert_eq!(format!("{a:?}"), format!("{b:?}"));
+        }
+        assert_eq!(super::super::parse_name("fxb0001_t9"), None);
+    }
+}

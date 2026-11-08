@@ -789,7 +789,8 @@ mod tests {
     /// differ from each other and from the other modes' seeds of the same number.
     #[test]
     fn test_class_modes_are_seeded_and_distinct() {
-        for (mode, _, _) in MODES.iter().filter(|m| m.0 >= 5) {
+        // Mode 15 is blocks: several scenarios a seed, tested in `blocks.rs`.
+        for (mode, _, _) in MODES.iter().filter(|m| (5..15).contains(&m.0)) {
             let a = generate(*mode, 1, 50);
             let b = generate(*mode, 1, 50);
             for (x, y) in a.iter().zip(&b) {

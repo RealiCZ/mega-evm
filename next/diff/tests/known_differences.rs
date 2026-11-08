@@ -160,8 +160,24 @@ const HALTED_FIRST_FRAME_ENTRY: &str =
 #[test]
 fn test_known_differences_file_lists_exactly_its_entries() {
     let k = known_differences();
+    // The first five are the owner's; the rest are pending fixes of decided changes.
+    let pending: Vec<_> =
+        k.iter().skip(5).map(|k| (k.scenario.as_str(), k.field.as_str())).collect();
+    assert_eq!(
+        pending,
+        [
+            ("port_system_nonce_stale_check_off", "record"),
+            ("port_system_code_3607_off", "record"),
+            ("port_system_code_and_stale_nonce_both_off", "record"),
+            ("port_create_max_nonce_check_off", "record"),
+            ("port_create_max_nonce_check_off", "frames"),
+            ("port_protocol_caller_call", "record"),
+            ("port_protocol_caller_call", "frames"),
+        ]
+    );
     let listed: Vec<_> = k
         .iter()
+        .take(5)
         .map(|k| {
             (k.scenario.as_str(), k.field.as_str(), k.reference.as_str(), k.candidate.as_str())
         })
@@ -182,6 +198,7 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     assert_eq!(text.matches(HALTED_FIRST_FRAME_ENTRY).count(), 2);
     // Five entries, three classes and two replay entries.
     assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 10);
+    assert_eq!(text.matches("pending fix (SATIN-").count(), 7);
 }
 
 #[test]
@@ -439,4 +456,33 @@ fn test_the_dup_class_accepts_exactly_its_label() {
     assert_eq!(classify(&[], &dupn(), "s", halt(), &r2, &c2, NO_FRAMES), Verdict::Differ(halt()));
     // A case with an entry of its own is held to it.
     assert_eq!(classify(&known(), &dupn(), "s", halt(), &r, &c, NO_FRAMES), Verdict::Known);
+}
+
+/// A whole-record entry accepts a case only when both records are exactly the pinned ones, and
+/// then takes every field difference of it.
+#[test]
+fn test_a_record_entry_pins_both_whole_records() {
+    let (r, c) = (outcome("OutOfGas"), json!({"error": "InvalidNonce { expected: 1, got: 0 }"}));
+    let pin = |a: &Value, b: &Value| Known {
+        scenario: "s".into(),
+        field: "record".into(),
+        reference: gate_canonical(a).to_string(),
+        candidate: gate_canonical(b).to_string(),
+    };
+    let diffs = || vec!["status".to_string(), "halt".into(), "gas_used".into(), "error".into()];
+    let known = vec![pin(&r, &c)];
+    assert_eq!(classify(&known, NO_CLASS, "s", diffs(), &r, &c, NO_FRAMES), Verdict::Known);
+    // Another candidate record, or an extra difference no field of the record names, differs.
+    let other = json!({"error": "IntrinsicGasTooLow { required: 2, got: 1 }"});
+    assert!(matches!(
+        classify(&known, NO_CLASS, "s", diffs(), &r, &other, NO_FRAMES),
+        Verdict::Differ(_)
+    ));
+    let mut more = diffs();
+    more.push("frame count 0 vs 1".into());
+    assert!(matches!(classify(&known, NO_CLASS, "s", more, &r, &c, NO_FRAMES), Verdict::Differ(_)));
+}
+
+fn gate_canonical(v: &Value) -> Value {
+    mega_evm2_diff::gate::canonical(v)
 }
