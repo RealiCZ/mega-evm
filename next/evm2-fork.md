@@ -7,7 +7,7 @@ The earlier series, branch `cz/feat/thin-fork` at `91576d1e`, is left as it was,
 
 A patch exists only when the engine needs something evm2 cannot give it from outside: data from inside evm2's own flow, or a hook point.
 Every patch keeps stock behavior as its default, and each says what upstream change would let it go.
-Two patches, `04f0e24f` and `de8c5cd0`, are stock fixes instead: each moves a check to revm's order, which evm2 follows, and is written to be proposed upstream as it is.
+Two patches, `b9fa9909` and `0f50973c`, are stock fixes instead: each moves a check to revm's order, which evm2 follows, and is written to be proposed upstream as it is.
 The engine also uses two upstream changes that are already in the base: `call_with` / `create_with` ([#887](https://github.com/alloy-rs/evm2/pull/887)) and reservoir-funded state gas in `system_call` totals ([#842](https://github.com/alloy-rs/evm2/pull/842)).
 
 | Patch                                                                               | Adds                                                             | Size     | Upstream                                                                                                                  | Drop when upstream                                                                         |
@@ -15,23 +15,23 @@ The engine also uses two upstream changes that are already in the base: `call_wi
 | `70bbeb67` select consensus and observation message hooks statically                | `MessageHooks`, a static per-message hook type                   | +576/−36 | none yet                                                                                                                  | has a static hook on every message, answers included, before the commit decision           |
 | `9df29b6a` price state charges by account and storage location                      | `EvmTypesHost::state_gas_price`, `StateGasSite`                  | +471/−34 | none yet                                                                                                                  | can price a state charge by its account or storage slot                                    |
 | `f623a776` expose a code deposit admission hook                                     | `MessageHooks::admit_code_deposit`                               | +83/−9   | none yet                                                                                                                  | has an admission hook whose revert restores the pre-charge gas                             |
-| `099810ca` retain failed debit before normalization on every interpreter path       | `GasTracker::failed_charge`                                      | +106/−3  | none yet                                                                                                                  | keeps the failed execution-gas debit on both paths after `remaining` is normalized         |
-| `09965c55` let a type family hold a frame's gas in reserve                          | `gas_reserve` / `draw_gas_reserve`, `BudgetUse`, `ReserveDraw`   | +768/−26 | none yet                                                                                                                  | lets execution gas outside `remaining` reach budget decisions and non-execution deductions |
-| `2227aa3c` expose transaction-original account information                          | `AccountHandle::original`, `AccountHandle::is_changed`           | +59      | issue [#1024](https://github.com/alloy-rs/evm2/issues/1024), PR [#1025](https://github.com/alloy-rs/evm2/pull/1025), open | makes `AccountHandle::original` public                                                     |
-| `68547bdf` optionally read uncached storage of accounts the database reports absent | `CacheDB::read_absent_storage`, `State::set_read_absent_storage` | +61/−3   | none yet                                                                                                                  | reads that storage as revm does, or offers this switch                                     |
-| `82427081` make the EIP-8037 total transaction gas cap configurable                 | `Version::tx_total_gas_cap`                                      | +51/−2   | PR [#1023](https://github.com/alloy-rs/evm2/pull/1023), open                                                              | lets a chain set or disable the total cap, default unchanged                               |
-| `2789b9e5` let a type family refuse an instruction's account load                   | `EvmTypesHost::before_account_load`, `AccountLoadSite`           | +395/−5  | none yet                                                                                                                  | lets a type family stop an instruction at its own account load                             |
-| `04f0e24f` pop CREATE2's salt after the init-code and memory charges                | none (instruction order)                                         | +33/−1   | not yet proposed                                                                                                          | pops CREATE2's salt after the init-code charge and the memory expansion                    |
-| `de8c5cd0` check ModExp's EIP-7823 bound before its formula price                   | none (precompile order)                                          | +32/−22  | not yet proposed                                                                                                          | checks the EIP-7823 bound before the formula price                                         |
-| `91518705` let a type family act on the transaction before its first frame          | `TxHandlerHooks::before_initial_frame`                           | +375/−45 | not yet proposed                                                                                                          | has a handler hook before the first frame that can charge the transaction or settle it     |
+| `41525289` retain failed debit before normalization on every interpreter path       | `GasTracker::failed_charge`                                      | +158/−4  | none yet                                                                                                                  | keeps the failed execution-gas debit on both paths after `remaining` is normalized         |
+| `f37259b6` let a type family hold a frame's gas in reserve                          | `gas_reserve` / `draw_gas_reserve`, `BudgetUse`, `ReserveDraw`   | +768/−26 | none yet                                                                                                                  | lets execution gas outside `remaining` reach budget decisions and non-execution deductions |
+| `0f373350` expose transaction-original account information                          | `AccountHandle::original`, `AccountHandle::is_changed`           | +59      | issue [#1024](https://github.com/alloy-rs/evm2/issues/1024), PR [#1025](https://github.com/alloy-rs/evm2/pull/1025), open | makes `AccountHandle::original` public                                                     |
+| `94011dec` optionally read uncached storage of accounts the database reports absent | `CacheDB::read_absent_storage`, `State::set_read_absent_storage` | +61/−3   | none yet                                                                                                                  | reads that storage as revm does, or offers this switch                                     |
+| `28301ff3` make the EIP-8037 total transaction gas cap configurable                 | `Version::tx_total_gas_cap`                                      | +51/−2   | PR [#1023](https://github.com/alloy-rs/evm2/pull/1023), open                                                              | lets a chain set or disable the total cap, default unchanged                               |
+| `f6d21862` let a type family refuse an instruction's account load                   | `EvmTypesHost::before_account_load`, `AccountLoadSite`           | +395/−5  | none yet                                                                                                                  | lets a type family stop an instruction at its own account load                             |
+| `b9fa9909` pop CREATE2's salt after the init-code and memory charges                | none (instruction order)                                         | +33/−1   | not yet proposed                                                                                                          | pops CREATE2's salt after the init-code charge and the memory expansion                    |
+| `0f50973c` check ModExp's EIP-7823 bound before its formula price                   | none (precompile order)                                          | +32/−22  | not yet proposed                                                                                                          | checks the EIP-7823 bound before the formula price                                         |
+| `8751da2b` let a type family act on the transaction before its first frame          | `TxHandlerHooks::before_initial_frame`                           | +375/−45 | not yet proposed                                                                                                          | has a handler hook before the first frame that can charge the transaction or settle it     |
 
-Size is the commit's own stat against its parent; most of the insertions of `09965c55`, `9df29b6a`, `2789b9e5`, `04f0e24f` and `91518705` are tests.
-Upstream order, smallest and least contested first: `2227aa3c`, `82427081` (both filed), `04f0e24f`, `de8c5cd0`, `91518705`, `68547bdf`, `f623a776`, `099810ca` with the halt record of `09965c55`, `9df29b6a`, the rest of `09965c55`, `2789b9e5`, and `70bbeb67` last, because it runs on every message.
+Size is the commit's own stat against its parent; most of the insertions of `f37259b6`, `9df29b6a`, `f6d21862`, `b9fa9909` and `8751da2b` are tests.
+Upstream order, smallest and least contested first: `0f373350`, `28301ff3` (both filed), `b9fa9909`, `0f50973c`, `8751da2b`, `94011dec`, `f623a776`, `41525289` with the halt record of `f37259b6`, `9df29b6a`, the rest of `f37259b6`, `f6d21862`, and `70bbeb67` last, because it runs on every message.
 
 ## The patches
 
-Each engine rule a patch serves sits behind a named switch with a negative control in `diff/negative-controls.toml` (a harness switch for `68547bdf`); turning the switch off makes the control's case differ from the reference.
-`82427081`'s setting is a version constant, proved by tests instead; `04f0e24f` and `de8c5cd0` change evm2's own instruction and precompile, which the `edge_create2_*` and `edge_modexp_*` scenarios show; `91518705` carries the start-record charge, whose switches (`start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`) have their controls.
+Each engine rule a patch serves sits behind a named switch with a negative control in `diff/negative-controls.toml` (a harness switch for `94011dec`); turning the switch off makes the control's case differ from the reference.
+`28301ff3`'s setting is a version constant, proved by tests instead; `b9fa9909` and `0f50973c` change evm2's own instruction and precompile, which the `edge_create2_*` and `edge_modexp_*` scenarios show; `8751da2b` carries the start-record charge, whose switches (`start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`) have their controls.
 
 ### `70bbeb67` static message hooks
 
@@ -70,12 +70,15 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed.
 - **Drop** when upstream offers an admission hook that can restore the pre-charge gas on revert.
 
-### `099810ca` failed-charge record
+### `41525289` failed-charge record
 
 - **API.** `GasTracker::failed_charge` returns the last failed execution-gas debit as `(remaining_before, cost)`; `record_failed_charge` and `clear_failed_charge` write and clear it.
   It is written on the failure side of `spend` and of the dispatcher's static gas, on both interpreter paths, before wrapping or inspector normalization zeroes `remaining`.
   `try_spend` and `try_spend_state` failures do not record; child records are not merged.
   The record is interpreter-only: the JIT builtins record no failed charge.
+- **Layout.** Compiled code loads and debits the remaining gas as the first word of `Gas` (at the `EvmContext`'s `gas` field), so `GasTracker` is `#[repr(C)]` with `remaining` first; Rust's default layout put the new record ahead of it.
+  The record grows `Gas` from 64 to 80 bytes, which moves every `EvmContext` field after it, so the commit moves the compiled-artifact ABI (`evm2-jit-codegen`'s `ABI_VERSION`) from 6 to 7, and artifacts persisted at 6 are not loaded.
+  Tests: `test_remaining_gas_is_the_first_word` (`interpreter/gas.rs`) and `compiled_charge_debits_the_remaining_gas` (`evm2-jit-context`), which charge through the context's gas field as compiled code does.
 - **Why.** Detention classifies an out-of-gas halt by it: a debit that spendable plus withheld gas could pay is a crossing, anything else burns (`detention::before_commit`).
   Precompiles outside the engine's price table are priced by running them on a tracker with no gas and reading the record (`precompile_price_of`).
   Controls: `classify`, `precompile_catalog`.
@@ -83,7 +86,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   [#752](https://github.com/alloy-rs/evm2/pull/752), in the base, reports the inspector's out-of-gas step cost; this is a separate, consensus-side ask.
 - **Drop** when upstream keeps the failed execution-gas debit, on both interpreter paths, after `remaining` is normalized.
 
-### `09965c55` gas reserve
+### `f37259b6` gas reserve
 
 - **API.** `EvmTypesHost::gas_reserve(host, BudgetUse) -> u64` reports execution gas the running frame holds outside `remaining`; `draw_gas_reserve(host, amount, ReserveDraw) -> u64` moves up to `amount` of it back and returns what it moved.
   Both default to no reserve and are `#[inline(always)]`.
@@ -98,7 +101,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed; it needs a design issue first, since the JIT builtins would need the same helpers.
 - **Drop** when upstream lets a type family keep execution gas outside `remaining` that budget decisions see and non-execution deductions draw first, with a halt record that survives the inspected path.
 
-### `2227aa3c` transaction-original account info
+### `0f373350` transaction-original account info
 
 - **API.** `AccountHandle::original` returns the account info at the transaction boundary (`None` for an account absent then); loading bytecode does not move it.
   `AccountHandle::is_changed` reports whether existence or persisted account fields differ from it; storage-only writes do not count (`original_is_the_transaction_baseline`).
@@ -108,7 +111,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** Issue [#1024](https://github.com/alloy-rs/evm2/issues/1024) and PR [#1025](https://github.com/alloy-rs/evm2/pull/1025), open; the PR exposes `original` only.
 - **Drop** when `AccountHandle::original` is public.
 
-### `68547bdf` reads of absent accounts' storage
+### `94011dec` reads of absent accounts' storage
 
 - **API.** `CacheDB::read_absent_storage`, default `false`: uncached storage of an account the cache holds as absent is answered as zero without a backing read.
   `State::set_read_absent_storage` turns it on; values stay the same for a consistent database, and the read is performed, as revm performs it (`absent_account_storage_is_read_only_when_asked`).
@@ -118,7 +121,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed.
 - **Drop** when upstream reads uncached storage of a database-absent account the way revm does, or offers this switch.
 
-### `82427081` configurable total gas cap
+### `28301ff3` configurable total gas cap
 
 - **API.** `Version::tx_total_gas_cap` bounds `tx.gas` when EIP-8037 is on; `u64::MAX` disables it.
   The default is `MAX_TX_TOTAL_GAS_LIMIT_AMSTERDAM` (2^32 − 1) in both base version tables, so an unmodified Ethereum version still rejects 2^32.
@@ -129,7 +132,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** PR [#1023](https://github.com/alloy-rs/evm2/pull/1023), open (the cap itself is issue #807 and PR #862 upstream).
 - **Drop** when upstream lets a chain set or disable the EIP-8037 total transaction gas cap without changing the default.
 
-### `2789b9e5` account-load hook
+### `f6d21862` account-load hook
 
 - **API.** `EvmTypesHost::before_account_load(state, address, AccountLoadSite) -> Result` runs where an instruction is about to load an account: after every charge the instruction makes before that load, before the load and its EIP-2929 skip-cold check.
   A stop it returns fails the instruction there, with nothing loaded; the default admits every load and is `#[inline(always)]`.
@@ -145,7 +148,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed.
 - **Drop** when upstream lets a type family stop an instruction at each of its account loads, after the instruction's charges before the load and before its skip-cold check.
 
-### `04f0e24f` CREATE2's salt order
+### `b9fa9909` CREATE2's salt order
 
 - **API.** None: `create_with` (and so CREATE2) pops `value`, `offset` and `len`, makes the EIP-3860 init-code charge and the memory expansion, and only then pops the salt and charges the CREATE2 cost, as revm's `create` does.
   A CREATE2 whose salt is missing now fails on the first of those charges it cannot pay, and otherwise underflows with both paid (`create2_pops_its_salt_after_the_init_code_and_memory_charges`).
@@ -158,7 +161,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   evm2 follows revm's control flow and gas accounting, so the change can be proposed as it is.
 - **Drop** when upstream pops CREATE2's salt after the init-code charge and the memory expansion.
 
-### `de8c5cd0` ModExp's EIP-7823 bound order
+### `0f50973c` ModExp's EIP-7823 bound order
 
 - **API.** None: `run_inner` charges the minimum price, reads the three lengths, refuses an Osaka input over EIP-7823's 1,024-byte bound with `ModexpEip7823LimitSize`, and only then prices the input by its formula, as revm-precompile's `run_inner` does (the same order in revm-precompile 43.0.3, which `next/` locks, and in the reference's revm `4c8f0d43`: minimum gas, the length casts, the EIP-7823 bound, the formula price, the zero-length case).
   An over-bound input costs the minimum price whatever its formula, and gas below the minimum is still out of gas (`oversized_lengths_are_rejected_after_the_minimum_price`, which replaces upstream's test of the old order).
@@ -169,7 +172,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** Not yet proposed; written to be proposed as it is.
 - **Drop** when upstream checks the EIP-7823 bound before the formula price.
 
-### `91518705` the first-frame hook
+### `8751da2b` the first-frame hook
 
 - **API.** `TxHandlerHooks::before_initial_frame(host, envelope, tx_gas) -> HandlerResult<Option<MessageResult<T>>>` runs in every standard `execute_prepared` (legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702) after the pre-execution changes and the transaction environment, immediately before `prepare_initial_frame`, on the transaction-level gas tracker; EIP-7702 runs it after its authorizations are applied, and not when their charges ran out of gas (that transaction settles as a halted first frame first).
   A family may charge `tx_gas` (the charge is the transaction's, kept whatever the first frame's execution does; its spill is unwound by a reservoir the first frame returns), or return a result that `settle_transaction` settles without a frame (an EIP-7702 transaction then keeps none of its delegations).
@@ -225,6 +228,10 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
   Give a new site its engine decision in `refuses_load`; the controls `refuse_at_load`, `refusal_gas` and `delegate_refusal` show the rule.
 - **Every `EvmTypesHost` impl sets `MessageHooks`**, including the JIT host tests in `crates/jit/runtime/src/evm2_evm.rs`.
   Build the JIT crate after the rebase: the interpreter can build while the runtime tests do not.
+- **Compiled code's fixed offsets keep their fields.**
+  The JIT addresses `EvmContext` fields by `offset_of!` and reads the remaining gas as the first word of its `gas` field; `GasTracker` and `Gas` are `#[repr(C)]` with `remaining` first.
+  A field added to `GasTracker`, `Gas`, `EvmContext`, or to a struct `HostLayout` takes offsets in (`Interpreter`'s message, `Message`, `TxEnv`, `BlockEnv`) must keep those offsets right, and a change of their size or order bumps `ABI_VERSION`.
+  Run the JIT crates' tests and the EEST JIT suite with LLVM installed, against upstream's own failures: the interpreter suites cannot see a compiled-code regression.
 - **Every `execute_prepared` calls the first-frame hook.**
   Read every `execute_prepared` upstream has (and any new one): each must call `before_initial_frame` after the transaction environment and the pre-execution changes, immediately before `prepare_initial_frame` (EIP-7702's only when its authorization charges were paid), settle the result it returns without a frame, and recompute nothing from the envelope that `PreparedTx` holds (the creation nonce is the prepared state nonce); keep `tests::before_initial_frame` covering every envelope.
   Types 0, 1 and 2 run evm2's `execute_prepared` with `MegaHooks`, so the start record moves with that call.
