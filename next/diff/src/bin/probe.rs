@@ -89,6 +89,13 @@ fn judge(probes: &[mega_evm2_scenarios::Scenario], records: &[Value]) -> bool {
                 differ += 1;
                 println!("DIFFER {} {d:?}", s.name);
                 let (a, b) = (gate::canonical(reference), gate::canonical(&plain));
+                println!("  record: reference {a} | engine {b}");
+                if let (Some(x), Some(y)) = (
+                    gate::compared_frames(&reference["frames"]),
+                    gate::compared_frames(&inspected["frames"]),
+                ) {
+                    println!("  frames: reference {x} | engine {y}");
+                }
                 for field in
                     d.iter().filter(|f| a.get(f.as_str()).is_some() || b.get(f.as_str()).is_some())
                 {

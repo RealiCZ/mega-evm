@@ -14,7 +14,7 @@ FULL_FUZZ_BATCHES=(
   sys:5:1..=3000:3000 collide:6:1..=3000:3000 pre0:7:1..=3000:3000 pre0kzg:7:3001..=4000:1000
   limits:8:1..=3000:3000 destroy:9:1..=3000:3000 refuse:10:1..=3000:3000
   frame:11:1..=3000:3000 readfail:12:1..=3000:3000 stack:13:1..=3000:3000
-  pairs:14:1..=3300:3300
+  pairs:14:1..=3300:3300 blocks:15:1..=3000:9014
 )
 
 # The fuzz batches of the sample, in the same format: each holds the first seeds of the full
@@ -25,7 +25,7 @@ SAMPLE_FUZZ_BATCHES=(
   sys:5:1..=300:300 collide:6:1..=300:300 pre0:7:1..=300:300
   limits:8:1..=300:300 destroy:9:1..=300:300 refuse:10:1..=300:300
   frame:11:1..=300:300 readfail:12:1..=300:300 stack:13:1..=300:300
-  pairs:14:1..=330:330
+  pairs:14:1..=330:330 blocks:15:1..=150:452
 )
 
 # The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, five of
@@ -33,7 +33,7 @@ SAMPLE_FUZZ_BATCHES=(
 # place that states them. Adding a scenario or a known difference means changing it here (and the
 # data under `next/diff/data`, see `data/README.md`); `gate-lib.sh`, `check-reference.sh` and
 # `regen-reference.sh` read it.
-MAIN_EXPECT="total=2686 match=2521 known=5 class=160"
+MAIN_EXPECT="total=2794 match=2624 known=10 class=160"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (mode 11's first-frame window and mode 14's pairs, `halted_first_frame`); every other seed
 # must match.

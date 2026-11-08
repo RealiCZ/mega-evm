@@ -93,7 +93,7 @@ fn delegation(target: Address) -> Vec<u8> {
 
 /// A transaction from [`SYSTEM`] to `to` on a chain whose registry names it; the system account
 /// is `system` (funded), the Oracle and A store 1 in slot 1.
-fn from_system(name: &'static str, system: Account, to: Address) -> Scenario {
+pub(crate) fn from_system(name: &'static str, system: Account, to: Address) -> Scenario {
     let accounts =
         vec![registry_naming(SYSTEM), system, acct(ORACLE, store_one()), acct(A, store_one())];
     let mut s = edge(name, accounts, BELOW_CAP, Limits::default());
@@ -102,7 +102,7 @@ fn from_system(name: &'static str, system: Account, to: Address) -> Scenario {
     s
 }
 
-fn system_account(code: Vec<u8>, nonce: u64) -> Account {
+pub(crate) fn system_account(code: Vec<u8>, nonce: u64) -> Account {
     Account { nonce, ..funded(SYSTEM, code, ONE_ETHER) }
 }
 

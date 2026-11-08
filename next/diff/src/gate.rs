@@ -84,6 +84,21 @@ fn known_entry(e: &toml::Value, scenario: String) -> Known {
         reference: text(e, "reference"),
         candidate: text(e, "candidate"),
     };
+    if k.field == RECORD {
+        // A whole-record difference is accepted only as a stated one with both records pinned.
+        for key in ["why", "signoff"] {
+            assert!(
+                !text(e, key).trim().is_empty(),
+                "known difference {}: empty `{key}`",
+                k.scenario
+            );
+        }
+        for rec in [&k.reference, &k.candidate] {
+            let v: Value = serde_json::from_str(rec)
+                .unwrap_or_else(|e| panic!("known difference {}: record: {e}", k.scenario));
+            assert!(v.is_object(), "known difference {}: a record is an object", k.scenario);
+        }
+    }
     if k.field == "frames" {
         // A frame difference is accepted only as a stated, signed-off class with pinned frames.
         for key in ["class", "why", "signoff"] {
@@ -101,6 +116,12 @@ fn known_entry(e: &toml::Value, scenario: String) -> Known {
     }
     k
 }
+
+/// The `field` of an entry that pins the two whole normalized records ([`canonical`], as compact
+/// JSON, keys sorted): for a case in which one side executes and the other refuses, where no one
+/// field is the difference. The entry accepts the case only when both records are exactly the
+/// pinned ones, and takes every difference of a field of the record.
+pub const RECORD: &str = "record";
 
 /// The accepted differences of the synthetic gate (`[[difference]]`).
 pub fn known_differences() -> Vec<Known> {
@@ -280,6 +301,21 @@ pub fn classify(
     let (a, b) = (canonical(reference), canonical(candidate));
     let mut remaining = diffs;
     for k in entries {
+        if k.field == RECORD {
+            let pinned = |s: &str| serde_json::from_str::<Value>(s).ok();
+            if pinned(&k.reference).as_ref() == Some(&a) &&
+                pinned(&k.candidate).as_ref() == Some(&b)
+            {
+                let fields: BTreeSet<&String> =
+                    a.as_object().into_iter().chain(b.as_object()).flat_map(|o| o.keys()).collect();
+                remaining.retain(|d| !fields.contains(d));
+                continue;
+            }
+            return Verdict::Differ(vec![format!(
+                "known difference {name}.{} did not occur as listed",
+                k.field
+            )]);
+        }
         let (hit, same) = if k.field == "frames" {
             let listed = |list: &str| serde_json::from_str::<Value>(list).ok();
             (

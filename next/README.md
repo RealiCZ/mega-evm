@@ -29,6 +29,7 @@ MEGA_EVM2_CORPUS_DIR=<corpus> bash diff/scripts/gate.sh full   # the gates on th
 bash diff/scripts/controls.sh sample|full                      # negative controls
 bash diff/scripts/faults.sh                                    # fault injection
 bash diff/scripts/check-reference.sh sample                    # rebuild the reference, compare the sample
+bash diff/scripts/rule-coverage.sh <rules.md>                  # which rule ids of the specification have a scenario
 bash diff/scripts/probe.sh diff/probe-examples.jsonl           # inputs of your own, on both sides
 cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads, plain and inspected
 ```
@@ -65,6 +66,16 @@ Three classes of differences are accepted by their shape instead of case by case
 `dup_stack_label` (`gate::dup_stack_label`) is the halt label of a failed DUP (`DUP1` to `DUP16` or `DUPN` deeper than the stack): a case whose only difference is `halt`, `StackOverflow` against `StackUnderflow`.
 Such a case is accepted and counted as `class=`; any other field that differs, or any other shape, fails it.
 The `class=` counts are pinned like the others: `MAIN_EXPECT`, `SAMPLE_FUZZ_CLASS` and `FULL_FUZZ_CLASS` in `diff/scripts/common.sh`, and `count_expected.py` for the replay gate (an applied transaction no entry lists whose reference recorded no frame).
+
+## Blocks of several transactions, simulation switches and rule ids
+
+A scenario can be one transaction of a block (`Scenario::prior` in `diff/shared/src/lib.rs`): both harnesses run the earlier transactions of the block first, on one EVM, committing each outcome, and render the last one alone, with `block_accounts` and `block_storage`, the changes of the block so far.
+A refused earlier transaction leaves nothing.
+The database reads (`reads.accounts`, `storage`, `codes`, `block_hashes`) are recorded for a block's first transaction only, because the engine's state keeps what an earlier transaction loaded; the SALT buckets and the Oracle reads are per transaction on both sides.
+`blk` holds hand-written blocks (`<name>_t1`, `_t2`, …) and fuzz mode 15 draws random ones.
+`Scenario::skip_nonce_check` and `skip_eip3607` switch off the two checks the specification lets a node switch off in a simulation; the limits and the detention caps cannot be switched.
+`Scenario::rules` lists the `SATIN-` rule ids a scenario exercises and is ignored by the comparison; `diff/scripts/rule-coverage.sh <rules.md>` reports which rule ids have a scenario.
+A known difference with `field = "record"` pins both whole normalized records, for a case one side executes and the other refuses.
 
 ## Probing an input on both sides
 

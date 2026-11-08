@@ -39,7 +39,7 @@ use crate::{
 use alloy_primitives::{Address, U256, hex};
 
 /// The keys a probe line may hold.
-pub const KEYS: [&str; 26] = [
+pub const KEYS: [&str; 29] = [
     "name",
     "base",
     "gas",
@@ -52,6 +52,9 @@ pub const KEYS: [&str; 26] = [
     "gas_price",
     "tx_type",
     "chain_id",
+    "nonce",
+    "skip_nonce_check",
+    "skip_eip3607",
     "auths",
     "l1_fee",
     "beneficiary",
@@ -154,6 +157,9 @@ fn apply(s: &mut Scenario, key: &str, v: &Json) -> Result<(), String> {
             }
         }
         "chain_id" => s.chain_id = opt(v, int)?,
+        "nonce" => s.nonce = int(v)?,
+        "skip_nonce_check" => s.skip_nonce_check = boolean(v)?,
+        "skip_eip3607" => s.skip_eip3607 = boolean(v)?,
         "auths" => s.auths = list(v, auth)?,
         "l1_fee" => {
             s.l1_fee = opt(v, |v| {

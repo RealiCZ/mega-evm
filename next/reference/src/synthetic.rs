@@ -16,8 +16,9 @@ use mega_evm::{
 };
 use mega_evm2_scenarios::{self as scenarios, Scenario, record, record::hex};
 use revm::{
-    Database, Inspector,
+    Database, DatabaseCommit, Inspector,
     context::{BlockEnv, TxEnv},
+    context_interface::ContextTr,
     context_interface::result::ExecutionResult,
     interpreter::{
         CallInputs, CallOutcome, CreateInputs, CreateOutcome, InstructionResult,
@@ -202,12 +203,21 @@ fn context(
 ) -> MegaContext<RecordingDatabase<MemoryDatabase>, Envs> {
     let factory = RecordingEnvFactory::new(Fixed(env), record.clone());
     let ext = factory.external_envs(1);
-    MegaContext::new_with_external_envs(
+    let ctx = MegaContext::new_with_external_envs(
         RecordingDatabase::new(db(s), record),
         MegaSpecId::SATIN,
         ext,
-    )
-    .with_block(BlockEnv {
+    );
+    // The node's simulation switches (`Scenario::skip_nonce_check`, `skip_eip3607`).
+    let ctx = if s.skip_nonce_check || s.skip_eip3607 {
+        let mut cfg = ctx.mega_cfg().clone();
+        cfg.disable_nonce_check = s.skip_nonce_check;
+        cfg.disable_eip3607 = s.skip_eip3607;
+        ctx.with_cfg(cfg)
+    } else {
+        ctx
+    };
+    ctx.with_block(BlockEnv {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: scenarios::BLOCK_GAS_LIMIT,
@@ -246,7 +256,7 @@ fn tx(s: &Scenario) -> mega_evm::MegaTransaction {
             .gas_price(s.gas_price as u128)
             .gas_priority_fee(Some(s.gas_price as u128))
             .chain_id(Some(1))
-            .nonce(0)
+            .nonce(s.nonce)
             .authorization_list_recovered(auths)
             .build_fill();
         let mut t = OpTx(op_transaction(env));
@@ -266,7 +276,7 @@ fn tx(s: &Scenario) -> mega_evm::MegaTransaction {
             .gas_price(s.gas_price as u128)
             .gas_priority_fee((s.tx_type == 2).then_some(s.gas_price as u128))
             .chain_id(Some(1))
-            .nonce(0)
+            .nonce(s.nonce)
             .build_fill();
         let mut t = OpTx(op_transaction(env));
         t.0.enveloped_tx = Some(Bytes::new());
@@ -274,6 +284,7 @@ fn tx(s: &Scenario) -> mega_evm::MegaTransaction {
     }
     let mut t = OpTx(op_transaction(TxEnv {
         caller: s.sender,
+        nonce: if s.deposit.is_some() { 0 } else { s.nonce },
         kind,
         data: Bytes::from(s.data.clone()),
         value: s.value,
@@ -303,15 +314,9 @@ fn pools(p: &LedgerPools) -> Value {
     json!({ "remaining": nums, "net": p.net })
 }
 
-fn outcome_json(s: &Scenario, o: &MegaTransactionOutcome, rec: &WitnessRecord) -> Value {
-    let (status, output) = match &o.result {
-        ExecutionResult::Success { output, .. } => {
-            (record::SUCCESS.to_string(), output.data().clone())
-        }
-        ExecutionResult::Revert { output, .. } => (record::REVERT.to_string(), output.clone()),
-        ExecutionResult::Halt { .. } => (record::HALT.to_string(), Bytes::new()),
-    };
-    // State changes: every account whose info changed, and every slot whose value changed.
+/// The changed accounts and slots of an outcome, as the record writes them: every touched account
+/// whose info changed (a destroyed one as zero) and every slot whose value changed.
+fn changed(o: &MegaTransactionOutcome) -> (serde_json::Map<String, Value>, serde_json::Map<String, Value>) {
     let mut accounts = serde_json::Map::new();
     let mut storage = serde_json::Map::new();
     for (a, acc) in o.state.iter() {
@@ -338,6 +343,18 @@ fn outcome_json(s: &Scenario, o: &MegaTransactionOutcome, rec: &WitnessRecord) -
             }
         }
     }
+    (accounts, storage)
+}
+
+fn outcome_json(s: &Scenario, o: &MegaTransactionOutcome, rec: &WitnessRecord) -> Value {
+    let (status, output) = match &o.result {
+        ExecutionResult::Success { output, .. } => {
+            (record::SUCCESS.to_string(), output.data().clone())
+        }
+        ExecutionResult::Revert { output, .. } => (record::REVERT.to_string(), output.clone()),
+        ExecutionResult::Halt { .. } => (record::HALT.to_string(), Bytes::new()),
+    };
+    let (accounts, storage) = changed(o);
     let logs: Vec<Value> = o
         .result
         .logs()
@@ -350,11 +367,16 @@ fn outcome_json(s: &Scenario, o: &MegaTransactionOutcome, rec: &WitnessRecord) -
         }
         _ => Value::Null,
     };
+    // What the database served is the first transaction of a block's alone (`Scenario::prior`):
+    // the engine's state keeps what an earlier transaction loaded, so a later transaction asks its
+    // database for less there than here. The SALT buckets and the Oracle reads are per
+    // transaction on both sides.
+    let served = s.prior.is_empty();
     let reads = json!({
-        "accounts": rec.accounts.keys().map(|a| format!("{a}")).collect::<Vec<_>>(),
-        "storage": rec.storage.keys().map(|(a, k)| record::slot_key(*a, *k)).collect::<Vec<_>>(),
-        "codes": rec.codes.keys().map(|h| format!("{h}")).collect::<Vec<_>>(),
-        "block_hashes": rec.block_hashes.keys().collect::<Vec<_>>(),
+        "accounts": rec.accounts.keys().filter(|_| served).map(|a| format!("{a}")).collect::<Vec<_>>(),
+        "storage": rec.storage.keys().filter(|_| served).map(|(a, k)| record::slot_key(*a, *k)).collect::<Vec<_>>(),
+        "codes": rec.codes.keys().filter(|_| served).map(|h| format!("{h}")).collect::<Vec<_>>(),
+        "block_hashes": rec.block_hashes.keys().filter(|_| served).collect::<Vec<_>>(),
         "buckets": rec.buckets.keys().collect::<Vec<_>>(),
         "oracle_reads": rec.oracle_reads.len(),
     });
@@ -388,22 +410,47 @@ fn run_once(s: &Scenario, inspected: bool) -> (Value, Vec<Value>) {
         MegaEvm::new(context(s, record.clone(), env.clone())).with_inspector(Frames::default());
     evm.set_inspector_enabled(inspected);
     record_start_ledger_settlements(evm.ctx_mut());
+    // The transactions of the block that ran before `s`: each runs on this EVM and its outcome is
+    // committed; a refused one leaves nothing. What they changed is carried into the record.
+    let mut block_accounts = serde_json::Map::new();
+    let mut block_storage = serde_json::Map::new();
+    for p in &s.prior {
+        if let Ok(o) = evm.execute_transaction(tx(p)) {
+            let (a, st) = changed(&o);
+            block_accounts.extend(a);
+            block_storage.extend(st);
+            evm.ctx_mut().db_mut().commit(o.state.clone());
+        }
+        take_start_ledger_settlements(evm.ctx_mut());
+        *evm.inspector_mut() = Frames::default();
+    }
+    let hints_before = env.recorded_hints().len();
+    // What the transaction reads is its own: the record starts empty.
+    *record.borrow_mut() = WitnessRecord::default();
     let result = evm.execute_transaction(tx(s));
     let frames = evm.inspector().frames.clone();
     let ledger: Vec<Value> = take_start_ledger_settlements(evm.ctx_mut()).iter()
         .map(|l| json!({"depth":l.depth,"frame":pools(&l.frame),"caller":pools(&l.caller),"refund":l.refund})).collect();
-    let mut out = match result {
-        Ok(o) => outcome_json(s, &o, &record.borrow()),
+    let mut out = match &result {
+        Ok(o) => outcome_json(s, o, &record.borrow()),
         Err(e) => json!({"name":s.name,"group":s.group,"error":format!("{e:?}")}),
     };
     if out.get("error").is_none() {
         let hints: Vec<Value> = env
             .recorded_hints()
             .iter()
+            .skip(hints_before)
             .map(|h| json!([format!("{}", h.from), format!("{}", h.topic), hex(&h.data)]))
             .collect();
         out.as_object_mut().unwrap().insert("hints".into(), json!(hints));
         out.as_object_mut().unwrap().insert("ledger".into(), json!(ledger));
+        if !s.prior.is_empty() {
+            let (a, st) = changed(result.as_ref().unwrap());
+            block_accounts.extend(a);
+            block_storage.extend(st);
+            out.as_object_mut().unwrap().insert("block_accounts".into(), block_accounts.into());
+            out.as_object_mut().unwrap().insert("block_storage".into(), block_storage.into());
+        }
     }
     (out, frames)
 }
