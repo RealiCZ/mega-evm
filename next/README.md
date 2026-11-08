@@ -37,6 +37,47 @@ cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads
 Every gate script refuses to run when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set, so an inherited selection cannot narrow an official run; a direct `cargo test -p mega-evm2-diff` with such a variable prints `PARTIAL GATE` lines and is for debugging.
 Each script extracts its inputs afresh into its own directory under `<target>/mega-evm2-diff/`, so different scripts can run at the same time; do not run one script twice at once on the same cargo target.
 
+## Comparing interpreter performance
+
+Run from `next/`:
+
+```bash
+bash diff/scripts/bench-blocks.sh quick
+MEGA_EVM2_CORPUS_DIR=<corpus> bash diff/scripts/bench-blocks.sh full
+bash diff/scripts/bench-engine.sh
+python3 diff/scripts/bench-summary-test.py
+```
+
+Both benchmark scripts build the engine and the pinned reference in release mode in separate workspaces.
+The reference builds under `<target>/mega-evm2-reference`; set `CARGO_TARGET_DIR` to choose the target directory.
+These reference measurements come from this harness, and are not official results from the other implementation's team.
+Neither side enables JIT or AOT.
+
+`bench-blocks.sh` uses the gates' exact inputs: 20 blocks in `quick`, 263 in `full`.
+Before timing, it regenerates the reference's block outcomes and compares them with the engine using the existing block gate, including receipts, counters and post-state under that gate's documented normalization policy.
+It loads the blocks and their exact transaction envelopes into memory and decodes all transactions before measuring.
+Every iteration clones fresh initial database contents and constructs an executor outside the timer.
+The timer includes pre-block execution, all attempted transactions, receipt construction and state commits; it excludes file access, JSON rendering, envelope decoding, initial database cloning, executor construction and final destruction.
+Both sides start each block with cold execution state and their existing in-memory database adapters; bytecode analysis and caching during execution remain part of the measurement.
+These are harness measurements, including adapter overhead, rather than estimates of a production node's throughput.
+
+One warm-up pass precedes seven measured passes; `BENCH_RUNS` changes the measured count, with a minimum of three.
+The total median and p95 describe complete corpus passes, summing corresponding repetitions across blocks.
+The per-block median and p95 describe the distribution of each block's median time.
+Spread is reported as total minimum and maximum, and gas/s uses included transactions' cumulative receipt gas divided by the median total time.
+Transaction counts include refused transactions, whose attempted execution also consumes time.
+The script checks that block identities, transaction counts, inclusion, refusals and receipt gas agree across the timed sides and repetitions.
+It ends with `BENCH blocks=<n> txs=<n> engine_ms=<total> reference_ms=<total>`.
+Raw timings and gate logs remain under `<target>/mega-evm2-diff/bench-sample` or `bench-full`.
+`BENCH_ORDER=reference-first` reverses the default timing order for a follow-up run.
+
+`bench-engine.sh` runs the six shared synthetic workloads and the fixed 24-transaction block, plain and inspected, on both implementations.
+It checks synthetic outcomes using the existing scenario comparison before engine measurement; the block is covered by the block script's gate.
+Criterion excludes per-iteration setup for synthetic workloads, while the fixed-block workload includes executor construction and transaction decoding, matching the original engine benchmark.
+Criterion's samples and estimates remain in each target directory's `criterion/` directory.
+Extra arguments are forwarded to Criterion, for example `bash diff/scripts/bench-engine.sh --save-baseline comparison`.
+Both scripts print load averages before and after each side; run without competing jobs and repeat measurements taken under load.
+
 ## The gates and their accepted differences
 
 The gates run every scenario, fuzz seed and recorded transaction on both sides, plain and inspected, and compare every emitted field outside the exclusion list in `diff/src/gate.rs`, which states a reason for each entry.
