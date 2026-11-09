@@ -42,7 +42,7 @@ MAIN_EXPECT="total=2915 match=1124 known=5 class=1786"
 # keyless calls and hints of the generators, the classes of those decisions); every other seed must
 # match.
 SAMPLE_FUZZ_CLASS=2191
-FULL_FUZZ_CLASS=24883
+FULL_FUZZ_CLASS=24857
 # The replay transactions the classes the replay gate runs again for take (`gate::REPLAY_RERUN_CLASSES`:
 # `reservoir_give_back`, and `deposit_history` for every recorded deposit), in the sample and in the
 # full gate. `count_expected.py` counts them among the applied transactions (`match`), as it counts
