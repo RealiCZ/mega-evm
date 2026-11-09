@@ -108,7 +108,7 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `satin/synthetic_frame_gas.rs` | 11 | 1 | 5 | 0 | 5 | 0 |
 | `satin/system_call.rs` | 8 | 1 | 0 | 0 | 7 | 0 |
 | `satin/tool_writes.rs` | 3 | 0 | 0 | 0 | 3 | 0 |
-| `satin/transfer_logs.rs` | 20 | 6 | 10 | 0 | 4 | 0 |
+| `satin/transfer_logs.rs` | 20 | 6 | 9 | 0 | 5 | 0 |
 | `satin/volatile_access.rs` | 21 | 11 | 9 | 0 | 1 | 0 |
 | `satin/withheld_gas.rs` | 31 | 15 | 12 | 0 | 4 | 0 |
 | `satin/write_records.rs` | 51 | 24 | 20 | 0 | 7 | 0 |
@@ -133,7 +133,7 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `system/remaining_compute_gas.rs` | 16 | 3 | 13 | 0 | 0 | 0 |
 | `system/system_tx.rs` | 29 | 22 | 4 | 0 | 3 | 0 |
 | `tracers/scenarios.rs` | 15 | 11 | 4 | 0 | 0 | 0 |
-| **total** | 1271 | 418 | 428 | 0 | 425 | 0 |
+| **total** | 1271 | 418 | 427 | 0 | 426 | 0 |
 
 ## Per test
 
@@ -772,7 +772,7 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `satin/transfer_logs.rs` | `test_a_creation_onto_an_occupied_address_fails_on_the_collision` | ported | port_tlog_create_collision_start_short, port_tlog_create_collision_body_short, port_tlog_create_collision_ample |
 | `satin/transfer_logs.rs` | `test_a_deposits_value_is_logged_and_its_mint_is_not` | covered | edge_deposit_value_new_recipient_ok, q21_deposit_writes_salt2 (deposit value logged, mint not) |
 | `satin/transfer_logs.rs` | `test_a_deposit_its_depositor_cannot_fund_fails_as_without_a_limit` | covered | edge_sweep_dep_*_unfunded_runs (deposit value nothing funds: failed deposit); the limit-one-short row is not a scenario |
-| `satin/transfer_logs.rs` | `test_a_value_call_its_recipient_cannot_hold_keeps_nothing` | ported | port_tlog_recipient_overflow_plain, port_tlog_recipient_overflow_short |
+| `satin/transfer_logs.rs` | `test_a_value_call_its_recipient_cannot_hold_keeps_nothing` | not-portable | outside the specification: a value transfer that would push the recipient's balance above 2^256 − 1 (owner decision 2026-11-10, as the deposit-mint rule) |
 | `satin/transfer_logs.rs` | `test_a_failed_precompiles_start_kept_nothing_and_is_held_to_nothing` | ported | port_tlog_failed_precompile_plain, port_tlog_failed_precompile_short |
 | `satin/transfer_logs.rs` | `test_a_failed_precompile_answer_at_a_frame_budget_boundary_burns_its_forward` | not-portable | other: per-frame data-size cap (frame_data_size_limit) |
 | `satin/transfer_logs.rs` | `test_a_nested_creation_whose_nonce_cannot_be_bumped_keeps_nothing` | ported | port_tlog_stuck_nonce_create_plain, port_tlog_stuck_nonce_create_short |

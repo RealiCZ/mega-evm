@@ -181,8 +181,9 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             ("p6_exchange_invalid_immediate", "halt", label.0, label.1),
         ]
     );
-    // The cases the ported tests found and the gates cannot yet accept, each by its two pinned
-    // records, and for the three whose inspected frames also differ, by those frames.
+    // The cases the ported tests found where both sides refuse the transaction before it runs and
+    // only the error name differs, each by its two pinned records (the owner's rule for label-only
+    // differences).
     let pending: Vec<_> = k
         .iter()
         .filter(|k| k.scenario.starts_with("port_"))
@@ -191,17 +192,11 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     assert_eq!(
         pending,
         [
-            ("port_growth_authority_touched_t2", "record"),
             ("port_valid_calldata_cap_3124766", "record"),
             ("port_valid_body_data_limit_3124812", "record"),
             ("port_valid_body_data_limit_3124813", "record"),
             ("port_valid_auth_list_25587", "record"),
             ("port_valid_auth_list_25588", "record"),
-            ("port_tlog_recipient_overflow_plain", "record"),
-            ("port_tlog_recipient_overflow_short", "record"),
-            ("port_growth_authority_touched_t2", "frames"),
-            ("port_tlog_recipient_overflow_plain", "frames"),
-            ("port_tlog_recipient_overflow_short", "frames"),
         ]
     );
     assert_eq!(
@@ -225,8 +220,8 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     );
     let text = include_str!("../known-differences.toml");
     assert_eq!(text.matches(HALTED_FIRST_FRAME_ENTRY).count(), 2);
-    // Five entries, three classes and two replay entries.
-    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 10);
+    // Five entries, three classes, two replay entries and the five refusal-label entries.
+    assert_eq!(text.matches("owner sign-off 2026-11-05").count(), 15);
     // The three classes of the decided changes the reference has not made yet, each by its rule.
     for rule in ["SATIN-AUTH-005", "SATIN-PCMP-007", "SATIN-BASE-005"] {
         assert_eq!(text.matches(&format!("owner decision 2026-11-08 ({rule})")).count(), 1);
@@ -246,8 +241,8 @@ fn test_known_differences_file_lists_exactly_its_entries() {
         assert_eq!(text.matches(&format!("owner decision 2026-11-09 ({rule})")).count(), 1);
     }
     assert_eq!(text.matches("2026-11-09").count(), 8);
-    // One pending fix per entry above.
-    assert_eq!(text.matches("pending fix (SATIN-").count(), 11);
+    // No entry waits for a fix.
+    assert_eq!(text.matches("pending fix (").count(), 0);
 }
 
 #[test]
