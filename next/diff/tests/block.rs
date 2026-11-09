@@ -9,7 +9,10 @@
 //! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line.
 use alloy_primitives::B256;
 use evm2::evm::AccountInfo;
-use mega_evm2::block::{BlockExecutor, encode_receipt};
+use mega_evm2::{
+    ReferenceRule,
+    block::{BlockExecutor, encode_receipt},
+};
 use mega_evm2_diff::{
     driver::{self, Frames},
     gate,
@@ -76,16 +79,23 @@ fn pending_diff(p: &evm2::evm::PendingState) -> Value {
     }
     json!({"accounts":accounts})
 }
-fn run_block(set: &str, path: &str, st: &[Value], inspected: bool) -> Vec<Value> {
+fn run_block(
+    set: &str,
+    path: &str,
+    st: &[Value],
+    inspected: bool,
+    rule: Option<ReferenceRule>,
+) -> Vec<Value> {
     let b = blockdb::load_block(path, set);
     let n = b.number;
     let txlines: Vec<_> = st.iter().filter(|l| l["kind"] == "tx").collect();
     assert_eq!(txlines.len(), b.txs.len(), "engine oracle count {set}:{n}");
     let db = Rc::new(RefCell::new(b.db));
-    let mut evm = replay::new_evm(
+    let mut evm = replay::new_evm_under(
         &b.header,
         b.chain_id,
         Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) },
+        rule,
     );
     if inspected {
         evm.set_inspector(Frames::default());
@@ -158,11 +168,27 @@ fn run_block(set: &str, path: &str, st: &[Value], inspected: bool) -> Vec<Value>
     rows.push(json!({"kind":"post_state","block":n,"accounts":accounts,"storage":storage}));
     rows
 }
+/// The differences of one row of a block: the reference's row `s` against the engine's plain row
+/// `p`, the engine's plain against its inspected row `q`, and the reference's own plain and
+/// inspected runs disagreeing.
+fn row_differences(s: &Value, p: &Value, q: &Value) -> Vec<String> {
+    let mut d = gate::differences(s, p);
+    d.extend(
+        gate::same_engine_differences(p, q).into_iter().map(|f| format!("evm2_inspected:{f}")),
+    );
+    if s["inspected_equal"] != true {
+        d.push("satin_plain_vs_inspected".into());
+    }
+    d
+}
+
 #[test]
 fn test_blocks_match_reference_plain_and_inspected() {
     let reference = std::env::var("MEGA_EVM2_BLOCK_REF").expect("MEGA_EVM2_BLOCK_REF");
     let txref = std::env::var("MEGA_EVM2_REPLAY_REF").expect("MEGA_EVM2_REPLAY_REF");
     let outdir = std::env::var("MEGA_EVM2_OUT").ok();
+    let classes = gate::known_classes();
+    let mut reruns: Vec<(String, &str)> = Vec::new();
     let mut totals = BTreeMap::<String, u64>::new();
     let mut fields = BTreeMap::<String, u64>::new();
     let mut processed = Vec::new();
@@ -175,10 +201,33 @@ fn test_blocks_match_reference_plain_and_inspected() {
         let sb = read_lines(&format!("{reference}/{set}/{n}.jsonl"));
         let st = read_lines(&format!("{txref}/{set}/{n}.jsonl"));
         assert_eq!(sb.len(), txcount + 2, "oracle count {set}:{n}");
-        let p = run_block(&set, &path, &st, false);
-        let q = run_block(&set, &path, &st, true);
+        let mut p = run_block(&set, &path, &st, false, None);
+        let mut q = run_block(&set, &path, &st, true, None);
         assert_eq!(p.len(), sb.len());
         assert_eq!(q.len(), sb.len());
+        // A block that differs is of a class the gate runs blocks again for, when the file enables
+        // it, if the whole block run again under its rule, plain and inspected, has no difference
+        // from any row; its rows are then that run's, and count as they would.
+        let mut class = None;
+        if sb.iter().zip(&p).zip(&q).any(|((s, p), q)| !row_differences(s, p, q).is_empty()) {
+            for (name, rule) in gate::REPLAY_RERUN_CLASSES {
+                if !classes.iter().any(|c| c == name) {
+                    continue;
+                }
+                let p2 = run_block(&set, &path, &st, false, Some(rule));
+                let q2 = run_block(&set, &path, &st, true, Some(rule));
+                if sb
+                    .iter()
+                    .zip(&p2)
+                    .zip(&q2)
+                    .all(|((s, p), q)| row_differences(s, p, q).is_empty())
+                {
+                    (p, q, class) = (p2, q2, Some(name));
+                    reruns.push((format!("{set}:{n}"), name));
+                    break;
+                }
+            }
+        }
         let mut out: Box<dyn Write> = match &outdir {
             Some(dir) => {
                 std::fs::create_dir_all(format!("{dir}/{set}")).unwrap();
@@ -190,15 +239,7 @@ fn test_blocks_match_reference_plain_and_inspected() {
         };
         let mut bc = BTreeMap::<String, u64>::new();
         for (i, ((s, p), q)) in sb.iter().zip(&p).zip(&q).enumerate() {
-            let mut d = gate::differences(s, p);
-            d.extend(
-                gate::same_engine_differences(p, q)
-                    .into_iter()
-                    .map(|f| format!("evm2_inspected:{f}")),
-            );
-            if s["inspected_equal"] != true {
-                d.push("satin_plain_vs_inspected".into());
-            }
+            let d = row_differences(s, p, q);
             for f in &d {
                 *fields.entry(f.clone()).or_default() += 1;
             }
@@ -224,17 +265,24 @@ fn test_blocks_match_reference_plain_and_inspected() {
             };
             *totals.entry(verdict.clone()).or_default() += 1;
             *bc.entry(verdict.clone()).or_default() += 1;
-            writeln!(out,"{}",json!({"kind":s["kind"],"block":n,"index":s["index"],"verdict":verdict,"fields":d,"satin":if d.is_empty(){Value::Null}else{s.clone()},"evm2":if d.is_empty(){Value::Null}else{p.clone()},"inspected":if d.is_empty(){Value::Null}else{q.clone()}})).unwrap();
+            writeln!(out,"{}",json!({"kind":s["kind"],"block":n,"index":s["index"],"verdict":verdict,"class":class,"fields":d,"satin":if d.is_empty(){Value::Null}else{s.clone()},"evm2":if d.is_empty(){Value::Null}else{p.clone()},"inspected":if d.is_empty(){Value::Null}else{q.clone()}})).unwrap();
         }
-        println!("{set}:{n} {bc:?}");
+        match class {
+            Some(class) => println!("{set}:{n} {bc:?} class={class}"),
+            None => println!("{set}:{n} {bc:?}"),
+        }
         *totals.entry("blocks".into()).or_default() += 1;
     }
     println!("TOTAL {totals:?}");
     println!("FIELDS {fields:?}");
+    // The blocks a class took by its rerun, which the summary counts as their rows' verdicts: their
+    // number is pinned on its own (`common.sh`).
+    println!("RERUN block blocks={} {reruns:?}", reruns.len());
     assert!(!totals.is_empty());
     // Only a run of exactly the manifest's blocks is the gate: any other selection prints a
     // line `gate.sh` does not take for a summary.
     let complete = blockdb::check_processed_identities(&processed);
     println!("{}{}", if complete { "" } else { "PARTIAL " }, gate::block_line(&totals));
+    gate::expected("MEGA_EVM2_EXPECT_RERUN", reruns.len() as u64);
     gate::finish(&totals);
 }

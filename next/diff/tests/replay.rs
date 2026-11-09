@@ -29,6 +29,37 @@ fn differ(a: &Value, b: &Value) -> Vec<String> {
     gate::differences(a, b)
 }
 
+/// The differences of one replayed transaction: its reference row `line` (the outcome `satin`, the
+/// recorded `frames`, `inspected_equal`) against the engine's plain and inspected records and the
+/// inspected run's `frames`; also whether the frames differ, and the engine's own plain-versus-
+/// inspected differences.
+fn tx_differences(
+    line: &Value,
+    plain: &Value,
+    inspected: &Value,
+    frames: &Value,
+) -> (Vec<String>, bool, Vec<String>) {
+    let satin = &line["satin"];
+    let mut d = differ(satin, plain);
+    let frames_differ = if satin.get("error").is_none() &&
+        inspected.get("error").is_none() &&
+        let Some(f) = gate::frames_diff(&line["frames"], frames)
+    {
+        d.push(f);
+        true
+    } else {
+        false
+    };
+    let insp = gate::same_engine_differences(plain, inspected);
+    if !insp.is_empty() {
+        d.push("evm2_plain_vs_inspected".into());
+    }
+    if line["inspected_equal"].as_bool() != Some(true) {
+        d.push("satin_plain_vs_inspected".into());
+    }
+    (d, frames_differ, insp)
+}
+
 #[test]
 fn test_replay_matches_reference_plain_and_inspected() {
     let satin_dir = std::env::var("MEGA_EVM2_REPLAY_REF").expect("MEGA_EVM2_REPLAY_REF");
@@ -196,29 +227,17 @@ fn test_replay_matches_reference_plain_and_inspected() {
                             replay::run_tx(&header, chain_id, &db, &code_cache, &tx, true);
                         let satin = &line["satin"];
                         let frames = json!(frames);
-                        let mut d = differ(satin, &plain);
-                        let frames_differ = if satin.get("error").is_none() &&
-                            inspected.get("error").is_none() &&
-                            let Some(f) = gate::frames_diff(&line["frames"], &frames)
-                        {
-                            d.push(f);
-                            true
-                        } else {
-                            false
-                        };
-                        let insp = gate::same_engine_differences(&plain, &inspected);
-                        let satin_insp = line["inspected_equal"].as_bool() != Some(true);
+                        let (mut d, frames_differ, insp) =
+                            tx_differences(line, &plain, &inspected, &frames);
                         for f in &d {
                             *field_counts.entry(f.clone()).or_default() += 1;
                         }
                         let o = rec.as_object_mut().unwrap();
                         if !insp.is_empty() {
                             o.insert("evm2_inspected_differs".into(), json!(insp));
-                            d.push("evm2_plain_vs_inspected".into());
                         }
-                        if satin_insp {
+                        if line["inspected_equal"].as_bool() != Some(true) {
                             o.insert("satin_inspected_differs".into(), json!(true));
-                            d.push("satin_plain_vs_inspected".into());
                         }
                         let key = gate::replay_key(&set, n, index);
                         let listed: Vec<gate::Known> = block_known
@@ -232,7 +251,7 @@ fn test_replay_matches_reference_plain_and_inspected() {
                         if !listed.is_empty() {
                             evaluated.push(index);
                         }
-                        let accepted = gate::classify(
+                        let mut accepted = gate::classify(
                             &listed,
                             &classes,
                             &key,
@@ -241,6 +260,35 @@ fn test_replay_matches_reference_plain_and_inspected() {
                             &plain,
                             (&line["frames"], &frames),
                         );
+                        // A transaction without an entry that no class above takes is of a class
+                        // the replay gate runs again for, when the file enables it, if the engine
+                        // run again under its rule, plain and inspected, has no difference at all.
+                        if matches!(accepted, Verdict::Differ(_)) && listed.is_empty() {
+                            for (class, rule) in gate::REPLAY_RERUN_CLASSES {
+                                if !classes.iter().any(|c| c == class) {
+                                    continue;
+                                }
+                                let run = |inspected| {
+                                    replay::run_tx_under(
+                                        &header,
+                                        chain_id,
+                                        &db,
+                                        &code_cache,
+                                        &tx,
+                                        inspected,
+                                        Some(rule),
+                                    )
+                                };
+                                let (plain, _) = run(false);
+                                let (inspected, frames) = run(true);
+                                let (d, _, _) =
+                                    tx_differences(line, &plain, &inspected, &json!(frames));
+                                if d.is_empty() {
+                                    accepted = Verdict::Class(class);
+                                    break;
+                                }
+                            }
+                        }
                         d = match &accepted {
                             Verdict::Differ(d) => d.clone(),
                             Verdict::Match | Verdict::Known | Verdict::Class(_) => Vec::new(),

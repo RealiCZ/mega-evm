@@ -79,7 +79,7 @@ fn judge(probes: &[mega_evm2_scenarios::Scenario], records: &[Value]) -> bool {
             reference,
             &plain,
             &inspected,
-            |rule| runs_under(s, rule),
+            |rules| runs_under(s, rules),
         );
         match verdict {
             Verdict::Match => {

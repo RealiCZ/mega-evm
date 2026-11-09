@@ -29,17 +29,29 @@ SAMPLE_FUZZ_BATCHES=(
 )
 
 # The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, five of
-# them listed differences and 167 accepted by a class (`known-differences.toml`). This is the one
-# place that states them. Adding a scenario or a known difference means changing it here (and the
-# data under `next/diff/data`, see `data/README.md`); `gate-lib.sh`, `check-reference.sh` and
-# `regen-reference.sh` read it.
-MAIN_EXPECT="total=2838 match=2666 known=5 class=167"
+# them listed differences and the rest of the differing ones accepted by a class
+# (`known-differences.toml`). This is the one place that states them. Adding a scenario or a known
+# difference means changing it here (and the data under `next/diff/data`, see `data/README.md`);
+# `gate-lib.sh`, `check-reference.sh` and `regen-reference.sh` read it.
+MAIN_EXPECT="total=2889 match=2293 known=5 class=591"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (mode 11's first-frame window, mode 14's pairs and mode 15's blocks, `halted_first_frame`;
 # mode 14's pairs, `modexp_formula_price`; mode 14's pairs and mode 4's seeds,
-# `auth_preflight_reads`); every other seed must match.
-SAMPLE_FUZZ_CLASS=57
-FULL_FUZZ_CLASS=537
+# `auth_preflight_reads`; every mode's seeds that give state or history gas back or create state,
+# `reservoir_give_back`); every other seed must match.
+SAMPLE_FUZZ_CLASS=1196
+FULL_FUZZ_CLASS=15398
+# The replay transactions the class `reservoir_give_back` takes, in the sample and in the full gate:
+# the replay gate runs a transaction again under the reference's give-back rule
+# (`gate::REPLAY_RERUN_CLASSES`). `count_expected.py` counts them among the applied transactions
+# (`match`), as it counts from the reference's files alone; `gate_inputs` moves them to `class`.
+SAMPLE_REPLAY_RERUN_CLASS=29
+FULL_REPLAY_RERUN_CLASS=6364
+# The blocks the block executor gate runs again, whole, under that rule and accepts as the class's
+# (`tests/block.rs`): their rows count in the summary as the rerun's verdicts, so their number is
+# pinned here, apart from it.
+SAMPLE_BLOCK_RERUN_CLASS=0
+FULL_BLOCK_RERUN_CLASS=7
 # The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
 MAIN_TOTAL=${MAIN_EXPECT#total=}
 MAIN_TOTAL=${MAIN_TOTAL%% *}

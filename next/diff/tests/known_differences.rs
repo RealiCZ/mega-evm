@@ -3,8 +3,8 @@
 
 use mega_evm2_diff::gate::{
     AUTH_PREFLIGHT_READS, DUP_STACK_LABEL, HALTED_FIRST_FRAME, INVALID_IMMEDIATE_LABEL, Known,
-    MODEXP_FORMULA_PRICE, SLOTNUM_ZERO, Verdict, classify, compared_frames, known_classes,
-    known_differences, known_replay_differences,
+    MODEXP_FORMULA_PRICE, RESERVOIR_GIVE_BACK, SLOTNUM_ZERO, Verdict, classify, compared_frames,
+    known_classes, known_differences, known_replay_differences,
 };
 use serde_json::{Value, json};
 
@@ -187,6 +187,7 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             AUTH_PREFLIGHT_READS,
             MODEXP_FORMULA_PRICE,
             SLOTNUM_ZERO,
+            RESERVOIR_GIVE_BACK,
         ]
     );
     let text = include_str!("../known-differences.toml");
@@ -197,6 +198,9 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     for rule in ["SATIN-AUTH-005", "SATIN-PCMP-007", "SATIN-BASE-005"] {
         assert_eq!(text.matches(&format!("owner decision 2026-11-08 ({rule})")).count(), 1);
     }
+    // The give-back rule's class, decided on 2026-11-09, and no entry of its own.
+    assert_eq!(text.matches("owner decision 2026-11-09 (SATIN-POOL-014)").count(), 1);
+    assert_eq!(text.matches("2026-11-09").count(), 1);
     // No pending fix: the changes the entries pinned are made.
     assert_eq!(text.matches("pending fix (SATIN-").count(), 0);
 }
@@ -491,8 +495,8 @@ fn rerun_verdict(
 ) -> Verdict {
     use mega_evm2_diff::{driver::runs_under, gate::scenario_verdict};
     let (plain, inspected) = engine_runs(s);
-    scenario_verdict(&[], classes, s.name, reference, &plain, &inspected, |rule| {
-        runs_under(s, rule)
+    scenario_verdict(&[], classes, s.name, reference, &plain, &inspected, |rules| {
+        runs_under(s, rules)
     })
 }
 
@@ -504,6 +508,7 @@ fn test_a_rerun_class_takes_a_case_whose_only_difference_is_its_rule() {
         SLOTNUM_ZERO.to_string(),
         AUTH_PREFLIGHT_READS.to_string(),
         MODEXP_FORMULA_PRICE.to_string(),
+        RESERVOIR_GIVE_BACK.to_string(),
     ];
     for (name, rule, class) in [
         ("edge_slotnum_returned", ReferenceRule::SlotNumber, SLOTNUM_ZERO),
@@ -530,10 +535,21 @@ fn test_a_rerun_class_takes_a_case_whose_only_difference_is_its_rule() {
             ReferenceRule::ModexpBoundFirst,
             MODEXP_FORMULA_PRICE,
         ),
+        // A give-back into a reservoir (a revert's rollback, a lock's clear, a destruction
+        // table's, the keyless `gasUsed` that nets both pools) and a legacy share.
+        ("gb_t3_slot_m1", ReferenceRule::Eip8037GiveBack, RESERVOIR_GIVE_BACK),
+        ("gb_t2_lock_res_m4", ReferenceRule::Eip8037GiveBack, RESERVOIR_GIVE_BACK),
+        ("gb_ex_keyless_revert", ReferenceRule::Eip8037GiveBack, RESERVOIR_GIVE_BACK),
+        (
+            "gb_ex_destroyed_creation_beneficiary",
+            ReferenceRule::Eip8037GiveBack,
+            RESERVOIR_GIVE_BACK,
+        ),
+        ("gb_t1_handler_res_m1", ReferenceRule::Eip8037GiveBack, RESERVOIR_GIVE_BACK),
     ] {
         let s = scenario(name);
         // The reference runs under its own rule: the engine's run under that rule.
-        let reference = as_reference(runs_under(&s, rule));
+        let reference = as_reference(runs_under(&s, &[rule]));
         assert_eq!(rerun_verdict(&both, &s, &reference), Verdict::Class(class), "{name}");
         // Off unless the file enables it.
         let others: Vec<String> = both.iter().filter(|c| *c != class).cloned().collect();
@@ -554,6 +570,7 @@ fn test_a_rerun_class_takes_no_extra_read_its_rule_does_not_make() {
         SLOTNUM_ZERO.to_string(),
         AUTH_PREFLIGHT_READS.to_string(),
         MODEXP_FORMULA_PRICE.to_string(),
+        RESERVOIR_GIVE_BACK.to_string(),
     ];
     let mut reference = as_reference(engine_runs(&s));
     let accounts = reference["reads"]["accounts"].as_array_mut().unwrap();
@@ -597,4 +614,39 @@ fn test_a_record_entry_pins_both_whole_records() {
 
 fn gate_canonical(v: &Value) -> Value {
     mega_evm2_diff::gate::canonical(v)
+}
+
+/// A case that meets two decided changes at once — `SLOTNUM`'s zero and the give-back rule (here a
+/// frame stopped by the KV limit, whose rollback gives its charges into its reservoir) — is of the
+/// other change's class when both classes are accepted and the run under both reference rules
+/// has no difference; with either class off, or any other difference, it differs.
+#[test]
+fn test_a_rerun_class_combines_with_the_give_back_rule() {
+    use mega_evm2::ReferenceRule;
+    use mega_evm2_diff::driver::runs_under;
+    let mut s = mega_evm2_scenarios::probe::parse_line(
+        r#"{"name": "p6_slotnum~kv0", "base": "p6_slotnum", "kv_limit": 0}"#,
+        1,
+    )
+    .expect("a probe line");
+    mega_evm2_scenarios::add_chain_accounts(&mut s);
+    let both = [ReferenceRule::SlotNumber, ReferenceRule::Eip8037GiveBack];
+    let reference = as_reference(runs_under(&s, &both));
+    let all = vec![SLOTNUM_ZERO.to_string(), RESERVOIR_GIVE_BACK.to_string()];
+    assert_eq!(rerun_verdict(&all, &s, &reference), Verdict::Class(SLOTNUM_ZERO));
+    // Neither rule alone accounts for it.
+    for rules in [&both[..1], &both[1..]] {
+        let (plain, inspected) = runs_under(&s, rules);
+        assert!(
+            !mega_evm2_diff::gate::scenario_differences(&reference, &plain, &inspected).is_empty(),
+            "{rules:?}"
+        );
+    }
+    for one in [SLOTNUM_ZERO, RESERVOIR_GIVE_BACK] {
+        let only = vec![one.to_string()];
+        assert!(matches!(rerun_verdict(&only, &s, &reference), Verdict::Differ(_)), "{one}");
+    }
+    let mut other = reference.clone();
+    other["gas_used"] = json!(other["gas_used"].as_u64().unwrap() + 1);
+    assert!(matches!(rerun_verdict(&all, &s, &other), Verdict::Differ(_)));
 }

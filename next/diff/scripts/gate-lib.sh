@@ -13,8 +13,10 @@
 #     EXPECT_MAIN    the counts of the main summary, `total=<n> match=<n> known=<n> class=<n>`
 #     FUZZ_BATCHES   the fuzz batches, space-separated `name:mode:first..=last:count`
 #     FUZZ_CLASS     the seeds of all fuzz batches the class rule accepts
-#     EXPECT_REPLAY  the counts of the replay summary before `differ=0`
+#     EXPECT_REPLAY  the counts of the replay summary before `differ=0`, the transactions a rerun
+#                    class takes moved from `match` to `class` (`rerun_class`)
 #     EXPECT_BLOCK   the counts of the block summary before `differ=0`
+#     EXPECT_BLOCK_RERUN  the blocks the block gate takes by running them again (`common.sh`)
 #
 # Every script extracts its inputs into its own work directory, fresh on every run, and keeps its
 # logs in a sibling directory cleared at the start of the run.
@@ -47,11 +49,27 @@ gate_inputs() {
   (
     # shellcheck disable=SC1091
     source "$gate_lib_diff/data/expected.env"
-    replay=$EXPECT_REPLAY block=$EXPECT_BLOCK
-    [ "$mode" = full ] && replay=$EXPECT_FULL_REPLAY block=$EXPECT_FULL_BLOCK
+    replay=$EXPECT_REPLAY block=$EXPECT_BLOCK rerun=$SAMPLE_REPLAY_RERUN_CLASS
+    reruns=$SAMPLE_BLOCK_RERUN_CLASS
+    if [ "$mode" = full ]; then
+      replay=$EXPECT_FULL_REPLAY block=$EXPECT_FULL_BLOCK rerun=$FULL_REPLAY_RERUN_CLASS
+      reruns=$FULL_BLOCK_RERUN_CLASS
+    fi
+    replay=$(rerun_class "$replay" "$rerun")
     printf '%s="%s"\n' EXPECT_MAIN "$MAIN_EXPECT" FUZZ_BATCHES "$batches" \
-      FUZZ_CLASS "$fuzz_class" EXPECT_REPLAY "$replay" EXPECT_BLOCK "$block"
+      FUZZ_CLASS "$fuzz_class" EXPECT_REPLAY "$replay" EXPECT_BLOCK "$block" \
+      EXPECT_BLOCK_RERUN "$reruns"
   ) > "$work/expect.env"
+}
+
+# rerun_class <counts> <n>: the replay counts <counts> (`... match=<m> ... class=<c>`) with <n>
+# transactions moved from `match` to `class`: the transactions of a class the replay gate checks by
+# running them again (`common.sh`), which the reference's files alone cannot tell from a match.
+rerun_class() {
+  local m c
+  m=$(sed -E 's/.* match=([0-9]+) .*/\1/' <<< "$1")
+  c=$(sed -E 's/.* class=([0-9]+)$/\1/' <<< "$1")
+  sed -E "s/ match=[0-9]+ / match=$((m - $2)) /; s/ class=[0-9]+\$/ class=$((c + $2))/" <<< "$1"
 }
 
 # gate_extract sample|full <work> [<archive>]: extracts the inputs into the empty directory <work>
@@ -190,10 +208,13 @@ gate_run() {
         [ "$((matched + class))" = "$total" ] && [ "$differ" = 0 ]
       ;;
     replay | block)
-      local expect=$EXPECT_REPLAY
-      [ "$gate" = block ] && expect=$EXPECT_BLOCK
+      local expect=$EXPECT_REPLAY extra=()
+      if [ "$gate" = block ]; then
+        expect=$EXPECT_BLOCK
+        extra=(MEGA_EVM2_EXPECT_RERUN="$EXPECT_BLOCK_RERUN")
+      fi
       gate_env "$work" "$gate"
-      line=$(gate_summary "$logs/$gate.log" "$gate" "${GATE_ENV[@]}" "$@") || return 1
+      line=$(gate_summary "$logs/$gate.log" "$gate" "${GATE_ENV[@]}" ${extra[@]+"${extra[@]}"} "$@") || return 1
       echo "$line"
       [ "$line" = "GATE $gate $expect differ=0" ]
       ;;

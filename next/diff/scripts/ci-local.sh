@@ -39,6 +39,7 @@ run cargo clippy -p mega-evm2-scenarios --all-targets --locked -- -D warnings
 run cargo test --locked -p mega-evm2 -p op-evm2 -p mega-evm2-scenarios
 run cargo test --locked -p mega-evm2-diff --lib
 run cargo test --locked -p mega-evm2-diff --test known_differences
+run cargo test --locked -p mega-evm2-diff --test give_back
 run cargo bench --locked -p mega-evm2-diff --bench engine --no-run
 run cargo check --locked -p op-evm2 --target riscv64imac-unknown-none-elf --no-default-features
 run bash diff/scripts/check-regen-refusal.sh

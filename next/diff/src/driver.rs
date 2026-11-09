@@ -306,8 +306,19 @@ pub fn db(s: &Scenario) -> InMemoryDB {
 }
 
 pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
+    evm_under(s, reads, &[])
+}
+
+/// [`evm`] with the engine under the reference's `rules`: the version
+/// [`mega_evm2::satin_version_under`] builds, and `Lite::reference_rule` the rule of them that is
+/// not the give-back rule (or that one alone), which the version carries.
+fn evm_under(
+    s: &Scenario,
+    reads: Rc<RefCell<Reads>>,
+    rules: &[ReferenceRule],
+) -> Evm<'static, MegaTypes> {
     // The node's simulation switches (`Scenario::skip_nonce_check`, `skip_eip3607`).
-    let mut version = mega_evm2::satin_version();
+    let mut version = mega_evm2::satin_version_under(rules);
     if s.skip_nonce_check {
         version.features.remove(evm2::EvmFeatures::NONCE_CHECK);
     }
@@ -466,20 +477,22 @@ pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
 /// transactions of its block that ran before it (`Scenario::prior`) run first on the same `Evm`,
 /// each committed; the record is the last transaction's, with the block's changes so far.
 pub fn run(s: &Scenario, inspected: bool) -> Value {
-    run_with(s, inspected, None)
+    run_with(s, inspected, &[])
 }
 
-/// Both runs of `s`, plain then inspected, with the engine under the reference's `rule`
+/// Both runs of `s`, plain then inspected, with the engine under the reference's `rules`
 /// (`Lite::reference_rule`): the runs a class of a change the reference has not made yet is
 /// checked with (`gate::scenario_verdict`).
-pub fn runs_under(s: &Scenario, rule: ReferenceRule) -> (Value, Value) {
-    (run_with(s, false, Some(rule)), run_with(s, true, Some(rule)))
+pub fn runs_under(s: &Scenario, rules: &[ReferenceRule]) -> (Value, Value) {
+    (run_with(s, false, rules), run_with(s, true, rules))
 }
 
-fn run_with(s: &Scenario, inspected: bool, rule: Option<ReferenceRule>) -> Value {
+fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
     let reads = Rc::new(RefCell::new(Reads::default()));
-    let mut evm = evm(s, reads.clone());
-    evm.ext_mut().reference_rule = rule;
+    let mut evm = evm_under(s, reads.clone(), rules);
+    let give_back = ReferenceRule::Eip8037GiveBack;
+    evm.ext_mut().reference_rule =
+        rules.iter().copied().find(|r| *r != give_back).or(rules.first().copied());
     let mut block_accounts = Map::new();
     let mut block_storage = Map::new();
     for p in &s.prior {

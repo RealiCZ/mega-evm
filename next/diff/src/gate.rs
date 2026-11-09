@@ -12,7 +12,8 @@
 //! Accepted differences are listed by case (`[[difference]]`, `[[replay_difference]]`) or, for a
 //! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
 //! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUP_STACK_LABEL`],
-//! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`SLOTNUM_ZERO`]).
+//! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`SLOTNUM_ZERO`],
+//! [`RESERVOIR_GIVE_BACK`]).
 use mega_evm2::ReferenceRule;
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
@@ -201,19 +202,41 @@ pub const MODEXP_FORMULA_PRICE: &str = "modexp_formula_price";
 /// `SLOTNUM` pushing the block environment's slot number, as the reference does
 /// ([`ReferenceRule::SlotNumber`]): the case is of the class when that run, plain and inspected,
 /// has no difference from the reference at all ([`scenario_verdict`]).
-///
-/// The engine replay gate checks none of the three classes run again ([`RERUN_CLASSES`]): it runs
-/// no case again, and a case of one there differs.
 pub const SLOTNUM_ZERO: &str = "slotnum_zero";
 
+/// Every give-back of state and history gas credits a reservoir and never regular gas, and the
+/// state an opcode or a keyless deployment creates takes its legacy share from regular gas first
+/// (`SATIN-HIST-012`, `SATIN-POOL-014`, `SATIN-STATE-012`); the reference still credits a give-back
+/// to regular gas first, up to the state gas that gas paid, returns a failed frame's spill to its
+/// regular gas and draws every state charge from the reservoir first (the other implementation has
+/// not made the decided change yet). What that moves — `GAS`, the gas a call forwards, which
+/// charge runs out of gas, the split of the gas left between the two pools, gas detention's
+/// compute and a keyless deployment's `gasUsed` — is the program's to decide, so the shape is
+/// checked by running the case again on the engine under EIP-8037's give-back rule without legacy
+/// shares, as the reference runs it ([`ReferenceRule::Eip8037GiveBack`]): the case is of the class
+/// when that run, plain and inspected, has no difference from the reference at all
+/// ([`scenario_verdict`]). A case that meets this change and another class's is checked by running
+/// it under both rules, and is that other class's.
+///
+/// Recorded blocks reach it as well (a reentrancy lock set and cleared gives its record back, and
+/// a transaction that ran close to its gas can end otherwise), so the engine replay gate runs a
+/// transaction again under this rule too ([`REPLAY_RERUN_CLASSES`]), with the same test: it is of
+/// the class when that run, plain and inspected, has no difference from the reference's row at
+/// all. The block executor gate runs a block that differs again, whole, under this rule: the block
+/// is of the class when that run, plain and inspected, has no difference from any of the
+/// reference's rows (its transactions, its counters and its post-state). Neither runs a case
+/// again for the other three classes of [`RERUN_CLASSES`], and a case of one there differs.
+pub const RESERVOIR_GIVE_BACK: &str = "reservoir_give_back";
+
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 6] = [
+const CLASSES: [&str; 7] = [
     HALTED_FIRST_FRAME,
     INVALID_IMMEDIATE_LABEL,
     DUP_STACK_LABEL,
     AUTH_PREFLIGHT_READS,
     MODEXP_FORMULA_PRICE,
     SLOTNUM_ZERO,
+    RESERVOIR_GIVE_BACK,
 ];
 
 /// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
@@ -425,17 +448,27 @@ pub fn scenario_differences(reference: &Value, plain: &Value, inspected: &Value)
 
 /// The classes checked by running the case again on the engine under the reference's rule, each
 /// with that rule.
-pub const RERUN_CLASSES: [(&str, ReferenceRule); 3] = [
+pub const RERUN_CLASSES: [(&str, ReferenceRule); 4] = [
     (SLOTNUM_ZERO, ReferenceRule::SlotNumber),
     (AUTH_PREFLIGHT_READS, ReferenceRule::ShortListUnsimulated),
     (MODEXP_FORMULA_PRICE, ReferenceRule::ModexpBoundFirst),
+    (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
+
+/// The classes the engine replay gate checks by running a transaction again under the reference's
+/// rule, and the block executor gate by running a block again, each with that rule: only
+/// [`RESERVOIR_GIVE_BACK`], which recorded blocks reach.
+pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 1] =
+    [(RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack)];
 
 /// The verdict of the synthetic gate on scenario `name`: its [`scenario_differences`],
 /// [`classify`]d against the accepted differences `known`. A case without an entry that no class
 /// of [`classify`] takes is of a class of [`RERUN_CLASSES`], when that class is accepted, if
-/// `under(rule)` — the case run again on the engine, plain and inspected, under that class's
-/// reference rule — has no difference from the reference at all.
+/// `under(rules)` — the case run again on the engine, plain and inspected, under that class's
+/// reference rule — has no difference from the reference at all. A case that meets two of the
+/// decided changes, the give-back rule and another class's, is of that other class when both
+/// classes are accepted and the run under both rules (the give-back rule is a setting of the
+/// version, the others of `Lite::reference_rule`, so they combine) has no difference at all.
 pub fn scenario_verdict(
     known: &[Known],
     classes: &[String],
@@ -443,7 +476,7 @@ pub fn scenario_verdict(
     reference: &Value,
     plain: &Value,
     inspected: &Value,
-    under: impl Fn(ReferenceRule) -> (Value, Value),
+    under: impl Fn(&[ReferenceRule]) -> (Value, Value),
 ) -> Verdict {
     let diffs = scenario_differences(reference, plain, inspected);
     let verdict = classify(
@@ -459,10 +492,22 @@ pub fn scenario_verdict(
     if !matches!(verdict, Verdict::Differ(_)) || listed {
         return verdict;
     }
+    let enabled = |class: &str| classes.iter().any(|c| c == class);
+    let matches = |rules: &[ReferenceRule]| {
+        let (plain, inspected) = under(rules);
+        scenario_differences(reference, &plain, &inspected).is_empty()
+    };
     for (class, rule) in RERUN_CLASSES {
-        if classes.iter().any(|c| c == class) {
-            let (plain, inspected) = under(rule);
-            if scenario_differences(reference, &plain, &inspected).is_empty() {
+        if enabled(class) && matches(&[rule]) {
+            return Verdict::Class(class);
+        }
+    }
+    if enabled(RESERVOIR_GIVE_BACK) {
+        for (class, rule) in RERUN_CLASSES {
+            if class != RESERVOIR_GIVE_BACK &&
+                enabled(class) &&
+                matches(&[rule, ReferenceRule::Eip8037GiveBack])
+            {
                 return Verdict::Class(class);
             }
         }

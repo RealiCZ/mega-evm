@@ -343,6 +343,10 @@ PREFLIGHT = "e17_authority_charges_out_of_gas"
 MODEXP_LABEL = "edge_modexp_huge_lengths_forward_below_formula"
 MODEXP_PRICE = "edge_modexp_over_bound_detained_allowance_above_500"
 SLOTNUM = "p6_slotnum"
+GIVE_BACK = "gb_t3_slot_m1"
+# A recorded transaction of the class `reservoir_give_back` in the sample (`d4`, block 2045117,
+# index 1): a reentrancy lock's record given back, which the replay gate checks by its rerun.
+GIVE_BACK_REPLAY = "0x178b4f22d82d3cf6278bfa7879d59a4573dc74b360bdd4e71174512a3c51bf35"
 
 
 def reads_also(account):
@@ -402,6 +406,9 @@ FAULTS = [
     ("modexp-price-class-not-enabled", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, known_toml(lambda t: drop_class(t, "modexp_formula_price"))),
     ("slotnum-class-other-field", "main", r'^DIFFER %s \[.*"logs"' % SLOTNUM, scen_edit(M, named(SLOTNUM, lambda o: o["logs"].append({"address": "0x00000000000000000000000000000000000000bb", "topics": [], "data": "0x"})))),
     ("slotnum-class-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % SLOTNUM, known_toml(lambda t: drop_class(t, "slotnum_zero"))),
+    ("giveback-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % GIVE_BACK, scen_edit(M, named(GIVE_BACK, bumped("gas_used")))),
+    ("giveback-class-other-frame", "main", r'^DIFFER %s \[' % GIVE_BACK, scen_edit(M, named(GIVE_BACK, lambda o: o["frames"][1].update(status="halt")))),
+    ("giveback-class-not-enabled", "main", r'^DIFFER %s \[' % GIVE_BACK, known_toml(lambda t: drop_class(t, "reservoir_give_back"))),
     # fuzz
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),
     ("fuzz-duplicate-entry", "fuzz", r"duplicate oracle names", scen_edit(F, dup_entry)),
@@ -423,8 +430,13 @@ FAULTS = [
     ("replay-known-other-hash", "replay", r"known replay difference [a-z0-9]+:[0-9]+:[0-9]+: hash", replay_known_entry(other_hash)),
     # replay: a listed transaction of the class, unlisted, is counted as `class`, not `known`
     ("replay-class-unlisted", "replay", SUMMARY, unlist_replay_known),
+    # replay: the class the replay gate runs again for takes exactly its shape, only while the file enables it
+    ("replay-giveback-other-field", "replay", cmp("gas_used"), row_edit("replay", lambda r: is_tx(r) and r.get("hash") == GIVE_BACK_REPLAY, lambda r: r["satin"].update(gas_used=r["satin"]["gas_used"] + 1), "the class's recorded transaction")),
+    ("replay-giveback-not-enabled", "replay", cmp("reservoir_remaining"), known_toml(lambda t: drop_class(t, "reservoir_give_back"))),
+    ("replay-expected-class", "replay", SUMMARY, expect("EXPECT_REPLAY", count("class", 1))),
     # block
     ("block-gas-used", "block", cmp("gas_used"), block_row("tx", "gas_used")),
+    ("block-expected-rerun", "block", r"MEGA_EVM2_EXPECT_RERUN", expect("EXPECT_BLOCK_RERUN", lambda v: str(int(v) + 1))),
     ("block-reference-inspected", "block", cmp("satin_plain_vs_inspected"), block_row("tx", "inspected_equal", change=lambda v: False)),
     ("block-counters-gas", "block", cmp("gas_used"), block_row("block_counters", "gas_used")),
     ("block-post-storage", "block", cmp("storage"), block_row("post_state", "storage", lambda r: r["storage"], first_value(lambda s: s + "1"))),

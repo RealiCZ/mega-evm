@@ -56,8 +56,8 @@ fn test_synthetic_matches_reference_plain_and_inspected() {
         let plain = run(&s, false);
         let insp = run(&s, true);
         let group = groups.entry(s.group).or_default();
-        let verdict = gate::scenario_verdict(&known, &classes, s.name, o, &plain, &insp, |rule| {
-            runs_under(&s, rule)
+        let verdict = gate::scenario_verdict(&known, &classes, s.name, o, &plain, &insp, |rules| {
+            runs_under(&s, rules)
         });
         match &verdict {
             Verdict::Match => {

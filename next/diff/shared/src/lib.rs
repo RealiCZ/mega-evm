@@ -464,7 +464,8 @@ pub fn three_writes() -> Vec<u8> {
 }
 
 /// The hand-written scenarios: the base list, then the `p6`, `p7`, `q2`, `q8`, `cap`, `edge`,
-/// `sweep` and `bd` groups, each with the chain's accounts ([`add_chain_accounts`]).
+/// `sweep`, `bd`, `blk`, `rev`, `port` and `gb` groups, each with the chain's accounts
+/// ([`add_chain_accounts`]).
 pub fn hand_written() -> Vec<Scenario> {
     let mut v = all();
     v.extend(p6::all());
@@ -478,6 +479,7 @@ pub fn hand_written() -> Vec<Scenario> {
     v.extend(blk::all());
     v.extend(rev::all());
     v.extend(port::all());
+    v.extend(gb::all());
     v.iter_mut().for_each(add_chain_accounts);
     v
 }
@@ -558,6 +560,7 @@ pub fn everything() -> Vec<Scenario> {
     v.extend(blk::all());
     v.extend(rev::all());
     v.extend(port::all());
+    v.extend(gb::all());
     v.iter_mut().for_each(add_chain_accounts);
     if let Ok(only) = std::env::var("MEGA_EVM2_ONLY") {
         v.retain(|s| only.split(',').any(|name| name == s.name));
@@ -580,6 +583,7 @@ pub mod blk;
 pub mod cap;
 pub mod edge;
 pub mod fz;
+pub mod gb;
 mod json;
 pub mod p6;
 pub mod p7;

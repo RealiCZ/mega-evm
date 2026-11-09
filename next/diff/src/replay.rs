@@ -97,7 +97,18 @@ pub fn block_env(h: &Header) -> BlockEnv<MegaTypes> {
 }
 
 pub fn new_evm(h: &Header, chain_id: u64, db: Evm2Db) -> Evm<'static, MegaTypes> {
-    let mut version = mega_evm2::satin_version();
+    new_evm_under(h, chain_id, db, None)
+}
+
+/// [`new_evm`] with the engine under the reference's `rule` (`Lite::reference_rule`), whose
+/// version [`mega_evm2::satin_version_under`] builds.
+pub fn new_evm_under(
+    h: &Header,
+    chain_id: u64,
+    db: Evm2Db,
+    rule: Option<ReferenceRule>,
+) -> Evm<'static, MegaTypes> {
+    let mut version = mega_evm2::satin_version_under(rule.as_slice());
     version.chain_id = chain_id;
     let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, version);
     let mut evm = Evm::<MegaTypes>::new_with_execution_config(
@@ -111,6 +122,7 @@ pub fn new_evm(h: &Header, chain_id: u64, db: Evm2Db) -> Evm<'static, MegaTypes>
     // Read storage of an account the database lacks, as revm does.
     // Satin's limits and detention caps are the engine's defaults (`TxLimits::SATIN`).
     evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
+    evm.ext_mut().reference_rule = rule;
     evm
 }
 
@@ -152,8 +164,23 @@ pub fn run_tx(
     tx: &Recovered<OpTxEnvelope>,
     inspected: bool,
 ) -> (Value, Vec<Value>) {
+    run_tx_under(h, chain_id, db, code_cache, tx, inspected, None)
+}
+
+/// [`run_tx`] with the engine under the reference's `rule` (`Lite::reference_rule`): the run a
+/// replay transaction of a class of a change the reference has not made yet is checked with.
+pub fn run_tx_under(
+    h: &Header,
+    chain_id: u64,
+    db: &Rc<RefCell<BlockDb>>,
+    code_cache: &Rc<RefCell<HashMap<B256, Bytecode>>>,
+    tx: &Recovered<OpTxEnvelope>,
+    inspected: bool,
+    rule: Option<ReferenceRule>,
+) -> (Value, Vec<Value>) {
     db.borrow_mut().begin_run();
-    let mut evm = new_evm(h, chain_id, Evm2Db { db: db.clone(), code_cache: code_cache.clone() });
+    let evm2db = Evm2Db { db: db.clone(), code_cache: code_cache.clone() };
+    let mut evm = new_evm_under(h, chain_id, evm2db, rule);
     if inspected {
         evm.set_inspector(Frames::default());
     }

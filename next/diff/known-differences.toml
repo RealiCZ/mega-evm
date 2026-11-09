@@ -134,3 +134,10 @@ signoff = "owner decision 2026-11-08 (SATIN-PCMP-007)"
 name = "slotnum_zero"
 why = "SATIN-BASE-005: SLOTNUM pushes zero. The other implementation still pushes its block environment's slot number and has not made this change yet; a case is of this class only when the engine, run again with SLOTNUM pushing that slot number, has no difference from the reference at all."
 signoff = "owner decision 2026-11-08 (SATIN-BASE-005)"
+
+# Every give-back of state and history gas credits a reservoir, never regular gas, and a fresh
+# slot, a new account and a creation's account take a flat legacy share from regular gas first.
+[[class]]
+name = "reservoir_give_back"
+why = "SATIN-HIST-012, SATIN-POOL-014 and SATIN-STATE-012: every give-back of state or history gas (a refill, the destruction table, a start's charge given back, a failed frame's rollback) credits a reservoir and never regular gas, and a fresh slot, a new account and a creation's account take a flat legacy share from regular gas first. The other implementation still credits a give-back to regular gas first, up to the state gas that gas paid, returns a failed frame's spill to its regular gas, and draws every state charge from the reservoir first, and has not made this change yet; what that moves (GAS, forwards, which charge runs out of gas, the split of the gas left between the pools, detention's compute, a keyless deployment's gasUsed) is the program's to decide. A case is of this class only when the engine, run again under EIP-8037's give-back rule without legacy shares, has no difference from the reference at all; a case that also meets another enabled class's change is that class's when the run under both rules has none."
+signoff = "owner decision 2026-11-09 (SATIN-POOL-014)"
