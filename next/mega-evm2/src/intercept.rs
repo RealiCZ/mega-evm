@@ -119,21 +119,29 @@ pub fn answer_before(
 }
 
 /// The Oracle's `sendHint` (Satin `system/oracle.rs`), from the `before` message hook: a hint
-/// from a frame
-/// whose access is on, carrying no value and forwarded some gas, is counted on the transaction
-/// (data size, never history, no frame budget) and forwarded; one that would cross the
-/// transaction's data-size limit answers its call with the stop. The bytecode runs otherwise.
+/// from a frame whose access is on, forwarded some gas, is counted on the transaction (data size,
+/// never history, no frame budget) and forwarded, whether the call carries value or not
+/// (`SATIN-ORCL-006`); one that would cross the transaction's data-size limit answers its call
+/// with the stop. The bytecode runs otherwise, and after an admitted hint too (a call with value
+/// then reverts in the bytecode's non-payable method, its hint counted all the same).
 pub fn hint_before(
     evm: &mut Evm<'_, MegaTypes>,
     m: &Message<MegaTypes>,
 ) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
     use crate::satin_ext::*;
+    // The gas the call forwards: a value call's stipend is not forwarded gas (`SATIN-DET-010`).
+    let forwarded = if m.kind == MessageKind::Call && !m.value.is_zero() {
+        m.gas_limit.saturating_sub(evm.version().gas_params.get(evm2::version::GasId::CallStipend))
+    } else {
+        m.gas_limit
+    };
     if crate::off("oracle_hints") ||
         m.call_target != crate::ORACLE ||
         !matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) ||
         !is_send_hint(&m.input) ||
-        !m.value.is_zero() ||
-        m.gas_limit == 0 ||
+        (!m.value.is_zero() &&
+            crate::under_reference_rule(evm.ext(), crate::ReferenceRule::HintValueRefused)) ||
+        forwarded == 0 ||
         (m.depth as usize).checked_sub(1).is_some_and(|c| refuses(&evm.ext().mechanisms, c))
     {
         return None;

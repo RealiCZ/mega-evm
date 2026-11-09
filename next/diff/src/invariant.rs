@@ -1,6 +1,8 @@
-//! The regular-gas invariant of Satin's give-back rule on every gate case
-//! (`mega_evm2::regular_check`): within a frame, regular gas never rises except by the unused
-//! regular gas a returning child hands back.
+//! The regular-gas invariant of Satin's give-back rule and the transaction's gas conservation on
+//! every gate case (`mega_evm2::regular_check`): within a frame, regular gas never rises except by
+//! the unused regular gas a returning child hands back, a frame's whole gas never rises but by what
+//! a child hands back, a message hands back at most what it received, and the give-backs never
+//! exceed the charges made.
 //!
 //! Each candidate run under Satin's rule, plain and inspected, is checked as it runs; a run under
 //! a reference's rule (a class's rerun) is not. A run whose check found a violation carries the

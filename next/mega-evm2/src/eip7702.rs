@@ -197,7 +197,7 @@ pub fn execute(
     let mut skip = None;
     let may_cross = entries > kv_room || entries > growth_room;
     let short_list_unsimulated =
-        crate::under_reference_rule(host.ext(), crate::ReferenceRuleId::ShortListUnsimulated);
+        crate::under_reference_rule(host.ext(), crate::ReferenceRule::ShortListUnsimulated);
     if !host.ext().exempt && !crate::off("auth_list_rule") && (may_cross || !short_list_unsimulated)
     {
         let (records, created) = simulate(host, chain_id, caller, tx.authorizations())?;

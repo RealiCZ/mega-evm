@@ -119,6 +119,8 @@ impl EvmTypesHost for MegaTypes {
             return Ok(0);
         }
         let price = reprice(host, id, site)?;
+        #[cfg(feature = "compare")]
+        regular_check::on_state_priced(host, price);
         if matches!(id, GasId::CreateState | GasId::CodeDepositState) {
             host.ext_mut().created_prices.push((address, id, price));
         }
@@ -208,8 +210,53 @@ pub(crate) type Obs<I> = regular_check::Observed<I>;
 #[cfg(not(feature = "compare"))]
 pub(crate) type Obs<I> = I;
 
-/// Osaka's table + Amsterdam opcodes and prices + Satin's wrappers.
+/// The opcodes a frame whose volatile-data access is off may have refused (`SATIN-MAC-003`): each
+/// charges its static gas itself, once it is not refused, so a refused read costs nothing, not
+/// even its static gas (`SATIN-MAC-004`). Their entries in [`satin_table`] carry no static gas;
+/// [`static_gas`] is what they charge.
+pub(crate) const REFUSABLE: [u8; 20] = [
+    op::COINBASE,
+    op::DIFFICULTY,
+    op::GASLIMIT,
+    op::BASEFEE,
+    op::BLOBBASEFEE,
+    op::SLOTNUM,
+    op::BLOCKHASH,
+    op::TIMESTAMP,
+    op::NUMBER,
+    op::BALANCE,
+    op::EXTCODESIZE,
+    op::EXTCODEHASH,
+    op::EXTCODECOPY,
+    op::SELFBALANCE,
+    op::CALL,
+    op::CALLCODE,
+    op::DELEGATECALL,
+    op::STATICCALL,
+    op::SELFDESTRUCT,
+    op::SLOAD,
+];
+
+/// Osaka's table + Amsterdam opcodes and prices + Satin's wrappers; a refusable opcode
+/// ([`REFUSABLE`]) charges its static gas itself, so its entry carries none.
 pub const fn satin_table() -> OpcodeConfig<MegaTypes> {
+    let mut c = priced_table();
+    let mut i = 0;
+    while i < REFUSABLE.len() {
+        c.set_static_gas(REFUSABLE[i], 0);
+        i += 1;
+    }
+    c
+}
+
+/// The static gas of `opcode` in Satin's schedule, which a refusable opcode ([`REFUSABLE`]) charges
+/// itself once it is not refused (read at compile time by its instruction).
+pub(crate) const fn static_gas(opcode: u8) -> u64 {
+    priced_table().static_gas(opcode) as u64
+}
+
+/// [`satin_table`] with every opcode at its static gas.
+const fn priced_table() -> OpcodeConfig<MegaTypes> {
     let mut c = OpcodeConfig::<MegaTypes>::base::<evm2::BaseEvmConfig<{ SpecId::OSAKA as u32 }>>();
     c.set_instruction::<Obs<ins::dupn<MegaTypes>>>(op::DUPN, 3);
     c.set_instruction::<Obs<ins::swapn<MegaTypes>>>(op::SWAPN, 3);
@@ -310,7 +357,7 @@ pub fn satin_version_at(cost_per_state_byte: u64) -> Version {
 }
 
 /// [`satin_version`] as the comparison runs a case under the reference's `rules`
-/// (`Lite::reference_rule`): with [`ReferenceRule::Eip8037GiveBack`] among them without the
+/// (`Lite::reference_rules`): with [`ReferenceRule::Eip8037GiveBack`] among them without the
 /// reservoir-only give-back rule and with every legacy share zero; otherwise Satin's.
 #[cfg(feature = "compare")]
 pub fn satin_version_under(rules: &[ReferenceRule]) -> Version {
@@ -392,7 +439,7 @@ fn modexp_compare(
     gas: &mut GasTracker,
 ) -> evm2::precompiles::PrecompileResult {
     use evm2::{PrecompileError, precompiles::PrecompileHalt};
-    if evm.ext().reference_rule == Some(ReferenceRule::ModexpBoundFirst) &&
+    if under_reference_rule(evm.ext(), ReferenceRule::ModexpBoundFirst) &&
         modexp_over_bound(&msg.input)
     {
         gas.spend(500).map_err(|_| PrecompileError::Halt(PrecompileHalt::OutOfGas))?;
@@ -430,34 +477,23 @@ fn kzg100k(
 /// slot number is not read. It stays a volatile read (the `Volatile` wrapper of `wrap_table`).
 #[instruction(EvmTypes = MegaTypes)]
 pub fn mega_slotnum(cx: _) -> Result<out> {
-    *out = if under_reference_rule(cx.state.host().ext(), ReferenceRuleId::SlotNumber) {
+    *out = if under_reference_rule(cx.state.host().ext(), ReferenceRule::SlotNumber) {
         cx.state.host().block().slot_num
     } else {
         Word::ZERO
     };
 }
 
-/// The changed rules [`under_reference_rule`] names, also without the `compare` feature.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReferenceRuleId {
-    SlotNumber,
-    ShortListUnsimulated,
-}
-
-/// Whether the engine runs under the implementation under review's rule `id` instead of its own
-/// (`Lite::reference_rule`, comparison only); always `false` without the `compare` feature.
+/// Whether the engine runs under the implementation under review's rule `rule` instead of its own
+/// (`Lite::reference_rules`, comparison only); always `false` without the `compare` feature.
 #[cfg(feature = "compare")]
-pub(crate) fn under_reference_rule(ext: &Lite, id: ReferenceRuleId) -> bool {
-    matches!(
-        (ext.reference_rule, id),
-        (Some(ReferenceRule::SlotNumber), ReferenceRuleId::SlotNumber) |
-            (Some(ReferenceRule::ShortListUnsimulated), ReferenceRuleId::ShortListUnsimulated)
-    )
+pub(crate) fn under_reference_rule(ext: &Lite, rule: ReferenceRule) -> bool {
+    ext.reference_rules.contains(&rule)
 }
 
 #[cfg(not(feature = "compare"))]
 #[inline(always)]
-pub(crate) fn under_reference_rule(_: &Lite, _: ReferenceRuleId) -> bool {
+pub(crate) fn under_reference_rule(_: &Lite, _: ReferenceRule) -> bool {
     false
 }
 
@@ -469,13 +505,29 @@ pub(crate) fn under_reference_rule(_: &Lite, _: ReferenceRuleId) -> bool {
 #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
 pub fn mega_sload(cx: _) -> Result {
     let destination = cx.state.message().destination;
+    let reference =
+        under_reference_rule(cx.state.host().ext(), ReferenceRule::RefusalAfterStaticGas);
+    // The Oracle's storage in a frame whose access is off: refused once the key is on the stack,
+    // before any gas is charged (`SATIN-MAC-003`, `SATIN-MAC-004`); an empty stack halts on the
+    // underflow as with access on.
+    if destination == ORACLE &&
+        !reference &&
+        !stack.is_empty() &&
+        crate::satin_ext::refused_here(cx.state)
+    {
+        return revert_with(
+            cx.gas,
+            cx.state,
+            &crate::satin_ext::disabled_revert(crate::satin_ext::access::ORACLE),
+        );
+    }
+    cx.gas.spend(const { static_gas(op::SLOAD) })?;
     if destination != ORACLE {
         return ins::sload::<MegaTypes>::execute(cx.pc, stack, cx.state);
     }
-    // The key first, as the stack preamble of evm2's body and revm's take it: an empty stack halts
-    // before anything is refused.
     let key = stack.pop()?;
-    if crate::satin_ext::refused_here(cx.state) {
+    // The reference's order (comparison only): the static gas, the key, then the refusal.
+    if reference && crate::satin_ext::refused_here(cx.state) {
         return revert_with(
             cx.gas,
             cx.state,
@@ -483,26 +535,38 @@ pub fn mega_sload(cx: _) -> Result {
         );
     }
     let (gas, state) = unsafe { evm2::interpreter::private::split_gas_state(cx.state) };
-    // Satin `oracle_sload`: no load when the whole gas cannot pay the cold access; otherwise
-    // the slot is loaded through the journal, the service asked, the read priced cold
-    // whatever its warmth, and committed as a volatile read under the Oracle's cap. A pre-block
-    // system call asks nothing: it reads the chain's value and records no answer, so the
-    // pre-block state depends on the state alone (a Mega System Transaction still asks).
+    // Satin `oracle_sload`: the slot is loaded through the journal, the service asked and the read
+    // marked as a volatile read under the Oracle's cap, at the compute before the cold access,
+    // and only then is the read priced cold whatever its warmth (`SATIN-ORCL-004`,
+    // `SATIN-DET-003`): a frame whose gas cannot pay the cold access still loads, asks and marks,
+    // then runs out of gas, the mark standing (or is stopped, when the charge is detention's
+    // crossing). No read of a system call, a deposit or a Mega System Transaction asks the
+    // service (`SATIN-ORCL-005`): it pushes the slot's value on the chain.
     let additional_cold_cost = state.gas_params().get(GasId::ColdStorageAdditionalCost);
-    let budget = ins::gas_budget(gas, state, BudgetUse::ColdStorage);
-    if state.feature(EvmFeatures::EIP2929) && budget < additional_cold_cost {
-        return Err(InstrStop::OutOfGas);
+    let cold_skip = under_reference_rule(state.host().ext(), ReferenceRule::OracleColdSkip);
+    if cold_skip && state.feature(EvmFeatures::EIP2929) {
+        let budget = ins::gas_budget(gas, state, BudgetUse::ColdStorage);
+        if budget < additional_cold_cost {
+            return Err(InstrStop::OutOfGas);
+        }
     }
     let load = evm2::interpreter::Host::sload(state.host(), &destination, &key, false)
         .map_err(|error| state.fail(error))?;
-    let asks = !state.host().ext().mechanisms.system_call;
-    let answer = if asks { state.host().ext().cfg.oracle.get(&key).copied() } else { None };
-    if asks {
+    let ext = state.host().ext();
+    let unserved = ext.mechanisms.system_call ||
+        (ext.is_deposit && !under_reference_rule(ext, ReferenceRule::OracleAsksDepositsAndMsts));
+    let answer = if unserved { None } else { ext.cfg.oracle.get(&key).copied() };
+    if !unserved {
         state.host().ext_mut().oracle_reads += 1;
     }
-    gas.spend(additional_cold_cost)?;
     let cap = state.host().ext().detention.oracle_cap;
-    detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+    if cold_skip {
+        gas.spend(additional_cold_cost)?;
+        detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+    } else {
+        detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+        gas.spend(additional_cold_cost)?;
+    }
     stack.push(answer.unwrap_or(load.value))
 }
 
@@ -564,8 +628,9 @@ fn refuse_on(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>, kep
     )
 }
 
-/// Whether the block beneficiary is refused before an opcode's body runs: only with the switch
-/// `refuse_at_load` off, which moves the refusal from evm2's load to the opcode's start.
+/// Whether the block beneficiary is refused before an opcode's body runs once its static gas is
+/// charged, where the reference's order refuses it at its load: only with the switch
+/// `refuse_at_load` off.
 fn refused_before_body(
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     operand: Option<Word>,
@@ -573,6 +638,37 @@ fn refused_before_body(
     off("refuse_at_load") &&
         operand.is_some_and(|w| w.to_address() == state.host().block().beneficiary) &&
         crate::satin_ext::refused_here(state)
+}
+
+/// Whether Satin refuses a conditionally volatile opcode before it charges or checks anything
+/// (`SATIN-MAC-003`, `SATIN-MAC-004`): in a frame whose volatile-data access is off, once its
+/// `operands` are on the stack, when one of `reads` is the block beneficiary. An opcode short of
+/// its operands is not refused: it fails on them as with access on. Under the reference's rule
+/// (comparison only) nothing is refused here, and the opcode is refused where evm2 loads the
+/// beneficiary's account, once its static gas and its body's earlier charges are made.
+#[inline(always)]
+fn refused_up_front(
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    stack_len: usize,
+    operands: usize,
+    reads: &[Address],
+) -> bool {
+    stack_len >= operands &&
+        crate::satin_ext::refused_here(state) &&
+        !under_reference_rule(state.host().ext(), ReferenceRule::RefusalAfterStaticGas) &&
+        reads.contains(&state.host().block().beneficiary)
+}
+
+/// The refusal [`refused_up_front`] decided: the frame reverts with `VolatileDataAccessDisabled`
+/// on the gas it held when the opcode was reached.
+#[cold]
+#[inline(never)]
+fn refuse_up_front(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result {
+    revert_with(
+        gas,
+        state,
+        &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
+    )
 }
 
 /// Commits a read of the beneficiary's account once the opcode completed (`read_volatile`).
@@ -583,13 +679,20 @@ fn beneficiary_read(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaType
     }
 }
 
-/// An account opcode: evm2's body (its skip-cold check sees the withheld gas through the gas
-/// reserve; its load of the block beneficiary is refused through `before_account_load` in a frame
-/// whose volatile access is off), then its volatile read once it completed.
+/// An account opcode `$op` of `$operands` operands, its target the first: in a frame whose
+/// volatile access is off, refused before anything when the target is the block beneficiary
+/// ([`refused_up_front`]); then its static gas and evm2's body (its skip-cold check sees the
+/// withheld gas through the gas reserve; under the reference's rule its load of the beneficiary is
+/// refused through `before_account_load`), then its volatile read once it completed.
 macro_rules! account_opcode {
-    ($name:ident, $base:ident) => {
+    ($name:ident, $base:ident, $op:expr, $operands:expr) => {
         #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
         pub fn $name(cx: _) -> Result {
+            let target = stack.peek(0).map(|w| w.to_address()).unwrap_or_default();
+            if refused_up_front(cx.state, stack.len(), $operands, &[target]) {
+                return refuse_up_front(cx.gas, cx.state);
+            }
+            cx.gas.spend(const { static_gas($op) })?;
             let a = stack.peek(0).ok_or(InstrStop::StackUnderflow)?.to_address();
             if refused_before_body(cx.state, stack.peek(0)) {
                 return revert_with(
@@ -608,10 +711,10 @@ macro_rules! account_opcode {
         }
     };
 }
-account_opcode!(mega_balance, balance);
-account_opcode!(mega_extcodesize, extcodesize);
-account_opcode!(mega_extcodehash, extcodehash);
-account_opcode!(mega_extcodecopy, extcodecopy);
+account_opcode!(mega_balance, balance, op::BALANCE, 1);
+account_opcode!(mega_extcodesize, extcodesize, op::EXTCODESIZE, 1);
+account_opcode!(mega_extcodehash, extcodehash, op::EXTCODEHASH, 1);
+account_opcode!(mega_extcodecopy, extcodecopy, op::EXTCODECOPY, 4);
 
 /// SELFBALANCE: the frame's own account, loaded as revm loads it, before the push's stack check:
 /// a refused load comes before a full stack's overflow. evm2's body (and its account-load site) is
@@ -627,7 +730,15 @@ pub fn mega_selfbalance(cx: _) -> Result {
     if overflows && off("selfbalance_stack_order") {
         return Err(InstrStop::StackOverflow);
     }
-    if refused(cx.state) {
+    // Refused before any gas is charged (`SATIN-MAC-004`); under the reference's rule
+    // (comparison only) after the static gas.
+    let reference =
+        under_reference_rule(cx.state.host().ext(), ReferenceRule::RefusalAfterStaticGas);
+    if !reference && refused(cx.state) {
+        return refuse_up_front(cx.gas, cx.state);
+    }
+    cx.gas.spend(const { static_gas(op::SELFBALANCE) })?;
+    if reference && refused(cx.state) {
         return revert_with(
             cx.gas,
             cx.state,
@@ -713,6 +824,14 @@ pub fn mega_log<const N: usize>(cx: _) -> Result {
 /// volatile reads of both ends, once nothing can fail the opcode any more.
 #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
 pub fn mega_selfdestruct(cx: _) -> Result {
+    // In a frame whose access is off, refused before anything, its static-context check included,
+    // when its target or the frame's own account is the beneficiary (`SATIN-MAC-003`).
+    let me = cx.state.message().destination;
+    let target = stack.peek(0).map(|w| w.to_address()).unwrap_or_default();
+    if refused_up_front(cx.state, stack.len(), 1, &[target, me]) {
+        return refuse_up_front(cx.gas, cx.state);
+    }
+    cx.gas.spend(const { static_gas(op::SELFDESTRUCT) })?;
     // The base body's first check: nothing is loaded in a static frame.
     if cx.state.is_static() {
         return Err(InstrStop::StateChangeDuringStaticCall);
@@ -959,12 +1078,52 @@ fn start_charge_or_hand_back(
     }
 }
 
+/// Whether a call opcode of `operands` operands is refused before it charges or checks anything
+/// (`SATIN-MAC-003`, `SATIN-MAC-007`): in a frame whose volatile access is off, once its operands
+/// are on the stack, when its target is the block beneficiary or delegates to it by EIP-7702, one
+/// hop. The delegate is found by reading the target's account and code into the transaction's
+/// state, so the read lands in its read set, which warms neither; the read is required, a failure
+/// of it the transaction's (`SATIN-VAL-010`).
+fn call_refused_up_front(
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    stack: &StackMut<'_>,
+    operands: usize,
+) -> Result<bool> {
+    let target = stack.peek(1).map(|w| w.to_address()).unwrap_or_default();
+    if refused_up_front(state, stack.len(), operands, &[target]) {
+        return Ok(true);
+    }
+    if stack.len() < operands ||
+        !crate::satin_ext::refused_here(state) ||
+        under_reference_rule(state.host().ext(), ReferenceRule::RefusalAfterStaticGas) ||
+        off("delegate_refusal")
+    {
+        return Ok(false);
+    }
+    let read: core::result::Result<_, evm2::DatabaseError> = (|| {
+        let mut account = state.host().state_mut().account(&target)?;
+        Ok(account.load_code()?.eip7702_address())
+    })();
+    let delegate = read.map_err(|e| state.fail(evm2::HostError::from(e)))?;
+    Ok(delegate == Some(state.host().block().beneficiary))
+}
+
 fn mega_call_impl(
     stack: StackMut<'_>,
     gas: &mut Gas,
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     kind: MessageKind,
 ) -> Result {
+    let (operands, static_gas) = match kind {
+        MessageKind::Call => (7, const { static_gas(op::CALL) }),
+        MessageKind::CallCode => (7, const { static_gas(op::CALLCODE) }),
+        MessageKind::DelegateCall => (6, const { static_gas(op::DELEGATECALL) }),
+        _ => (6, const { static_gas(op::STATICCALL) }),
+    };
+    if call_refused_up_front(state, &stack, operands)? {
+        return refuse_up_front(gas, state);
+    }
+    gas.spend(static_gas)?;
     if refused_before_body(state, stack.peek(1)) {
         return revert_with(
             gas,
@@ -972,8 +1131,9 @@ fn mega_call_impl(
             &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
         );
     }
-    // In a frame whose volatile access is off, evm2's body offers the load of the target, and of
-    // its EIP-7702 delegate, to `before_account_load`, which refuses the block beneficiary's.
+    // Under the reference's rule (comparison only), evm2's body offers the load of the target, and
+    // of its EIP-7702 delegate, to `before_account_load`, which refuses the block beneficiary's in
+    // a frame whose volatile access is off.
     let kept = refusal_gas(gas, state);
     let result = call_with(
         stack,
@@ -1064,14 +1224,18 @@ fn mega_call_impl(
             }
             let remaining = detention::available(gas.tracker(), &state.host().ext().detention);
             state.host().ext_mut().last_caller_remaining = remaining;
+            #[cfg(feature = "compare")]
+            regular_check::on_forward(state.host(), gas.tracker());
             Ok(())
         },
-        |gas, state, _msg, result| {
-            #[cfg(feature = "compare")]
-            regular_check::child_returned(state.host(), result.gas.remaining());
+        |gas, state, msg, result| {
             let success = result.stop.is_success();
             let entry = state.host().ext_mut().pop_child(success);
             gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
+            #[cfg(feature = "compare")]
+            regular_check::on_merged(state.host(), msg, result, gas.tracker());
+            #[cfg(not(feature = "compare"))]
+            let _ = msg;
             if !success && entry.start_charge > 0 {
                 refill_history(gas, state, entry.start_charge / CPHB);
             }
@@ -1156,14 +1320,18 @@ fn mega_create_impl(
             gas.set_reservoir(r - share);
             state.host().ext_mut().push_child(start_charge, r - share, Some(start), 0);
             detention::on_suspend(gas, state, 0);
+            #[cfg(feature = "compare")]
+            regular_check::on_forward(state.host(), gas.tracker());
             Ok(())
         },
-        |gas, state, _msg, result| {
-            #[cfg(feature = "compare")]
-            regular_check::child_returned(state.host(), result.gas.remaining());
+        |gas, state, msg, result| {
             let success = result.stop.is_success() && result.created_address.is_some();
             let entry = state.host().ext_mut().pop_child(success);
             gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
+            #[cfg(feature = "compare")]
+            regular_check::on_merged(state.host(), msg, result, gas.tracker());
+            #[cfg(not(feature = "compare"))]
+            let _ = msg;
             if !success && entry.start_charge > 0 {
                 refill_history(gas, state, entry.start_charge / CPHB);
             }
@@ -1355,8 +1523,6 @@ impl MessageHooks<MegaTypes> for StartHooks {
         }
         let answered = is_answered(evm, msg);
         detention::before_commit(evm, msg, answered, stop, output, gas);
-        #[cfg(feature = "compare")]
-        regular_check::on_frame_end(evm, msg, stop.is_halt(), gas);
         // A frame's return switches back on what it (or a frame below it) switched off.
         if evm.ext().mechanisms.disabled_from.is_some_and(|from| from >= msg.depth as usize) {
             evm.ext_mut().mechanisms.disabled_from = None;
@@ -1397,6 +1563,20 @@ impl MessageHooks<MegaTypes> for StartHooks {
         Ok(())
     }
 
+    /// Every message's end once its gas is settled, before its caller merges it: the regular-gas
+    /// invariant and the conservation check hold it to what it received and observe a followed
+    /// frame one last time (comparison builds only).
+    fn after(
+        evm: &mut Evm<'_, MegaTypes>,
+        msg: &Message<MegaTypes>,
+        result: &mut evm2::interpreter::MessageResult<MegaTypes>,
+    ) -> core::result::Result<(), evm2::ExecutionError> {
+        #[cfg(feature = "compare")]
+        regular_check::on_message_end(evm, msg, result);
+        let _ = (evm, msg, result);
+        Ok(())
+    }
+
     fn admit_code_deposit(
         evm: &mut Evm<'_, MegaTypes>,
         _msg: &Message<MegaTypes>,
@@ -1405,7 +1585,7 @@ impl MessageHooks<MegaTypes> for StartHooks {
         gas: &mut Gas,
     ) -> core::result::Result<Option<(InstrStop, Bytes)>, evm2::ExecutionError> {
         #[cfg(feature = "compare")]
-        regular_check::observe(evm, gas.tracker(), "code deposit charges");
+        regular_check::on_code_deposit(evm, _msg, gas.tracker());
         if keyless::refuses_empty_deposit(evm, _msg, code) {
             return Ok(Some((InstrStop::Revert, Bytes::new())));
         }

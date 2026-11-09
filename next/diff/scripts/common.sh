@@ -33,25 +33,27 @@ SAMPLE_FUZZ_BATCHES=(
 # (`known-differences.toml`). This is the one place that states them. Adding a scenario or a known
 # difference means changing it here (and the data under `next/diff/data`, see `data/README.md`);
 # `gate-lib.sh`, `check-reference.sh` and `regen-reference.sh` read it.
-MAIN_EXPECT="total=2890 match=2293 known=5 class=592"
+MAIN_EXPECT="total=2915 match=1124 known=5 class=1786"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (mode 11's first-frame window, mode 14's pairs and mode 15's blocks, `halted_first_frame`;
 # mode 14's pairs, `modexp_formula_price`; mode 14's pairs and mode 4's seeds,
 # `auth_preflight_reads`; every mode's seeds that give state or history gas back or create state,
-# `reservoir_give_back`); every other seed must match.
-SAMPLE_FUZZ_CLASS=1196
-FULL_FUZZ_CLASS=15398
-# The replay transactions the class `reservoir_give_back` takes, in the sample and in the full gate:
-# the replay gate runs a transaction again under the reference's give-back rule
-# (`gate::REPLAY_RERUN_CLASSES`). `count_expected.py` counts them among the applied transactions
-# (`match`), as it counts from the reference's files alone; `gate_inputs` moves them to `class`.
-SAMPLE_REPLAY_RERUN_CLASS=29
-FULL_REPLAY_RERUN_CLASS=6364
-# The blocks the block executor gate runs again, whole, under that rule and accepts as the class's
-# (`tests/block.rs`): their rows count in the summary as the rerun's verdicts, so their number is
-# pinned here, apart from it.
-SAMPLE_BLOCK_RERUN_CLASS=0
-FULL_BLOCK_RERUN_CLASS=7
+# `reservoir_give_back`; every mode's deposits, `deposit_history`; the Oracle reads, refused reads,
+# keyless calls and hints of the generators, the classes of those decisions); every other seed must
+# match.
+SAMPLE_FUZZ_CLASS=2191
+FULL_FUZZ_CLASS=24857
+# The replay transactions the classes the replay gate runs again for take (`gate::REPLAY_RERUN_CLASSES`:
+# `reservoir_give_back`, and `deposit_history` for every recorded deposit), in the sample and in the
+# full gate. `count_expected.py` counts them among the applied transactions (`match`), as it counts
+# from the reference's files alone; `gate_inputs` moves them to `class`.
+SAMPLE_REPLAY_RERUN_CLASS=205
+FULL_REPLAY_RERUN_CLASS=9118
+# The blocks the block executor gate runs again, whole, under those rules and accepts as a class's
+# (`tests/block.rs`): every recorded block, each opening with a deposit. Their rows count in the
+# summary as the rerun's verdicts, so their number is pinned here, apart from it.
+SAMPLE_BLOCK_RERUN_CLASS=20
+FULL_BLOCK_RERUN_CLASS=263
 # The scenario count alone, as `MEGA_EVM2_EXPECT` takes it.
 MAIN_TOTAL=${MAIN_EXPECT#total=}
 MAIN_TOTAL=${MAIN_TOTAL%% *}

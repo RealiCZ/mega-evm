@@ -284,29 +284,27 @@ fn test_replay_matches_reference_plain_and_inspected() {
                             listed.is_empty() &&
                             !candidate_fault
                         {
-                            for (class, rule) in gate::REPLAY_RERUN_CLASSES {
-                                if !classes.iter().any(|c| c == class) {
-                                    continue;
-                                }
-                                let run = |inspected| {
-                                    replay::run_tx_under(
-                                        &header,
-                                        chain_id,
-                                        &db,
-                                        &code_cache,
-                                        &tx,
-                                        inspected,
-                                        Some(rule),
-                                    )
-                                };
-                                let (plain, _) = run(false);
-                                let (inspected, frames) = run(true);
-                                let (d, _, _, _) =
-                                    tx_differences(line, &plain, &inspected, &json!(frames));
-                                if d.is_empty() {
-                                    accepted = Verdict::Class(class);
-                                    break;
-                                }
+                            let taken =
+                                gate::rerun_class(&classes, &gate::REPLAY_RERUN_CLASSES, |rules| {
+                                    let run = |inspected| {
+                                        replay::run_tx_under(
+                                            &header,
+                                            chain_id,
+                                            &db,
+                                            &code_cache,
+                                            &tx,
+                                            inspected,
+                                            rules,
+                                        )
+                                    };
+                                    let (plain, _) = run(false);
+                                    let (inspected, frames) = run(true);
+                                    let (d, _, _, _) =
+                                        tx_differences(line, &plain, &inspected, &json!(frames));
+                                    d.is_empty()
+                                });
+                            if let Some(class) = taken {
+                                accepted = Verdict::Class(class);
                             }
                         }
                         d = match &accepted {

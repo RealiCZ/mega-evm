@@ -39,9 +39,18 @@ class SummaryTests(unittest.TestCase):
                          "BENCH blocks=2 txs=5 engine_ms=10.000000 reference_ms=10.000000")
 
     def test_rejects_different_block_work(self):
-        result = self.run_summary(lambda rows: rows[1].update(gas=71))
+        result = self.run_summary(lambda rows: rows[1].update(txs=3, refused=1))
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("BENCH ", result.stdout)
+
+    def test_each_side_reports_its_own_outcomes(self):
+        # The block gate holds the outcomes; a difference it accepted is timed as it is.
+        result = self.run_summary(lambda rows: rows[1].update(gas=170, included=1, refused=1))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("engine: blocks=2 txs=5 included=4 refused=1", result.stdout)
+        self.assertIn("reference: blocks=2 txs=5 included=3 refused=2", result.stdout)
+        self.assertIn("receipt_gas=100 ", result.stdout)
+        self.assertIn("receipt_gas=200 ", result.stdout)
 
     def test_rejects_missing_repetitions(self):
         result = self.run_summary(lambda rows: rows[0].update(ms=[1.0]))

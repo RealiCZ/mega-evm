@@ -149,8 +149,9 @@ fn switches() -> Vec<Scenario> {
 const SYSTEM_CALLER: Address = Address::new([0xff; 20]);
 
 /// A transaction from `SYSTEM_CALLER` is the protocol's, in a block and out of one
-/// (`SATIN-MST-007`): it pays no history gas and no per-transaction limit stops it. A transaction
-/// from an ordinary sender, with the same body, is the control.
+/// (`SATIN-MST-007`): no per-transaction limit stops it, and it pays history gas as any
+/// transaction does (`SATIN-MST-008`). A transaction from an ordinary sender, with the same body,
+/// is the control.
 fn protocol_origin() -> Vec<Scenario> {
     let mut v = Vec::new();
     let sender = |a: Address| funded(a, vec![], 1_000_000_000_000_000_000);

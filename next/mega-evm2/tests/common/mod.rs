@@ -197,6 +197,13 @@ pub fn run_limited(
     gas_limit: u64,
     limits: impl FnOnce(&mut TxLimits),
 ) -> Run {
+    let mut evm = satin_evm(db);
+    limits(&mut evm.ext_mut().limits);
+    run_on(&mut evm, to, value, input, gas_limit)
+}
+
+/// A Satin EVM over `db` in a block at `m = 1` everywhere.
+pub fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
     let config =
         ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
@@ -214,7 +221,18 @@ pub fn run_limited(
         precompiles(),
     );
     evm.state_mut().set_read_absent_storage(true);
-    limits(&mut evm.ext_mut().limits);
+    evm
+}
+
+/// Runs a legacy transaction from [`SENDER`] of kind `to` moving `value` with `input` and gas
+/// limit `gas_limit`, gas price 0, on `evm`, and commits it; `evm`'s state stays readable.
+pub fn run_on(
+    evm: &mut Evm<'static, MegaTypes>,
+    to: TxKind,
+    value: U256,
+    input: Bytes,
+    gas_limit: u64,
+) -> Run {
     evm.set_inspector(Frames::default());
     let tx = TxLegacy { chain_id: Some(1), nonce: 0, gas_price: 0, gas_limit, to, value, input };
     let signature = Signature::new(U256::from(1), U256::from(1), false);

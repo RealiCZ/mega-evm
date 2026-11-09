@@ -1,7 +1,8 @@
 //! Native keyless deployment (satin.md §15; Satin `system/keyless/{dispatch,settle}.rs`).
 //!
-//! A `keylessDeploy(bytes,uint256)` CALL at depth 0 to `0x6342…0003` is dispatched in the
-//! `before` message hook: with value it is answered there (the overhead, then `NoEtherTransfer()`)
+//! A `keylessDeploy(bytes,uint256)` CALL at depth 0 to `0x6342…0003` whose arguments decode is
+//! dispatched in the `before` message hook (one whose arguments do not runs the contract's
+//! bytecode): with value it is answered there (the overhead, then `NoEtherTransfer()`)
 //! before evm2 moves anything; without value its frame is built on a one-byte dispatcher (`0x0c`,
 //! an undefined opcode that stays `OpcodeNotFound` everywhere else) whose instruction makes the
 //! call's actions by hand: the 100,000 overhead, the nine rules in the legacy order, the signer's
@@ -69,11 +70,17 @@ fn returned(gas_used: u64, deployed: Address, error: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn is_dispatched(msg: &Message<MegaTypes>) -> bool {
+/// Whether `msg` is a keyless deployment the engine dispatches (`SATIN-ICPT-006`): a CALL of
+/// KeylessDeploy at depth 0 with `keylessDeploy`'s selector whose arguments decode as
+/// `(bytes, uint256)`; one whose arguments do not decode runs KeylessDeploy's bytecode, charged no
+/// overhead. Under the reference's rule (comparison only) the selector alone decides.
+pub fn is_dispatched(evm: &Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
     msg.depth == 0 &&
         msg.call_target == KEYLESS &&
         msg.kind == MessageKind::Call &&
-        msg.input.get(..4) == Some(&selector()[..])
+        msg.input.get(..4) == Some(&selector()[..]) &&
+        (decode_call(&msg.input).is_some() ||
+            crate::under_reference_rule(evm.ext(), crate::ReferenceRule::KeylessSelectorOnly))
 }
 
 /// The `before` message hook at depth 0.
@@ -81,7 +88,7 @@ pub fn before(
     evm: &mut Evm<'_, MegaTypes>,
     msg: &mut Message<MegaTypes>,
 ) -> Option<MessageResult<MegaTypes>> {
-    if crate::off("keyless") || !is_dispatched(msg) {
+    if crate::off("keyless") || !is_dispatched(evm, msg) {
         return None;
     }
     if !msg.value.is_zero() {
@@ -200,6 +207,8 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     }
     gas.spend(OVERHEAD)?;
     let input = state.message().input.clone();
+    // Only a call whose arguments decode is dispatched; the reference's rule dispatches by the
+    // selector alone (comparison only), and then refuses the rest here.
     let Some((raw, override_gas)) = decode_call(&input) else {
         refuse!(err("MalformedEncoding()", &[]))
     };
@@ -328,6 +337,8 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         StartRecords::one((deploy, deploy_changed), deploy_empty as i64, !tx.value.is_zero());
     state.host().ext_mut().push_child(start_charge, r - share, Some(start), 0);
     detention::on_suspend(gas, state, 0);
+    #[cfg(feature = "compare")]
+    crate::regular_check::on_forward(state.host(), gas.tracker());
     let started = Started {
         signer,
         deploy,
@@ -364,8 +375,6 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         return Err(result.stop);
     }
     let given_back = (result.gas.remaining(), result.gas.reservoir());
-    #[cfg(feature = "compare")]
-    crate::regular_check::child_returned(state.host(), given_back.0);
     evm2::interpreter::instructions::merge_returned_gas(gas, state, result.gas, result.stop);
     let success = result.stop.is_success() && result.created_address.is_some();
     if create_price != 0 && !success {
@@ -373,6 +382,8 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     }
     let entry = state.host().ext_mut().pop_child(success);
     gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
+    #[cfg(feature = "compare")]
+    crate::regular_check::on_merged(state.host(), &message, &result, gas.tracker());
     if !success && entry.start_charge > 0 {
         refill_history(gas, state, entry.start_charge / CPHB);
     }

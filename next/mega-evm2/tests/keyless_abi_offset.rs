@@ -1,7 +1,9 @@
 //! A `keylessDeploy(bytes,uint256)` call whose `bytes` offset word is the largest `usize` is a
-//! malformed encoding, answered with `MalformedEncoding()` after the call's overhead, in every
-//! build: the decoder checks the end of every range it reads, so an offset near the top of `usize`
-//! cannot overflow (this test runs in the default test profile, which checks overflow).
+//! malformed encoding, in every build: the decoder checks the end of every range it reads, so an
+//! offset near the top of `usize` cannot overflow (this test runs in the default test profile,
+//! which checks overflow). A call whose arguments do not decode is not a deployment
+//! (`SATIN-ICPT-006`, `SATIN-KEY-005` step 3): it runs KeylessDeploy's bytecode — here a stub that
+//! reverts with no data — and is charged no dispatch overhead.
 //!
 //! The differential gate runs the same input (`edge_keyless_offset_u64_max`) in release builds,
 //! where an unchecked addition would wrap rather than panic.
@@ -10,6 +12,7 @@ use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, Bytes, TxKind, U256, keccak256};
 use evm2::{
     Evm, ExecutionConfig,
+    bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     interpreter::InstrStop,
@@ -39,6 +42,13 @@ fn run(input: Bytes) -> evm2::TxResult<MegaTypes> {
     db.insert_account_info(
         &SENDER,
         AccountInfo::default().with_balance(U256::from(10).pow(U256::from(18))),
+    );
+    // KeylessDeploy's bytecode, a stub: `PUSH0; PUSH0; REVERT`.
+    db.insert_account_info(
+        &KEYLESS,
+        AccountInfo::default()
+            .with_nonce(1)
+            .with_code(Bytecode::new_legacy(Bytes::from_static(&[0x5f, 0x5f, 0xfd]))),
     );
     let config =
         ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
@@ -70,9 +80,11 @@ fn run(input: Bytes) -> evm2::TxResult<MegaTypes> {
     evm.transact(&tx).expect("the call is a valid transaction").commit()
 }
 
+/// Not dispatched: the stub's revert, with no data and none of the 100,000 overhead.
 fn assert_malformed(result: &evm2::TxResult<MegaTypes>) {
     assert_eq!(result.stop, InstrStop::Revert, "{result:?}");
-    assert_eq!(result.output.as_ref(), selector("MalformedEncoding()"), "{result:?}");
+    assert!(result.output.is_empty(), "{result:?}");
+    assert!(result.total_gas_spent < 100_000, "{result:?}");
 }
 
 #[test]
@@ -85,4 +97,19 @@ fn test_offset_at_the_top_of_usize_is_malformed() {
 #[test]
 fn test_offset_past_the_input_is_malformed() {
     assert_malformed(&run(call_with_offset(U256::from(0x40))));
+}
+
+/// The control: arguments that decode, whose `bytes` holds no transaction, are a deployment,
+/// dispatched and charged the overhead before the transaction is decoded and refused.
+#[test]
+fn test_decoded_arguments_are_dispatched_and_charged_the_overhead() {
+    let mut input = selector("keylessDeploy(bytes,uint256)").to_vec();
+    input.extend_from_slice(&U256::from(0x40).to_be_bytes::<32>());
+    input.extend_from_slice(&U256::from(1_000_000u64).to_be_bytes::<32>());
+    input.extend_from_slice(&U256::from(1).to_be_bytes::<32>());
+    input.extend_from_slice(&[0x01; 32]);
+    let result = run(input.into());
+    assert_eq!(result.stop, InstrStop::Revert, "{result:?}");
+    assert_eq!(result.output.as_ref(), selector("MalformedEncoding()"), "{result:?}");
+    assert!(result.total_gas_spent > 100_000, "{result:?}");
 }

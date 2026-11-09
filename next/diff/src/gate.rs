@@ -13,7 +13,9 @@
 //! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
 //! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUP_STACK_LABEL`],
 //! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`SLOTNUM_ZERO`],
-//! [`RESERVOIR_GIVE_BACK`]).
+//! [`RESERVOIR_GIVE_BACK`], [`DEPOSIT_HISTORY`], [`ORACLE_READ_BEFORE_CHARGE`],
+//! [`REFUSAL_COSTS_NOTHING`], [`KEYLESS_DECODED_DISPATCH`], [`HINT_WITH_VALUE`],
+//! [`MST_PACKING_BUDGETS`], [`ORACLE_NO_SERVICE`]).
 use mega_evm2::ReferenceRule;
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
@@ -228,8 +230,55 @@ pub const SLOTNUM_ZERO: &str = "slotnum_zero";
 /// again for the other three classes of [`RERUN_CLASSES`], and a case of one there differs.
 pub const RESERVOIR_GIVE_BACK: &str = "reservoir_give_back";
 
+/// A deposit and a system-originated transaction pay history gas as any transaction does (their
+/// body, calldata, logs, records and deposited code), and a failed deposit reports its body and
+/// calldata as history bytes (`SATIN-HIST-016`, `SATIN-HIST-022`, `SATIN-DEP-001`); the reference
+/// prices no history for them (the other implementation has not made the decided change yet).
+/// What that moves — a deposit's gas used, which deposit fails, its reservoir, what it may still
+/// do — is the transaction's to decide, so the shape is checked by running the case again on the
+/// engine with that exemption ([`ReferenceRule::DepositHistoryExempt`]): the case is of the class
+/// when that run, plain and inspected, has no difference from the reference at all
+/// ([`scenario_verdict`]). Recorded blocks reach it (every block starts with a deposit), so the
+/// engine replay gate and the block executor gate run it again too ([`REPLAY_RERUN_CLASSES`]).
+pub const DEPOSIT_HISTORY: &str = "deposit_history";
+
+/// An Oracle `SLOAD` whose regular gas cannot pay the cold access still loads the slot, asks the
+/// service and marks the read before it runs out of gas (`SATIN-ORCL-004`, `SATIN-DET-003`); the
+/// reference runs out of gas before any of it. Checked by running the case again with the
+/// reference's order ([`ReferenceRule::OracleColdSkip`]).
+pub const ORACLE_READ_BEFORE_CHARGE: &str = "oracle_read_before_charge";
+
+/// A refused volatile read costs nothing: the frame reverts on the gas it held when the opcode
+/// was reached, and an opcode volatile whatever its operands is refused before they are checked
+/// (`SATIN-MAC-003`, `SATIN-MAC-004`); the reference charges the static gas, and an account
+/// opcode's body charges, first. Checked by running the case again with the reference's order
+/// ([`ReferenceRule::RefusalAfterStaticGas`]).
+pub const REFUSAL_COSTS_NOTHING: &str = "refusal_costs_nothing";
+
+/// A `keylessDeploy` call is recognized only once its arguments decode; one whose arguments do not
+/// runs KeylessDeploy's bytecode and pays no overhead (`SATIN-ICPT-006`); the reference charges
+/// the overhead and answers `MalformedEncoding()`. Checked by running the case again with the
+/// reference's dispatch ([`ReferenceRule::KeylessSelectorOnly`]).
+pub const KEYLESS_DECODED_DISPATCH: &str = "keyless_decoded_dispatch";
+
+/// A `sendHint` call is admitted whether it carries value or not (`SATIN-ORCL-006`); the reference
+/// does not admit one that carries value. Checked by running the case again with the reference's
+/// condition ([`ReferenceRule::HintValueRefused`]).
+pub const HINT_WITH_VALUE: &str = "hint_with_value";
+
+/// A Mega System Transaction is held to the block's data-size, KV-update and state-growth budgets
+/// (`SATIN-BLK-007`); the reference exempts it. Only a block reaches it; checked by running the
+/// block again with the exemption ([`ReferenceRule::MstPackingExempt`]).
+pub const MST_PACKING_BUDGETS: &str = "mst_packing_budgets";
+
+/// The oracle service is asked for no read of a deposit, a Mega System Transaction or a system
+/// call, which push the slot's value on the chain (`SATIN-ORCL-005`); the reference asks it for a
+/// deposit's and a Mega System Transaction's reads. Checked by running the case again with the
+/// reference's rule ([`ReferenceRule::OracleAsksDepositsAndMsts`]).
+pub const ORACLE_NO_SERVICE: &str = "oracle_no_service";
+
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 7] = [
+const CLASSES: [&str; 14] = [
     HALTED_FIRST_FRAME,
     INVALID_IMMEDIATE_LABEL,
     DUP_STACK_LABEL,
@@ -237,6 +286,13 @@ const CLASSES: [&str; 7] = [
     MODEXP_FORMULA_PRICE,
     SLOTNUM_ZERO,
     RESERVOIR_GIVE_BACK,
+    DEPOSIT_HISTORY,
+    ORACLE_READ_BEFORE_CHARGE,
+    REFUSAL_COSTS_NOTHING,
+    KEYLESS_DECODED_DISPATCH,
+    HINT_WITH_VALUE,
+    MST_PACKING_BUDGETS,
+    ORACLE_NO_SERVICE,
 ];
 
 /// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
@@ -501,28 +557,76 @@ pub fn candidate_fault(case: &str, plain: &mut Value, inspected: &mut Value) {
 }
 
 /// The classes checked by running the case again on the engine under the reference's rule, each
-/// with that rule.
-pub const RERUN_CLASSES: [(&str, ReferenceRule); 4] = [
+/// with that rule. The give-back rule comes last: a case that meets it and another class's change
+/// is that other class's ([`rerun_class`]).
+pub const RERUN_CLASSES: [(&str, ReferenceRule); 10] = [
     (SLOTNUM_ZERO, ReferenceRule::SlotNumber),
     (AUTH_PREFLIGHT_READS, ReferenceRule::ShortListUnsimulated),
     (MODEXP_FORMULA_PRICE, ReferenceRule::ModexpBoundFirst),
+    (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
+    (ORACLE_READ_BEFORE_CHARGE, ReferenceRule::OracleColdSkip),
+    (REFUSAL_COSTS_NOTHING, ReferenceRule::RefusalAfterStaticGas),
+    (KEYLESS_DECODED_DISPATCH, ReferenceRule::KeylessSelectorOnly),
+    (HINT_WITH_VALUE, ReferenceRule::HintValueRefused),
+    (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
 
 /// The classes the engine replay gate checks by running a transaction again under the reference's
-/// rule, and the block executor gate by running a block again, each with that rule: only
-/// [`RESERVOIR_GIVE_BACK`], which recorded blocks reach.
-pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 1] =
-    [(RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack)];
+/// rule, and the block executor gate by running a block again, each with that rule: those recorded
+/// blocks reach, and, for blocks, the packing budgets of a Mega System Transaction, which only a
+/// block has.
+pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 4] = [
+    (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
+    (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
+    (MST_PACKING_BUDGETS, ReferenceRule::MstPackingExempt),
+    (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
+];
+
+/// The class of `rerun` a case is of, among those `classes` enables, `matches(rules)` telling
+/// whether the engine's run of the case under the reference's `rules` has no difference from the
+/// reference (or only a shape class's, [`classify`]): the first class whose rule alone accounts
+/// for the case; otherwise, when the run under every enabled rule does — the case meets several
+/// decided changes at once, a deposit that reads the Oracle and gives a slot's charge back — the
+/// first class whose rule that run cannot do without (the give-back rule, listed last, only when
+/// no other's is needed). A rule a case does not meet changes nothing in its run, so the run under
+/// every rule is the run under the ones it meets.
+pub fn rerun_class(
+    classes: &[String],
+    rerun: &[(&'static str, ReferenceRule)],
+    mut matches: impl FnMut(&[ReferenceRule]) -> bool,
+) -> Option<&'static str> {
+    let on: Vec<_> =
+        rerun.iter().filter(|(class, _)| classes.iter().any(|c| c == class)).copied().collect();
+    for (class, rule) in &on {
+        if matches(&[*rule]) {
+            return Some(class);
+        }
+    }
+    if on.len() < 2 {
+        return None;
+    }
+    let all: Vec<ReferenceRule> = on.iter().map(|(_, rule)| *rule).collect();
+    if !matches(&all) {
+        return None;
+    }
+    for (class, rule) in &on {
+        let without: Vec<ReferenceRule> = all.iter().filter(|r| *r != rule).copied().collect();
+        if !matches(&without) {
+            return Some(class);
+        }
+    }
+    on.first().map(|(class, _)| *class)
+}
 
 /// The verdict of the synthetic gate on scenario `name`: its [`scenario_differences`],
 /// [`classify`]d against the accepted differences `known`. A case without an entry that no class
 /// of [`classify`] takes is of a class of [`RERUN_CLASSES`], when that class is accepted, if
 /// `under(rules)` — the case run again on the engine, plain and inspected, under that class's
-/// reference rule — has no difference from the reference at all. A case that meets two of the
-/// decided changes, the give-back rule and another class's, is of that other class when both
-/// classes are accepted and the run under both rules (the give-back rule is a setting of the
-/// version, the others of `Lite::reference_rule`, so they combine) has no difference at all.
+/// reference rule — has no difference from the reference at all, or only a shape class's. A case
+/// that meets several of the decided changes is of one of their classes when the run under every
+/// enabled rule has none ([`rerun_class`]; the give-back rule is a setting of the version, the
+/// others of `Lite::reference_rules`, so they combine).
 /// No rerun is made for a case whose own records have a fault ([`candidate_differences`]): a rerun
 /// stands in for the comparison with the reference, never for the candidate's checks.
 pub fn scenario_verdict(
@@ -553,27 +657,38 @@ pub fn scenario_verdict(
     if !candidate_differences(plain, inspected).is_empty() {
         return verdict;
     }
-    let enabled = |class: &str| classes.iter().any(|c| c == class);
-    let matches = |rules: &[ReferenceRule]| {
+    let class = rerun_class(classes, &RERUN_CLASSES, |rules| {
         let (plain, inspected) = under(rules);
-        scenario_differences(reference, &plain, &inspected).is_empty()
-    };
-    for (class, rule) in RERUN_CLASSES {
-        if enabled(class) && matches(&[rule]) {
-            return Verdict::Class(class);
-        }
-    }
-    if enabled(RESERVOIR_GIVE_BACK) {
-        for (class, rule) in RERUN_CLASSES {
-            if class != RESERVOIR_GIVE_BACK &&
-                enabled(class) &&
-                matches(&[rule, ReferenceRule::Eip8037GiveBack])
-            {
-                return Verdict::Class(class);
-            }
-        }
-    }
-    verdict
+        rerun_matches(classes, name, reference, &plain, &inspected)
+    });
+    class.map_or(verdict, Verdict::Class)
+}
+
+/// Whether the engine's run of scenario `name` under a reference's rules, `plain` and `inspected`,
+/// leaves no difference from the reference's record `reference`, or exactly the shape of a class
+/// [`classify`] accepts by its shape alone (a halted first frame of evm2 #871, a halt label): the
+/// decided change then accounts for everything else.
+fn rerun_matches(
+    classes: &[String],
+    name: &str,
+    reference: &Value,
+    plain: &Value,
+    inspected: &Value,
+) -> bool {
+    let diffs = scenario_differences(reference, plain, inspected);
+    diffs.is_empty() ||
+        matches!(
+            classify(
+                &[],
+                classes,
+                name,
+                diffs,
+                reference,
+                plain,
+                (&reference["frames"], &inspected["frames"]),
+            ),
+            Verdict::Class(_)
+        )
 }
 
 /// The counts of a gate's summary line, when `MEGA_EVM2_EXPECT` names them (the summary line
