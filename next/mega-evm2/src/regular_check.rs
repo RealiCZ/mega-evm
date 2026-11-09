@@ -24,7 +24,7 @@
 //! holds it: it hands back no more regular gas than it was forwarded (a precompile or a keyless
 //! deployment spends some), and a call answered without running anything — an interceptor's
 //! answer, a call of an account with no code, a start evm2 refused — exactly that regular gas
-//! (`SATIN-ICPT-004`), its reservoir share then held by the sum.
+//! (`SATIN-ICPT-004`); and no more reservoir than its share.
 //! Between two of those points only evm2's stock instructions run, none of which gives gas back;
 //! their net effect is still seen at the next point. A run under EIP-8037's rule (a comparison's
 //! rerun, [`crate::ReferenceRule::Eip8037GiveBack`]) gives state gas back into regular gas by
@@ -159,7 +159,8 @@ impl RegularGasCheck {
     /// what it received (a halt at most the share), and a followed frame that did not halt is
     /// observed one last time; then it is no longer followed. A message no followed frame ran for
     /// that did not halt hands back at most the regular gas it was forwarded, exactly that when it
-    /// was `answered` (it ran nothing that spends).
+    /// was `answered` (it ran nothing that spends), and at most its reservoir share: nothing a
+    /// precompile or a keyless deployment does refills a reservoir.
     fn end(
         &mut self,
         message: usize,
@@ -184,11 +185,17 @@ impl RegularGasCheck {
         }
         self.ended = Some((message, handed));
         if self.frames.last().is_none_or(|f| f.message != message) {
+            let what = if answered { "answer" } else { "message without a frame" };
             if !halted && (pools.regular > forward || answered && pools.regular != forward) {
                 self.violations.push(format!(
-                    "message end: {} returned {} regular of {forward} forwarded",
-                    if answered { "answer" } else { "message without a frame" },
+                    "message end: {what} returned {} regular of {forward} forwarded",
                     pools.regular
+                ));
+            }
+            if !halted && pools.reservoir > share {
+                self.violations.push(format!(
+                    "message end: {what} returned {} reservoir of a {share} share",
+                    pools.reservoir
                 ));
             }
             return;
@@ -427,7 +434,10 @@ mod tests {
         );
         assert_eq!(
             c.violations,
-            ["message end: handed back 50008 (50000 regular) of 50007 received"]
+            [
+                "message end: handed back 50008 (50000 regular) of 50007 received",
+                "message end: message without a frame returned 8 reservoir of a 7 share",
+            ]
         );
         c.reset();
         c.observe(regular(5), "after reset");
@@ -435,8 +445,9 @@ mod tests {
     }
 
     /// A message no frame ran for hands back at most the regular gas it was forwarded (a
-    /// precompile spends some), and an answer exactly that, whatever its reservoir: the sum alone
-    /// would take 100 of reservoir handed back as regular gas.
+    /// precompile spends some), and an answer exactly that, and at most its reservoir share: the
+    /// sum alone would take 100 of reservoir handed back as regular gas, or 50 of spent regular gas
+    /// handed back as reservoir.
     #[test]
     fn test_a_message_without_a_frame_is_held_to_its_forwarded_regular_gas() {
         let mut c = RegularGasCheck::default();
@@ -448,12 +459,17 @@ mod tests {
         c.end(CHILD, (200, 980), (false, true, true), pools(300, 880));
         c.end(CHILD, (200, 980), (false, false, true), pools(100, 1_080));
         c.end(CHILD, (200, 980), (false, true, false), pools(300, 880));
+        // A precompile that spent 50 and handed it back as reservoir: the sum and the regular
+        // bound pass, the reservoir is over its share.
+        c.end(CHILD, (200, 980), (false, true, false), pools(150, 1_030));
         assert_eq!(
             c.violations,
             [
                 "message end: answer returned 300 regular of 200 forwarded",
                 "message end: answer returned 100 regular of 200 forwarded",
+                "message end: answer returned 1080 reservoir of a 980 share",
                 "message end: message without a frame returned 300 regular of 200 forwarded",
+                "message end: message without a frame returned 1030 reservoir of a 980 share",
             ]
         );
     }
