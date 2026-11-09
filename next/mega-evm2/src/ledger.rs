@@ -251,8 +251,9 @@ pub enum ReferenceRule {
     /// A deposit and a system-originated transaction pay no history gas: no body, calldata, log,
     /// record or deposited code is priced, and a failed deposit reports no history bytes.
     DepositHistoryExempt,
-    /// An Oracle `SLOAD` whose regular gas cannot pay the cold access runs out of gas before the
-    /// slot is loaded, the service asked and the read marked.
+    /// An Oracle `SLOAD` charges its warm base first, as the opcode's static gas; one whose
+    /// regular gas cannot then pay the rest of the cold access runs out of gas before the slot is
+    /// loaded, the service asked and the read marked; a read is marked once both are paid.
     OracleColdSkip,
     /// A refused volatile read is refused after the opcode's static gas, an account opcode's at
     /// its load once its body's charges are made, and the opcode's operands checked first.
