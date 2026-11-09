@@ -163,6 +163,7 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     let k = known_differences();
     let listed: Vec<_> = k
         .iter()
+        .filter(|k| !k.scenario.starts_with("port_"))
         .map(|k| {
             (k.scenario.as_str(), k.field.as_str(), k.reference.as_str(), k.candidate.as_str())
         })
@@ -176,6 +177,29 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             ("p6_swapn_invalid_immediate", "halt", label.0, label.1),
             ("p6_swapn_invalid_immediate_7f", "halt", label.0, label.1),
             ("p6_exchange_invalid_immediate", "halt", label.0, label.1),
+        ]
+    );
+    // The cases the ported tests found and the gates cannot yet accept, each by its two pinned
+    // records, and for the three whose inspected frames also differ, by those frames.
+    let pending: Vec<_> = k
+        .iter()
+        .filter(|k| k.scenario.starts_with("port_"))
+        .map(|k| (k.scenario.as_str(), k.field.as_str()))
+        .collect();
+    assert_eq!(
+        pending,
+        [
+            ("port_growth_authority_touched_t2", "record"),
+            ("port_valid_calldata_cap_3124766", "record"),
+            ("port_valid_body_data_limit_3124812", "record"),
+            ("port_valid_body_data_limit_3124813", "record"),
+            ("port_valid_auth_list_25587", "record"),
+            ("port_valid_auth_list_25588", "record"),
+            ("port_tlog_recipient_overflow_plain", "record"),
+            ("port_tlog_recipient_overflow_short", "record"),
+            ("port_growth_authority_touched_t2", "frames"),
+            ("port_tlog_recipient_overflow_plain", "frames"),
+            ("port_tlog_recipient_overflow_short", "frames"),
         ]
     );
     assert_eq!(
@@ -201,8 +225,8 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     // The give-back rule's class, decided on 2026-11-09, and no entry of its own.
     assert_eq!(text.matches("owner decision 2026-11-09 (SATIN-POOL-014)").count(), 1);
     assert_eq!(text.matches("2026-11-09").count(), 1);
-    // No pending fix: the changes the entries pinned are made.
-    assert_eq!(text.matches("pending fix (SATIN-").count(), 0);
+    // One pending fix per entry above.
+    assert_eq!(text.matches("pending fix (SATIN-").count(), 11);
 }
 
 #[test]
