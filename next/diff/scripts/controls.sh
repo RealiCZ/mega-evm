@@ -80,7 +80,8 @@ fuzz_batch() {
 #   other <reason>   anything else
 verdict() {
   local log=$1 status=$2 gate=$3 scenario=$4 line panics
-  line=$(grep -E '^(PARTIAL )?GATE ' "$log" || true)
+  # The block gate's `GATE block-satin` line is the engine's own figures, not the summary.
+  line=$(grep -E '^(PARTIAL )?GATE ' "$log" | grep -v 'GATE block-satin ' || true)
   panics=$(grep -c 'panicked at' "$log" || true)
   case "$gate" in
     main | fuzz)

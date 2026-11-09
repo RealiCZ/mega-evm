@@ -223,7 +223,9 @@ gate_run() {
         local satin blocks=${expect#blocks=}
         satin=$(grep '^GATE block-satin ' "$logs/$gate.log" || true)
         echo "${satin:-GATE block-satin MISSING}"
-        grep -Eq "^GATE block-satin blocks=${blocks%% *} included=[0-9]+ refused=[0-9]+ pinned=${blocks%% *} differ=0\$" <<< "$satin" || return 1
+        [ "$(grep -c '^GATE block-satin ' <<< "$satin")" = 1 ] &&
+          grep -Eq "^GATE block-satin blocks=${blocks%% *} included=[0-9]+ refused=[0-9]+ pinned=${blocks%% *} differ=0\$" <<< "$satin" ||
+          return 1
       fi
       [ "$line" = "GATE $gate $expect differ=0" ]
       ;;
