@@ -311,8 +311,8 @@ pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
 }
 
 /// [`evm`] with the engine under the reference's `rules`: the version
-/// [`mega_evm2::satin_version_under`] builds, and `Lite::reference_rule` the rule of them that is
-/// not the give-back rule (or that one alone), which the version carries.
+/// [`mega_evm2::satin_version_under`] builds (the give-back rule is the version's), and
+/// `Lite::reference_rules` all of them.
 fn evm_under(
     s: &Scenario,
     reads: Rc<RefCell<Reads>>,
@@ -482,7 +482,7 @@ pub fn run(s: &Scenario, inspected: bool) -> Value {
 }
 
 /// Both runs of `s`, plain then inspected, with the engine under the reference's `rules`
-/// (`Lite::reference_rule`): the runs a class of a change the reference has not made yet is
+/// (`Lite::reference_rules`): the runs a class of a change the reference has not made yet is
 /// checked with (`gate::scenario_verdict`).
 pub fn runs_under(s: &Scenario, rules: &[ReferenceRule]) -> (Value, Value) {
     (run_with(s, false, rules), run_with(s, true, rules))
@@ -491,9 +491,7 @@ pub fn runs_under(s: &Scenario, rules: &[ReferenceRule]) -> (Value, Value) {
 fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
     let reads = Rc::new(RefCell::new(Reads::default()));
     let mut evm = evm_under(s, reads.clone(), rules);
-    let give_back = ReferenceRule::Eip8037GiveBack;
-    evm.ext_mut().reference_rule =
-        rules.iter().copied().find(|r| *r != give_back).or(rules.first().copied());
+    evm.ext_mut().reference_rules = rules.to_vec();
     let mut block_accounts = Map::new();
     let mut block_storage = Map::new();
     // A run under Satin's rule is checked for the regular-gas invariant, every transaction of it;

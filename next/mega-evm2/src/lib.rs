@@ -312,7 +312,7 @@ pub fn satin_version_at(cost_per_state_byte: u64) -> Version {
 }
 
 /// [`satin_version`] as the comparison runs a case under the reference's `rules`
-/// (`Lite::reference_rule`): with [`ReferenceRule::Eip8037GiveBack`] among them without the
+/// (`Lite::reference_rules`): with [`ReferenceRule::Eip8037GiveBack`] among them without the
 /// reservoir-only give-back rule and with every legacy share zero; otherwise Satin's.
 #[cfg(feature = "compare")]
 pub fn satin_version_under(rules: &[ReferenceRule]) -> Version {
@@ -394,7 +394,7 @@ fn modexp_compare(
     gas: &mut GasTracker,
 ) -> evm2::precompiles::PrecompileResult {
     use evm2::{PrecompileError, precompiles::PrecompileHalt};
-    if evm.ext().reference_rule == Some(ReferenceRule::ModexpBoundFirst) &&
+    if under_reference_rule(evm.ext(), ReferenceRule::ModexpBoundFirst) &&
         modexp_over_bound(&msg.input)
     {
         gas.spend(500).map_err(|_| PrecompileError::Halt(PrecompileHalt::OutOfGas))?;
@@ -432,34 +432,23 @@ fn kzg100k(
 /// slot number is not read. It stays a volatile read (the `Volatile` wrapper of `wrap_table`).
 #[instruction(EvmTypes = MegaTypes)]
 pub fn mega_slotnum(cx: _) -> Result<out> {
-    *out = if under_reference_rule(cx.state.host().ext(), ReferenceRuleId::SlotNumber) {
+    *out = if under_reference_rule(cx.state.host().ext(), ReferenceRule::SlotNumber) {
         cx.state.host().block().slot_num
     } else {
         Word::ZERO
     };
 }
 
-/// The changed rules [`under_reference_rule`] names, also without the `compare` feature.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReferenceRuleId {
-    SlotNumber,
-    ShortListUnsimulated,
-}
-
-/// Whether the engine runs under the implementation under review's rule `id` instead of its own
-/// (`Lite::reference_rule`, comparison only); always `false` without the `compare` feature.
+/// Whether the engine runs under the implementation under review's rule `rule` instead of its own
+/// (`Lite::reference_rules`, comparison only); always `false` without the `compare` feature.
 #[cfg(feature = "compare")]
-pub(crate) fn under_reference_rule(ext: &Lite, id: ReferenceRuleId) -> bool {
-    matches!(
-        (ext.reference_rule, id),
-        (Some(ReferenceRule::SlotNumber), ReferenceRuleId::SlotNumber) |
-            (Some(ReferenceRule::ShortListUnsimulated), ReferenceRuleId::ShortListUnsimulated)
-    )
+pub(crate) fn under_reference_rule(ext: &Lite, rule: ReferenceRule) -> bool {
+    ext.reference_rules.contains(&rule)
 }
 
 #[cfg(not(feature = "compare"))]
 #[inline(always)]
-pub(crate) fn under_reference_rule(_: &Lite, _: ReferenceRuleId) -> bool {
+pub(crate) fn under_reference_rule(_: &Lite, _: ReferenceRule) -> bool {
     false
 }
 
@@ -485,26 +474,38 @@ pub fn mega_sload(cx: _) -> Result {
         );
     }
     let (gas, state) = unsafe { evm2::interpreter::private::split_gas_state(cx.state) };
-    // Satin `oracle_sload`: no load when the whole gas cannot pay the cold access; otherwise
-    // the slot is loaded through the journal, the service asked, the read priced cold
-    // whatever its warmth, and committed as a volatile read under the Oracle's cap. A pre-block
-    // system call asks nothing: it reads the chain's value and records no answer, so the
-    // pre-block state depends on the state alone (a Mega System Transaction still asks).
+    // Satin `oracle_sload`: the slot is loaded through the journal, the service asked and the read
+    // marked as a volatile read under the Oracle's cap, at the compute before the cold access,
+    // and only then is the read priced cold whatever its warmth (`SATIN-ORCL-004`,
+    // `SATIN-DET-003`): a frame whose gas cannot pay the cold access still loads, asks and marks,
+    // then runs out of gas, the mark standing (or is stopped, when the charge is detention's
+    // crossing). No read of a system call, a deposit or a Mega System Transaction asks the
+    // service (`SATIN-ORCL-005`): it pushes the slot's value on the chain.
     let additional_cold_cost = state.gas_params().get(GasId::ColdStorageAdditionalCost);
-    let budget = ins::gas_budget(gas, state, BudgetUse::ColdStorage);
-    if state.feature(EvmFeatures::EIP2929) && budget < additional_cold_cost {
-        return Err(InstrStop::OutOfGas);
+    let cold_skip = under_reference_rule(state.host().ext(), ReferenceRule::OracleColdSkip);
+    if cold_skip && state.feature(EvmFeatures::EIP2929) {
+        let budget = ins::gas_budget(gas, state, BudgetUse::ColdStorage);
+        if budget < additional_cold_cost {
+            return Err(InstrStop::OutOfGas);
+        }
     }
     let load = evm2::interpreter::Host::sload(state.host(), &destination, &key, false)
         .map_err(|error| state.fail(error))?;
-    let asks = !state.host().ext().mechanisms.system_call;
-    let answer = if asks { state.host().ext().cfg.oracle.get(&key).copied() } else { None };
-    if asks {
+    let ext = state.host().ext();
+    let unserved = ext.mechanisms.system_call ||
+        (ext.is_deposit && !under_reference_rule(ext, ReferenceRule::OracleAsksDepositsAndMsts));
+    let answer = if unserved { None } else { ext.cfg.oracle.get(&key).copied() };
+    if !unserved {
         state.host().ext_mut().oracle_reads += 1;
     }
-    gas.spend(additional_cold_cost)?;
     let cap = state.host().ext().detention.oracle_cap;
-    detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+    if cold_skip {
+        gas.spend(additional_cold_cost)?;
+        detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+    } else {
+        detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+        gas.spend(additional_cold_cost)?;
+    }
     stack.push(answer.unwrap_or(load.value))
 }
 

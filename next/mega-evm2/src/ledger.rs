@@ -209,11 +209,12 @@ pub struct Lite {
     /// The state of the volatile-access control, hint, authority and keyless mechanisms
     /// (`satin_ext.rs`).
     pub mechanisms: crate::satin_ext::MechanismState,
-    /// Comparison only: a rule of the implementation under review that the engine has changed and
-    /// that implementation has not yet, to run under instead of the engine's; the gates run a case
-    /// again under it to check the accepted class of that difference. Kept across transactions.
+    /// Comparison only: the rules of the implementation under review that the engine has changed
+    /// and that implementation has not yet, to run under instead of the engine's; the gates run a
+    /// case again under them to check the accepted class of that difference. Kept across
+    /// transactions.
     #[cfg(feature = "compare")]
-    pub reference_rule: Option<ReferenceRule>,
+    pub reference_rules: Vec<ReferenceRule>,
     /// Comparison only: the regular-gas invariant of Satin's give-back rule, checked as the
     /// transaction runs (`crate::regular_check`).
     #[cfg(feature = "compare")]
@@ -221,8 +222,8 @@ pub struct Lite {
 }
 
 /// A rule of the implementation under review that the engine has changed by a decision that
-/// implementation has not made yet (`Lite::reference_rule`, comparison only).
-#[cfg(feature = "compare")]
+/// implementation has not made yet (`Lite::reference_rules`, comparison only; without the
+/// `compare` feature the engine never runs under one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReferenceRule {
     /// `SLOTNUM` pushes the block environment's slot number instead of zero.
@@ -240,8 +241,28 @@ pub enum ReferenceRule {
     /// `remainingComputeGas()` answer and a keyless deployment's `gasUsed` read that rule's
     /// outstanding spill. The version runs without `EIP8037_RESERVOIR_REFILLS` and with every
     /// legacy share zero ([`crate::satin_version_under`]), so the rule combines with any of the
-    /// others, which `Lite::reference_rule` then holds.
+    /// others, which `Lite::reference_rules` holds as well.
     Eip8037GiveBack,
+    /// A deposit and a system-originated transaction pay no history gas: no body, calldata, log,
+    /// record or deposited code is priced, and a failed deposit reports no history bytes.
+    DepositHistoryExempt,
+    /// An Oracle `SLOAD` whose regular gas cannot pay the cold access runs out of gas before the
+    /// slot is loaded, the service asked and the read marked.
+    OracleColdSkip,
+    /// A refused volatile read is refused after the opcode's static gas, an account opcode's at
+    /// its load once its body's charges are made, and the opcode's operands checked first.
+    RefusalAfterStaticGas,
+    /// A `keylessDeploy` call is recognized by its selector alone: one whose arguments do not
+    /// decode is charged the overhead and answered `MalformedEncoding()`.
+    KeylessSelectorOnly,
+    /// A `sendHint` call that carries value is not admitted: it runs the Oracle's bytecode.
+    HintValueRefused,
+    /// A Mega System Transaction is not held to the block's data-size, KV-update and
+    /// state-growth budgets.
+    MstPackingExempt,
+    /// Only a system call asks the oracle service nothing: a deposit's and a Mega System
+    /// Transaction's Oracle reads ask it.
+    OracleAsksDepositsAndMsts,
 }
 
 /// Withheld gas a code deposit drew (its state spill, its history), which an admission refusal

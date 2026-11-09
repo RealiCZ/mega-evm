@@ -85,7 +85,7 @@ fn run_block(
     path: &str,
     st: &[Value],
     inspected: bool,
-    rule: Option<ReferenceRule>,
+    rules: &[ReferenceRule],
 ) -> Vec<Value> {
     let b = blockdb::load_block(path, set);
     let n = b.number;
@@ -96,7 +96,7 @@ fn run_block(
         &b.header,
         b.chain_id,
         Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) },
-        rule,
+        rules,
     );
     if inspected {
         evm.set_inspector(Frames::default());
@@ -148,7 +148,7 @@ fn run_block(
         }
         // A run under Satin's rule is checked for the regular-gas invariant, every transaction of
         // the block; a run under a reference's rule is not (`invariant`).
-        if rule.is_none() {
+        if rules.is_empty() {
             invariant::ran();
             invariant::note(row.as_object_mut().unwrap(), invariant::violations(ex.evm.ext()));
         }
@@ -268,8 +268,8 @@ fn test_blocks_match_reference_plain_and_inspected() {
         let sb = read_lines(&format!("{reference}/{set}/{n}.jsonl"));
         let st = read_lines(&format!("{txref}/{set}/{n}.jsonl"));
         assert_eq!(sb.len(), txcount + 2, "oracle count {set}:{n}");
-        let mut p = run_block(&set, &path, &st, false, None);
-        let mut q = run_block(&set, &path, &st, true, None);
+        let mut p = run_block(&set, &path, &st, false, &[]);
+        let mut q = run_block(&set, &path, &st, true, &[]);
         assert_eq!(p.len(), sb.len());
         assert_eq!(q.len(), sb.len());
         let both_runs = invariant::take_runs() == 2 * txcount as u64;
@@ -288,12 +288,9 @@ fn test_blocks_match_reference_plain_and_inspected() {
         if sb.iter().zip(&p).zip(&q).any(|((s, p), q)| !row_differences(s, p, q).is_empty()) &&
             p.iter().zip(&q).all(|(p, q)| candidate_differences(p, q).is_empty())
         {
-            for (name, rule) in gate::REPLAY_RERUN_CLASSES {
-                if !classes.iter().any(|c| c == name) {
-                    continue;
-                }
-                let p2 = run_block(&set, &path, &st, false, Some(rule));
-                let q2 = run_block(&set, &path, &st, true, Some(rule));
+            for (name, rules) in gate::reruns(&classes, &gate::REPLAY_RERUN_CLASSES) {
+                let p2 = run_block(&set, &path, &st, false, &rules);
+                let q2 = run_block(&set, &path, &st, true, &rules);
                 if sb
                     .iter()
                     .zip(&p2)

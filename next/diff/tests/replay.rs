@@ -284,10 +284,9 @@ fn test_replay_matches_reference_plain_and_inspected() {
                             listed.is_empty() &&
                             !candidate_fault
                         {
-                            for (class, rule) in gate::REPLAY_RERUN_CLASSES {
-                                if !classes.iter().any(|c| c == class) {
-                                    continue;
-                                }
+                            for (class, rules) in
+                                gate::reruns(&classes, &gate::REPLAY_RERUN_CLASSES)
+                            {
                                 let run = |inspected| {
                                     replay::run_tx_under(
                                         &header,
@@ -296,7 +295,7 @@ fn test_replay_matches_reference_plain_and_inspected() {
                                         &code_cache,
                                         &tx,
                                         inspected,
-                                        Some(rule),
+                                        &rules,
                                     )
                                 };
                                 let (plain, _) = run(false);
