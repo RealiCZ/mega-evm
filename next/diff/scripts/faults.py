@@ -357,6 +357,20 @@ GIVE_BACK_REPLAY = "0x178b4f22d82d3cf6278bfa7879d59a4573dc74b360bdd4e71174512a3c
 COMBINED = "gb_combined_slotnum_reverted_child"
 BLOCK_ROW = "d4:2045117:1"
 
+# A case of each class of the owner's decisions of 2026-11-09 (the `par` scenarios), and one only
+# the run under two of their rules at once accepts: a deposit that pays history gas and reads the
+# Oracle without asking the service.
+DEP_HISTORY = "par_dep_returns"
+ORACLE_MARK = "par_orcl_read_short_of_cold_access"
+REFUSAL = "par_refused_extcodecopy_1mib"
+KEYLESS_DECODE = "par_keyless_undecodable_arguments"
+HINT_VALUE = "par_hint_with_value"
+ORACLE_DEPOSIT = "par_orcl_dep_read_on_chain"
+
+
+def is_deposit_tx(r):
+    return is_tx(r) and r.get("type") in (126, "0x7e")
+
 
 def candidate(case, record, field, action):
     """A candidate-side fault: the engine's first `record` (plain or inspected) of `case` with
@@ -428,6 +442,20 @@ FAULTS = [
     ("main-giveback-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % GIVE_BACK, candidate(GIVE_BACK, "inspected", "gas_used", "bump")),
     ("main-giveback-candidate-field", "main", r'^DIFFER %s \[.*"record_fields:Engine:' % GIVE_BACK, candidate(GIVE_BACK, "plain", "ledger", "drop")),
     ("main-combined-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % COMBINED, candidate(COMBINED, "inspected", "gas_used", "bump")),
+    # main: the classes of the decisions of 2026-11-09 take exactly their change, alone or two at once, only while the file enables them
+    ("deposit-history-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % DEP_HISTORY, scen_edit(M, named(DEP_HISTORY, bumped("data_size")))),
+    ("deposit-history-class-not-enabled", "main", r'^DIFFER %s \[.*"history"' % DEP_HISTORY, known_toml(lambda t: drop_class(t, "deposit_history"))),
+    ("oracle-mark-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % ORACLE_MARK, scen_edit(M, named(ORACLE_MARK, bumped("gas_used")))),
+    ("oracle-mark-class-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % ORACLE_MARK, known_toml(lambda t: drop_class(t, "oracle_read_before_charge"))),
+    ("refusal-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % REFUSAL, scen_edit(M, named(REFUSAL, bumped("data_size")))),
+    ("refusal-class-not-enabled", "main", r'^DIFFER %s \[.*"gas_used"' % REFUSAL, known_toml(lambda t: drop_class(t, "refusal_costs_nothing"))),
+    ("keyless-decode-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % KEYLESS_DECODE, scen_edit(M, named(KEYLESS_DECODE, bumped("data_size")))),
+    ("keyless-decode-class-not-enabled", "main", r'^DIFFER %s \[.*"output"' % KEYLESS_DECODE, known_toml(lambda t: drop_class(t, "keyless_decoded_dispatch"))),
+    ("hint-value-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % HINT_VALUE, scen_edit(M, named(HINT_VALUE, bumped("gas_used")))),
+    ("hint-value-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_VALUE, known_toml(lambda t: drop_class(t, "hint_with_value"))),
+    ("oracle-service-combined-other-field", "main", r'^DIFFER %s \[.*"kv"' % ORACLE_DEPOSIT, scen_edit(M, named(ORACLE_DEPOSIT, bumped("kv")))),
+    ("oracle-service-combined-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % ORACLE_DEPOSIT, known_toml(lambda t: drop_class(t, "oracle_no_service"))),
+    ("main-par-combined-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % ORACLE_DEPOSIT, candidate(ORACLE_DEPOSIT, "inspected", "gas_used", "bump")),
     # fuzz
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),
     ("fuzz-duplicate-entry", "fuzz", r"duplicate oracle names", scen_edit(F, dup_entry)),
@@ -453,6 +481,9 @@ FAULTS = [
     ("replay-giveback-other-field", "replay", cmp("gas_used"), row_edit("replay", lambda r: is_tx(r) and r.get("hash") == GIVE_BACK_REPLAY, lambda r: r["satin"].update(gas_used=r["satin"]["gas_used"] + 1), "the class's recorded transaction")),
     ("replay-giveback-not-enabled", "replay", cmp("reservoir_remaining"), known_toml(lambda t: drop_class(t, "reservoir_give_back"))),
     ("replay-expected-class", "replay", SUMMARY, expect("EXPECT_REPLAY", count("class", 1))),
+    # replay: a deposit's history, by the class's rerun, only while the file enables it, and nothing else of it
+    ("replay-deposit-history-other-field", "replay", cmp("data_size"), row_edit("replay", is_deposit_tx, lambda r: r["satin"].update(data_size=r["satin"]["data_size"] + 1), "recorded deposit")),
+    ("replay-deposit-history-not-enabled", "replay", cmp("history"), known_toml(lambda t: drop_class(t, "deposit_history"))),
     # replay: its rerun never waives the candidate's own checks
     ("replay-giveback-candidate-inspected", "replay", cmp("evm2_plain_vs_inspected"), candidate(GIVE_BACK_REPLAY, "inspected", "gas_used", "bump")),
     ("replay-giveback-candidate-field", "replay", r'"fields": ?\[[^]]*"record_fields:plain:', candidate(GIVE_BACK_REPLAY, "plain", "ledger", "drop")),
@@ -463,6 +494,11 @@ FAULTS = [
     ("block-counters-gas", "block", cmp("gas_used"), block_row("block_counters", "gas_used")),
     ("block-post-storage", "block", cmp("storage"), block_row("post_state", "storage", lambda r: r["storage"], first_value(lambda s: s + "1"))),
     ("block-missing-row", "block", r"oracle count", file_edit("block", has_txs(2), drop_tx, "block with two transactions")),
+    # block: a deposit's history, by the whole-block rerun, only while the file enables it (the other
+    # classes the block gate runs again for, a Mega System Transaction's budgets among them, do not
+    # take it), and nothing else of the block
+    ("block-deposit-history-other-field", "block", cmp("tx_size"), block_row("tx", "tx_size", lambda r: r.get("type") in (126, "0x7e"))),
+    ("block-deposit-history-not-enabled", "block", cmp("gas_used"), known_toml(lambda t: drop_class(t, "deposit_history"))),
     # block: its whole-block rerun never waives the candidate's own checks
     ("block-candidate-inspected", "block", cmp("evm2_inspected:gas_used"), candidate(BLOCK_ROW, "inspected", "gas_used", "bump")),
     ("block-candidate-field", "block", r'"fields": ?\[[^]]*"record_fields:plain:', candidate(BLOCK_ROW, "plain", "receipt_gas", "drop")),

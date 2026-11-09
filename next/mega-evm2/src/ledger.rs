@@ -207,8 +207,9 @@ pub struct Lite {
     pub tx_start_pending: Option<[i64; 3]>,
     pub deposit_loan: DepositLoan,
     /// The protocol's own work (a promoted system-address transaction, a pre-block system
-    /// call): held to no per-transaction limit (still counted), not detained, no history, the
-    /// minimum SALT bucket (Satin `AdditionalLimit::is_exempt`, `is_system_originated`).
+    /// call): held to no per-transaction limit (still counted), not detained, the minimum SALT
+    /// bucket (Satin `AdditionalLimit::is_exempt`, `is_system_originated`); a system call also pays
+    /// no history gas, a system-originated transaction does (`prices_history`).
     pub exempt: bool,
     /// The state of the volatile-access control, hint, authority and keyless mechanisms
     /// (`satin_ext.rs`).

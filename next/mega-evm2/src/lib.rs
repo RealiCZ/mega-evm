@@ -618,12 +618,26 @@ fn settle_refusal(
 #[cold]
 #[inline(never)]
 fn refuse_on(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>, kept: Gas) -> Result {
-    *gas = kept;
+    if !off("refusal_gas") {
+        *gas = kept;
+    }
     revert_with(
         gas,
         state,
         &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
     )
+}
+
+/// Whether the block beneficiary is refused before an opcode's body runs once its static gas is
+/// charged, where the reference's order refuses it at its load: only with the switch
+/// `refuse_at_load` off.
+fn refused_before_body(
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    operand: Option<Word>,
+) -> bool {
+    off("refuse_at_load") &&
+        operand.is_some_and(|w| w.to_address() == state.host().block().beneficiary) &&
+        crate::satin_ext::refused_here(state)
 }
 
 /// Whether Satin refuses a conditionally volatile opcode before it charges or checks anything
@@ -680,6 +694,13 @@ macro_rules! account_opcode {
             }
             cx.gas.spend(const { static_gas($op) })?;
             let a = stack.peek(0).ok_or(InstrStop::StackUnderflow)?.to_address();
+            if refused_before_body(cx.state, stack.peek(0)) {
+                return revert_with(
+                    cx.gas,
+                    cx.state,
+                    &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
+                );
+            }
             let kept = refusal_gas(cx.gas, cx.state);
             let result = ins::$base::<MegaTypes>::execute(cx.pc, stack, cx.state);
             // SAFETY: `gas` is not reached through `state` while both are used.
@@ -1107,6 +1128,13 @@ fn mega_call_impl(
         return refuse_up_front(gas, state);
     }
     gas.spend(static_gas)?;
+    if refused_before_body(state, stack.peek(1)) {
+        return revert_with(
+            gas,
+            state,
+            &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
+        );
+    }
     // Under the reference's rule (comparison only), evm2's body offers the load of the target, and
     // of its EIP-7702 delegate, to `before_account_load`, which refuses the block beneficiary's in
     // a frame whose volatile access is off.

@@ -262,7 +262,9 @@ impl<I: Instruction<MegaTypes>, const A: u8, const OP: u8> Instruction<MegaTypes
         // `BLOCKHASH`'s operand, which it pops before the Host answers (an empty stack halts on the
         // underflow and refuses nothing), on the gas the frame had after the static gas.
         if reference {
-            let pops_first = A == crate::satin_ext::access::BLOCK_HASH && stack.peek(0).is_none();
+            let pops_first = A == crate::satin_ext::access::BLOCK_HASH &&
+                stack.peek(0).is_none() &&
+                !crate::off("blockhash_underflow");
             if !pops_first && crate::satin_ext::refused_here(state) {
                 let (gas, state) = unsafe { split_gas_state(state) };
                 return crate::ledger::revert_with(

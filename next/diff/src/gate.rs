@@ -558,7 +558,7 @@ pub fn candidate_fault(case: &str, plain: &mut Value, inspected: &mut Value) {
 
 /// The classes checked by running the case again on the engine under the reference's rule, each
 /// with that rule. The give-back rule comes last: a case that meets it and another class's change
-/// is that other class's ([`reruns`]).
+/// is that other class's ([`rerun_class`]).
 pub const RERUN_CLASSES: [(&str, ReferenceRule); 10] = [
     (SLOTNUM_ZERO, ReferenceRule::SlotNumber),
     (AUTH_PREFLIGHT_READS, ReferenceRule::ShortListUnsimulated),
@@ -583,43 +583,50 @@ pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 4] = [
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
 
-/// The reruns a case is tried under, in order, from the classes of `rerun` that `classes` enables:
-/// each alone, then every two of them together, then every three, a combination being the class of
-/// its first member (so the give-back rule, listed last, is never the class of a combination). A
-/// case meets two or three decided changes at once when a transaction makes several of them (a
-/// deposit that reads the Oracle and gives a slot's charge back): only the run under all of them
-/// can show that nothing else differs.
-pub fn reruns(
+/// The class of `rerun` a case is of, among those `classes` enables, `matches(rules)` telling
+/// whether the engine's run of the case under the reference's `rules` has no difference from the
+/// reference (or only a shape class's, [`classify`]): the first class whose rule alone accounts
+/// for the case; otherwise, when the run under every enabled rule does — the case meets several
+/// decided changes at once, a deposit that reads the Oracle and gives a slot's charge back — the
+/// first class whose rule that run cannot do without (the give-back rule, listed last, only when
+/// no other's is needed). A rule a case does not meet changes nothing in its run, so the run under
+/// every rule is the run under the ones it meets.
+pub fn rerun_class(
     classes: &[String],
     rerun: &[(&'static str, ReferenceRule)],
-) -> Vec<(&'static str, Vec<ReferenceRule>)> {
+    mut matches: impl FnMut(&[ReferenceRule]) -> bool,
+) -> Option<&'static str> {
     let on: Vec<_> =
         rerun.iter().filter(|(class, _)| classes.iter().any(|c| c == class)).copied().collect();
-    let mut out: Vec<(&'static str, Vec<ReferenceRule>)> =
-        on.iter().map(|(class, rule)| (*class, vec![*rule])).collect();
-    for i in 0..on.len() {
-        for j in i + 1..on.len() {
-            out.push((on[i].0, vec![on[i].1, on[j].1]));
+    for (class, rule) in &on {
+        if matches(&[*rule]) {
+            return Some(class);
         }
     }
-    for i in 0..on.len() {
-        for j in i + 1..on.len() {
-            for k in j + 1..on.len() {
-                out.push((on[i].0, vec![on[i].1, on[j].1, on[k].1]));
-            }
+    if on.len() < 2 {
+        return None;
+    }
+    let all: Vec<ReferenceRule> = on.iter().map(|(_, rule)| *rule).collect();
+    if !matches(&all) {
+        return None;
+    }
+    for (class, rule) in &on {
+        let without: Vec<ReferenceRule> = all.iter().filter(|r| *r != rule).copied().collect();
+        if !matches(&without) {
+            return Some(class);
         }
     }
-    out
+    on.first().map(|(class, _)| *class)
 }
 
 /// The verdict of the synthetic gate on scenario `name`: its [`scenario_differences`],
 /// [`classify`]d against the accepted differences `known`. A case without an entry that no class
 /// of [`classify`] takes is of a class of [`RERUN_CLASSES`], when that class is accepted, if
 /// `under(rules)` — the case run again on the engine, plain and inspected, under that class's
-/// reference rule — has no difference from the reference at all. A case that meets two or three
-/// of the decided changes is of the first of their classes when all are accepted and the run under
-/// all their rules ([`reruns`]; the give-back rule is a setting of the version, the others of
-/// `Lite::reference_rules`, so they combine) has no difference at all.
+/// reference rule — has no difference from the reference at all, or only a shape class's. A case
+/// that meets several of the decided changes is of one of their classes when the run under every
+/// enabled rule has none ([`rerun_class`]; the give-back rule is a setting of the version, the
+/// others of `Lite::reference_rules`, so they combine).
 /// No rerun is made for a case whose own records have a fault ([`candidate_differences`]): a rerun
 /// stands in for the comparison with the reference, never for the candidate's checks.
 pub fn scenario_verdict(
@@ -650,13 +657,38 @@ pub fn scenario_verdict(
     if !candidate_differences(plain, inspected).is_empty() {
         return verdict;
     }
-    for (class, rules) in reruns(classes, &RERUN_CLASSES) {
-        let (plain, inspected) = under(&rules);
-        if scenario_differences(reference, &plain, &inspected).is_empty() {
-            return Verdict::Class(class);
-        }
-    }
-    verdict
+    let class = rerun_class(classes, &RERUN_CLASSES, |rules| {
+        let (plain, inspected) = under(rules);
+        rerun_matches(classes, name, reference, &plain, &inspected)
+    });
+    class.map_or(verdict, Verdict::Class)
+}
+
+/// Whether the engine's run of scenario `name` under a reference's rules, `plain` and `inspected`,
+/// leaves no difference from the reference's record `reference`, or exactly the shape of a class
+/// [`classify`] accepts by its shape alone (a halted first frame of evm2 #871, a halt label): the
+/// decided change then accounts for everything else.
+fn rerun_matches(
+    classes: &[String],
+    name: &str,
+    reference: &Value,
+    plain: &Value,
+    inspected: &Value,
+) -> bool {
+    let diffs = scenario_differences(reference, plain, inspected);
+    diffs.is_empty() ||
+        matches!(
+            classify(
+                &[],
+                classes,
+                name,
+                diffs,
+                reference,
+                plain,
+                (&reference["frames"], &inspected["frames"]),
+            ),
+            Verdict::Class(_)
+        )
 }
 
 /// The counts of a gate's summary line, when `MEGA_EVM2_EXPECT` names them (the summary line

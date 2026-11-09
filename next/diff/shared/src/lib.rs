@@ -480,6 +480,7 @@ pub fn hand_written() -> Vec<Scenario> {
     v.extend(rev::all());
     v.extend(port::all());
     v.extend(gb::all());
+    v.extend(par::all());
     v.iter_mut().for_each(add_chain_accounts);
     v
 }
@@ -561,6 +562,7 @@ pub fn everything() -> Vec<Scenario> {
     v.extend(rev::all());
     v.extend(port::all());
     v.extend(gb::all());
+    v.extend(par::all());
     v.iter_mut().for_each(add_chain_accounts);
     if let Ok(only) = std::env::var("MEGA_EVM2_ONLY") {
         v.retain(|s| only.split(',').any(|name| name == s.name));
@@ -587,6 +589,7 @@ pub mod gb;
 mod json;
 pub mod p6;
 pub mod p7;
+pub mod par;
 pub mod port;
 pub mod probe;
 pub mod q2;

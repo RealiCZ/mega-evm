@@ -288,19 +288,26 @@ fn test_blocks_match_reference_plain_and_inspected() {
         if sb.iter().zip(&p).zip(&q).any(|((s, p), q)| !row_differences(s, p, q).is_empty()) &&
             p.iter().zip(&q).all(|(p, q)| candidate_differences(p, q).is_empty())
         {
-            for (name, rules) in gate::reruns(&classes, &gate::REPLAY_RERUN_CLASSES) {
-                let p2 = run_block(&set, &path, &st, false, &rules);
-                let q2 = run_block(&set, &path, &st, true, &rules);
-                if sb
+            let mut first = None;
+            let taken = gate::rerun_class(&classes, &gate::REPLAY_RERUN_CLASSES, |rules| {
+                let p2 = run_block(&set, &path, &st, false, rules);
+                let q2 = run_block(&set, &path, &st, true, rules);
+                let same = sb
                     .iter()
                     .zip(&p2)
                     .zip(&q2)
-                    .all(|((s, p), q)| row_differences(s, p, q).is_empty())
-                {
-                    (p, q, class) = (p2, q2, Some(name));
-                    reruns.push((format!("{set}:{n}"), name));
-                    break;
+                    .all(|((s, p), q)| row_differences(s, p, q).is_empty());
+                if same && first.is_none() {
+                    first = Some((p2, q2));
                 }
+                same
+            });
+            if let Some(name) = taken {
+                // The rows are those of the first run that had no difference: under the class's
+                // rule alone, or under every enabled rule.
+                let (p2, q2) = first.expect("a run without a difference");
+                (p, q, class) = (p2, q2, Some(name));
+                reruns.push((format!("{set}:{n}"), name));
             }
         }
         let mut out: Box<dyn Write> = match &outdir {
