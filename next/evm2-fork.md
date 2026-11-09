@@ -26,8 +26,9 @@ The engine also uses two upstream changes that are already in the base: `call_wi
 | `cee7bfb4` let a type family act on the transaction before its first frame          | `TxHandlerHooks::before_initial_frame`                           | +375/−45 | not yet proposed                                                                                                          | has a handler hook before the first frame that can charge the transaction or settle it     |
 | `e98e8683` let a version credit state-gas give-backs to the reservoir only          | `EvmFeatures::EIP8037_RESERVOIR_REFILLS`, `give_back_state_gas`, `merge_returned_gas` | +603/−16 | the rule is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2 | has the reservoir-only give-back rule as a version option                                  |
 | `a656dce5` let a version take a legacy share of a state charge from execution gas   | the four `GasId::*LegacyShare` parameters, `spend_state_with_share_reserve_first` | +232/−8  | the share is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2 | has a legacy share of the new-state charges as gas parameters                             |
+| `28e20011` pin the tracker's accessors and equality, and the handler's bounds and first-frame paths | tests only                                                                        | +586     | none (tests of the series and of upstream paths)                                                     | tests                                                                                     |
 
-Size is the commit's own stat against its parent; most of the insertions of `f37259b6`, `9df29b6a`, `f6d21862`, `b9fa9909`, `cee7bfb4`, `e98e8683` and `a656dce5` are tests.
+Size is the commit's own stat against its parent; most of the insertions of `f37259b6`, `9df29b6a`, `f6d21862`, `b9fa9909`, `cee7bfb4`, `e98e8683` and `a656dce5` are tests, and all of `28e20011`'s.
 Upstream order, smallest and least contested first: `0f373350`, `28301ff3` (both filed), `b9fa9909`, `cee7bfb4`, `94011dec`, `f623a776`, `41525289` with the halt record of `f37259b6`, `9df29b6a`, the rest of `f37259b6`, `f6d21862`, and `70bbeb67` last, because it runs on every message.
 `e98e8683` and `a656dce5` follow ethereum/EIPs #12581: offered with it if Ethereum takes that rule into EIP-8037, kept as Satin's own departure if it does not.
 
@@ -206,6 +207,13 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   No switch, as for `e98e8683`; the class's rerun sets the shares to zero.
 - **Upstream.** The share is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; nothing filed in evm2.
 - **Drop** with `e98e8683`.
+
+### `28e20011` tests
+
+- **Adds** tests only: the tracker's equality and hash over every counted field and its accessors; every `Transaction` accessor of `TxEnvelope`; the validation bounds at the limit itself; EIP-3607 and the balance top-up; warming; the upfront state gas taken from the reservoir first; a delegated recipient's warm and cold delegate under EIP-2780; the message of a first frame that runs out of gas in the runtime gas phase; a creation transaction's account charge, under both give-back rules; the result's refund; and the account charges a failed call or creation gives back.
+- **Why.** A mutation run over `interpreter/gas.rs`, `ethereum/mod.rs` and the lines `e98e8683` and `a656dce5` change found these paths unpinned by the crate's tests; with these tests every mutant there is caught except ones that cannot change a result (a `<` against `<=` where both arms give the same value, a field whose default is the value it is set to).
+- **Upstream.** Those of upstream paths can be offered as they are.
+- **Drop** with the patches they test, or once upstream has them.
 
 ## Dropped from the earlier series
 
