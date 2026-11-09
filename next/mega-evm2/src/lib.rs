@@ -1399,7 +1399,7 @@ pub fn count_start(evm: &mut Evm<'_, MegaTypes>) -> Option<(u8, u64)> {
 #[derive(Debug, Default)]
 pub struct StartHooks;
 
-fn is_precompile(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
+pub(crate) fn is_precompile(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
     evm.precompiles().contains(&msg.call_target)
 }
 
