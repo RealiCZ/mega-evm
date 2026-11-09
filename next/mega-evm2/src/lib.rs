@@ -525,15 +525,19 @@ pub fn mega_sload(cx: _) -> Result {
         cx.gas.spend(const { static_gas(op::SLOAD) })?;
         return ins::sload::<MegaTypes>::execute(cx.pc, stack, cx.state);
     }
-    // The reference's order (comparison only): the warm base is the opcode's static gas, charged
-    // before the key, the refusal and the read.
+    // The reference's orders (comparison only), each its own decision's old rule. Its refusal
+    // comes after the opcode's static gas (the warm base) and the key, so a refused read pays the
+    // warm base first (`RefusalAfterStaticGas`); a read that is not refused takes nothing from
+    // that rule. Its read charges the warm base first, before the key and the read
+    // (`OracleColdSkip`).
     let cold_skip = under_reference_rule(cx.state.host().ext(), ReferenceRule::OracleColdSkip);
-    let warm_first = reference || cold_skip;
+    let refused_late = reference && crate::satin_ext::refused_here(cx.state);
+    let warm_first = refused_late || cold_skip;
     if warm_first {
         cx.gas.spend(const { static_gas(op::SLOAD) })?;
     }
     let key = stack.pop()?;
-    if reference && crate::satin_ext::refused_here(cx.state) {
+    if refused_late {
         return revert_with(
             cx.gas,
             cx.state,
@@ -573,8 +577,7 @@ pub fn mega_sload(cx: _) -> Result {
         detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
     } else {
         detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
-        let warm = if warm_first { 0 } else { const { static_gas(op::SLOAD) } };
-        gas.spend(warm + additional_cold_cost)?;
+        gas.spend(const { static_gas(op::SLOAD) } + additional_cold_cost)?;
     }
     stack.push(answer.unwrap_or(load.value))
 }

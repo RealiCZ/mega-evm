@@ -370,6 +370,13 @@ ORACLE_DEPOSIT = "par_orcl_dep_read_on_chain"
 # reference, charging the warm base first, runs out of gas before it loads the slot.
 ORACLE_WARM_BASE = "par_orcl_read_past_warm_base_short_of_cold"
 ORACLE_SLOT_5 = "0x6342000000000000000000000000000000000001:0x5"
+# The read class's other shapes, each needing that class alone (with every other class enabled):
+# a read below the warm base that loads and marks; a 2,100 charge that is detention's crossing,
+# none of it billed; the Oracle's own code reached with 29 of gas, its looping caller then stopped
+# at the compute limit.
+ORACLE_BELOW_WARM_BASE = "par_orcl_read_below_warm_base"
+ORACLE_CROSSING = "q56_det_oracle_read_crosses"
+ORACLE_LOOP = "par_orcl_real_read_below_warm_base_then_loop"
 # A transaction's own value `sendHint`: legacy, a deposit (which the deposit history's class takes
 # first) and one over the data-size limit, each admitted only by the hint's class.
 HINT_TOP = "par_hint_top_value_frame_2300"
@@ -473,6 +480,9 @@ FAULTS = [
     ("deposit-history-class-not-enabled", "main", r'^DIFFER %s \[.*"history"' % DEP_HISTORY, known_toml(lambda t: drop_class(t, "deposit_history"))),
     ("oracle-mark-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % ORACLE_MARK, scen_edit(M, named(ORACLE_MARK, bumped("gas_used")))),
     ("oracle-mark-class-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % ORACLE_MARK, known_toml(lambda t: drop_class(t, "oracle_read_before_charge"))),
+    ("oracle-below-warm-base-class-not-enabled", "main", r'^DIFFER %s \[.*"reads"' % ORACLE_BELOW_WARM_BASE, known_toml(lambda t: drop_class(t, "oracle_read_before_charge"))),
+    ("oracle-crossing-class-not-enabled", "main", r'^DIFFER %s \[.*"gas_used"' % ORACLE_CROSSING, known_toml(lambda t: drop_class(t, "oracle_read_before_charge"))),
+    ("oracle-loop-class-not-enabled", "main", r'^DIFFER %s \[.*"limit_exceeded"' % ORACLE_LOOP, known_toml(lambda t: drop_class(t, "oracle_read_before_charge"))),
     ("oracle-warm-base-class-reference-loads", "main", r'^DIFFER %s \[.*"reads"' % ORACLE_WARM_BASE, scen_edit(M, named(ORACLE_WARM_BASE, loads_slot(ORACLE_SLOT_5)))),
     ("refusal-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % REFUSAL, scen_edit(M, named(REFUSAL, bumped("data_size")))),
     ("refusal-class-not-enabled", "main", r'^DIFFER %s \[.*"gas_used"' % REFUSAL, known_toml(lambda t: drop_class(t, "refusal_costs_nothing"))),
