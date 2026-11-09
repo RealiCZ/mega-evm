@@ -366,6 +366,15 @@ REFUSAL = "par_refused_extcodecopy_1mib"
 KEYLESS_DECODE = "par_keyless_undecodable_arguments"
 HINT_VALUE = "par_hint_with_value"
 ORACLE_DEPOSIT = "par_orcl_dep_read_on_chain"
+# The Oracle read whose frame pays the warm base but not the rest of the cold access: the
+# reference, charging the warm base first, runs out of gas before it loads the slot.
+ORACLE_WARM_BASE = "par_orcl_read_past_warm_base_short_of_cold"
+ORACLE_SLOT_5 = "0x6342000000000000000000000000000000000001:0x5"
+# A transaction's own value `sendHint`: legacy, a deposit (which the deposit history's class takes
+# first) and one over the data-size limit, each admitted only by the hint's class.
+HINT_TOP = "par_hint_top_value_frame_2300"
+HINT_TOP_DEPOSIT = "par_hint_top_value_deposit_frame_2300"
+HINT_TOP_STOP = "par_hint_top_value_over_data_limit"
 
 
 def is_deposit_tx(r):
@@ -381,6 +390,23 @@ def candidate(case, record, field, action):
 def reads_also(account):
     """The reference also read `account`, which the engine did not."""
     return lambda o: o["reads"]["accounts"].append(account)
+
+
+def loads_slot(slot):
+    """The reference also read the storage slot `slot`, which it does not."""
+    return lambda o: o["reads"].update(storage=sorted(o["reads"]["storage"] + [slot]))
+
+
+def pinned_satin_figures(work):
+    """The block gate run with a copy of the Satin-rule figures (`data/block-satin.txt`) whose
+    first block of the sample includes one more transaction."""
+    first_block = blocks(work, "block")[0][0].split("/")
+    key = "%s:%s" % (first_block[1], first_block[2].split(".")[0])
+    dst = os.path.join(work, "block-satin.txt")
+    shutil.copyfile(os.path.join(HERE, "..", "data", "block-satin.txt"), dst)
+    edit_text(work, "block-satin.txt", lambda t: re.sub(r"^%s included=(\d+) " % re.escape(key), lambda m: "%s included=%d " % (key, int(m.group(1)) + 1), t, count=1, flags=re.M))
+    NOTE.append(key)
+    return ["MEGA_EVM2_BLOCK_SATIN=" + dst]
 
 
 def bumped(field):
@@ -447,12 +473,16 @@ FAULTS = [
     ("deposit-history-class-not-enabled", "main", r'^DIFFER %s \[.*"history"' % DEP_HISTORY, known_toml(lambda t: drop_class(t, "deposit_history"))),
     ("oracle-mark-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % ORACLE_MARK, scen_edit(M, named(ORACLE_MARK, bumped("gas_used")))),
     ("oracle-mark-class-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % ORACLE_MARK, known_toml(lambda t: drop_class(t, "oracle_read_before_charge"))),
+    ("oracle-warm-base-class-reference-loads", "main", r'^DIFFER %s \[.*"reads"' % ORACLE_WARM_BASE, scen_edit(M, named(ORACLE_WARM_BASE, loads_slot(ORACLE_SLOT_5)))),
     ("refusal-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % REFUSAL, scen_edit(M, named(REFUSAL, bumped("data_size")))),
     ("refusal-class-not-enabled", "main", r'^DIFFER %s \[.*"gas_used"' % REFUSAL, known_toml(lambda t: drop_class(t, "refusal_costs_nothing"))),
     ("keyless-decode-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % KEYLESS_DECODE, scen_edit(M, named(KEYLESS_DECODE, bumped("data_size")))),
     ("keyless-decode-class-not-enabled", "main", r'^DIFFER %s \[.*"output"' % KEYLESS_DECODE, known_toml(lambda t: drop_class(t, "keyless_decoded_dispatch"))),
     ("hint-value-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % HINT_VALUE, scen_edit(M, named(HINT_VALUE, bumped("gas_used")))),
     ("hint-value-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_VALUE, known_toml(lambda t: drop_class(t, "hint_with_value"))),
+    ("hint-value-top-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_TOP, known_toml(lambda t: drop_class(t, "hint_with_value"))),
+    ("hint-value-top-deposit-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_TOP_DEPOSIT, known_toml(lambda t: drop_class(t, "hint_with_value"))),
+    ("hint-value-top-stop-class-not-enabled", "main", r'^DIFFER %s \[.*"limit_exceeded"' % HINT_TOP_STOP, known_toml(lambda t: drop_class(t, "hint_with_value"))),
     ("oracle-service-combined-other-field", "main", r'^DIFFER %s \[.*"kv"' % ORACLE_DEPOSIT, scen_edit(M, named(ORACLE_DEPOSIT, bumped("kv")))),
     ("oracle-service-combined-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % ORACLE_DEPOSIT, known_toml(lambda t: drop_class(t, "oracle_no_service"))),
     ("main-par-combined-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % ORACLE_DEPOSIT, candidate(ORACLE_DEPOSIT, "inspected", "gas_used", "bump")),
@@ -499,6 +529,8 @@ FAULTS = [
     # take it), and nothing else of the block
     ("block-deposit-history-other-field", "block", cmp("tx_size"), block_row("tx", "tx_size", lambda r: r.get("type") in (126, "0x7e"))),
     ("block-deposit-history-not-enabled", "block", cmp("gas_used"), known_toml(lambda t: drop_class(t, "deposit_history"))),
+    # block: the Satin-rule run's own figures, held to the pinned ones
+    ("block-satin-pinned", "block", r"^BLOCK-SATIN DIFFER ", pinned_satin_figures),
     # block: its whole-block rerun never waives the candidate's own checks
     ("block-candidate-inspected", "block", cmp("evm2_inspected:gas_used"), candidate(BLOCK_ROW, "inspected", "gas_used", "bump")),
     ("block-candidate-field", "block", r'"fields": ?\[[^]]*"record_fields:plain:', candidate(BLOCK_ROW, "plain", "receipt_gas", "drop")),

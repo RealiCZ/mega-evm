@@ -156,10 +156,10 @@ name = "deposit_history"
 why = "SATIN-HIST-016, SATIN-HIST-022 and SATIN-DEP-001: a deposit and a system-originated transaction (a Mega System Transaction among them) pay history gas as any transaction does, for their body and calldata in their validation, their start record, logs, records and deposited code, and a failed deposit reports no history gas but its body and calldata as history bytes; system calls stay exempt. The other implementation still prices no history for them and has not made this change yet; what that moves (a deposit's gas used, which deposit fails, its reservoir, a receipt's cumulative gas, the block's counters) is the transaction's to decide. A case, a recorded transaction or a recorded block is of this class only when the engine, run again with deposits and system-originated transactions exempt from history gas, has no difference from the reference at all."
 signoff = "owner decision 2026-11-09 (SATIN-HIST-016)"
 
-# An Oracle read is made before its cold access is charged.
+# An Oracle read is made before its cold access, its warm base included, is charged.
 [[class]]
 name = "oracle_read_before_charge"
-why = "SATIN-ORCL-004 and SATIN-DET-003: an Oracle SLOAD loads the slot, asks the service and marks the read, at the compute before its cold access, then charges the cold access, so a frame that cannot pay it still loads, asks and marks before it runs out of gas, the mark standing. The other implementation still runs out of gas before the load and marks the read after the charge, and has not made this change yet. A case is of this class only when the engine, run again with that order, has no difference from the reference at all."
+why = "SATIN-ORCL-004 and SATIN-DET-003: an Oracle SLOAD loads the slot, asks the service and marks the read, at the compute before its cold access, then charges the cold access, COLD_SLOAD_COST with its warm base, so a frame that cannot pay it, even one short of the warm base, still loads, asks and marks before it runs out of gas, the mark standing. The other implementation still charges the warm base first, as the opcode's static gas, runs out of gas before the load when the rest of the cold access cannot then be paid, and marks the read once both are paid; it has not made this change yet. A case is of this class only when the engine, run again with that order, has no difference from the reference at all."
 signoff = "owner decision 2026-11-09 (SATIN-ORCL-004)"
 
 # A refused volatile read costs nothing.
@@ -177,7 +177,7 @@ signoff = "owner decision 2026-11-09 (SATIN-ICPT-006)"
 # A sendHint is admitted whether it carries value or not.
 [[class]]
 name = "hint_with_value"
-why = "SATIN-ORCL-006 and SATIN-ICPT-003: a sendHint call forwarded some gas from a frame whose access is on is admitted, forwarded and counted whether it carries value or not. The other implementation still refuses a hint that carries value and has not made this change yet. A case is of this class only when the engine, run again with that condition, has no difference from the reference at all."
+why = "SATIN-ORCL-006 and SATIN-ICPT-003: a sendHint call forwarded some gas from a frame whose access is on is admitted, forwarded and counted whether it carries value or not; a value CALL's stipend is not forwarded gas, and a transaction's own sendHint, which has none, is forwarded its first frame's whole gas. The other implementation still refuses a hint that carries value and has not made this change yet. A case is of this class only when the engine, run again with that condition, has no difference from the reference at all."
 signoff = "owner decision 2026-11-09 (SATIN-ORCL-006)"
 
 # A Mega System Transaction is held to the block's packing budgets.

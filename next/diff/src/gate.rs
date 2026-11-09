@@ -242,10 +242,12 @@ pub const RESERVOIR_GIVE_BACK: &str = "reservoir_give_back";
 /// engine replay gate and the block executor gate run it again too ([`REPLAY_RERUN_CLASSES`]).
 pub const DEPOSIT_HISTORY: &str = "deposit_history";
 
-/// An Oracle `SLOAD` whose regular gas cannot pay the cold access still loads the slot, asks the
-/// service and marks the read before it runs out of gas (`SATIN-ORCL-004`, `SATIN-DET-003`); the
-/// reference runs out of gas before any of it. Checked by running the case again with the
-/// reference's order ([`ReferenceRule::OracleColdSkip`]).
+/// An Oracle `SLOAD` whose regular gas cannot pay the cold access, `COLD_SLOAD_COST` with its warm
+/// base, still loads the slot, asks the service and marks the read before it runs out of gas
+/// (`SATIN-ORCL-004`, `SATIN-DET-003`); the reference charges the warm base first, runs out of gas
+/// before any of it when the rest cannot then be paid, and marks a read once both are paid.
+/// Checked by running the case again with the reference's order
+/// ([`ReferenceRule::OracleColdSkip`]).
 pub const ORACLE_READ_BEFORE_CHARGE: &str = "oracle_read_before_charge";
 
 /// A refused volatile read costs nothing: the frame reverts on the gas it held when the opcode
@@ -261,8 +263,9 @@ pub const REFUSAL_COSTS_NOTHING: &str = "refusal_costs_nothing";
 /// reference's dispatch ([`ReferenceRule::KeylessSelectorOnly`]).
 pub const KEYLESS_DECODED_DISPATCH: &str = "keyless_decoded_dispatch";
 
-/// A `sendHint` call is admitted whether it carries value or not (`SATIN-ORCL-006`); the reference
-/// does not admit one that carries value. Checked by running the case again with the reference's
+/// A `sendHint` call is admitted whether it carries value or not (`SATIN-ORCL-006`), a
+/// transaction's own forwarded its first frame's whole gas; the reference does not admit one that
+/// carries value. Checked by running the case again with the reference's
 /// condition ([`ReferenceRule::HintValueRefused`]).
 pub const HINT_WITH_VALUE: &str = "hint_with_value";
 

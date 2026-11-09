@@ -5,10 +5,12 @@
 //!
 //! - deposits and Mega System Transactions pay history gas, a failed deposit reporting its body and
 //!   calldata as history bytes (`par_dep_*`, `par_mst_*`);
-//! - an Oracle read is made before its cold access is charged (`par_orcl_read_*`);
+//! - an Oracle read is made before its cold access, its warm base included, is charged
+//!   (`par_orcl_read_*`);
 //! - a refused volatile read costs nothing (`par_refused_*`);
 //! - a keyless deployment is recognized only once its arguments decode (`par_keyless_*`);
-//! - a hint is admitted whether its call carries value or not (`par_hint_*`);
+//! - a hint is admitted whether its call carries value or not, a transaction's own `sendHint`
+//!   forwarded its first frame's whole gas (`par_hint_*`);
 //! - no Oracle read of a deposit or a Mega System Transaction asks the service (`par_orcl_dep_*`,
 //!   `par_orcl_mst_*`, with a user's read as the control).
 //!
@@ -22,7 +24,9 @@ use super::{
     edge::{SYSTEM, registry_naming, system_account},
     funded, init_returning, op,
     q8::{X1, mem_call, sel, send_hint},
-    remaining_compute_gas_selector, scenario,
+    remaining_compute_gas_selector,
+    rev::oracle_account,
+    scenario,
 };
 use alloy_primitives::U256;
 
@@ -140,16 +144,23 @@ fn oracle_then_remaining(forward: u64) -> Vec<u8> {
         .build()
 }
 
-/// An Oracle frame short of its read's cold access (2,102 forwarded: 1,999 left at the `SLOAD`
-/// once `PUSH1` and its warm 100 are paid) still loads the slot, asks the service and marks the
-/// read, then runs out of gas; with 4,102 the read completes. Either way the mark is at the compute
-/// before the cold access, which `remainingComputeGas()` then shows.
+/// An Oracle frame short of its read's cold access, `COLD_SLOAD_COST` (2,100, its warm base
+/// included), still loads the slot, asks the service and marks the read, then runs out of gas:
+/// forwarded 2,102 (2,099 left at the `SLOAD` once `PUSH1` is paid), 2,053 (2,050: the warm base
+/// paid, not the rest, where the reference, charging the warm base first, runs out of gas before
+/// the read) or 53 (50: short even of the warm base); with 4,102 the read completes. Either way the
+/// mark is at the compute before the cold access, which `remainingComputeGas()` then shows. Last,
+/// the Oracle's own code reached with too little gas for its read (`getSlot(5)` forwarded 250, 29
+/// left at its `SLOAD`), its caller looping on: the mark stands, so the loop is stopped at the
+/// compute limit, not run out of the transaction's 30,000,000 of gas.
 fn oracle_read_before_charge() -> Vec<Scenario> {
     let rules = &["SATIN-ORCL-004", "SATIN-DET-003", "SATIN-WIT-012"];
     let mut v = Vec::new();
     for (name, forward) in [
         ("par_orcl_read_short_of_cold_access", 2_102),
         ("par_orcl_read_marked_before_charge", 4_102),
+        ("par_orcl_read_past_warm_base_short_of_cold", 2_053),
+        ("par_orcl_read_below_warm_base", 53),
     ] {
         let oracle = Account {
             address: ORACLE,
@@ -165,6 +176,22 @@ fn oracle_read_before_charge() -> Vec<Scenario> {
         s.limits = Limits { oracle_cap: Some(100_000), ..Limits::default() };
         v.push(s);
     }
+    let mut get_slot = sel("getSlot(uint256)").to_vec();
+    get_slot.extend_from_slice(&U256::from(5).to_be_bytes::<32>());
+    let mut a = mem_call(Asm::new(), op::CALL, ORACLE, 0, 250, &get_slot).op(op::POP).build();
+    // JUMPDEST; PUSH1 <it>; JUMP
+    let at = u8::try_from(a.len()).expect("a one-byte jump target");
+    a.extend([op::JUMPDEST, op::PUSH1, at, op::JUMP]);
+    let mut oracle = oracle_account();
+    oracle.storage = vec![(5, 9)];
+    let mut s = par(
+        "par_orcl_real_read_below_warm_base_then_loop",
+        rules,
+        vec![acct(A, a), oracle],
+        30_000_000,
+    );
+    s.oracle = vec![(5, 42)];
+    v.push(s);
     v
 }
 
@@ -265,7 +292,12 @@ fn keyless() -> Vec<Scenario> {
 }
 
 /// A `sendHint` call carrying value is admitted, forwarded and counted (its bytes on the
-/// transaction's data size), whether the Oracle's code then takes the value or reverts.
+/// transaction's data size), whether the Oracle's code then takes the value or reverts. A
+/// transaction's own `sendHint` with value has no stipend: it is forwarded its first frame's whole
+/// regular gas, so it is admitted with 1 of it, 2,300 and 2,301, as a legacy transaction or a
+/// deposit, then the Oracle's own code reverts its non-payable call (or runs out of its one gas),
+/// the hint staying counted; one whose input would take the data size over the limit is stopped
+/// before the Oracle's code runs.
 fn hints() -> Vec<Scenario> {
     let rules = &["SATIN-ORCL-006", "SATIN-ICPT-003"];
     let mut v = Vec::new();
@@ -279,6 +311,28 @@ fn hints() -> Vec<Scenario> {
             .build();
         v.push(par(name, rules, vec![funded(A, a, 10), acct(ORACLE, oracle)], BELOW_CAP));
     }
+    // A legacy transaction with the 164 bytes of `sendHint(7, 0xab × 64)` pays 67,740 before its
+    // first frame: its intrinsic gas, its body's history and the transfer's record.
+    let top = &["SATIN-ORCL-006", "SATIN-ORCL-007", "SATIN-ORCL-009", "SATIN-FWD-003"];
+    let top_hint = |name, frame_gas: u64| {
+        let mut s = par(name, top, vec![oracle_account()], 67_740 + frame_gas);
+        s.to = ORACLE;
+        s.value = U256::from(1);
+        s.data = send_hint(7, &[0xab; 64]);
+        s
+    };
+    v.push(top_hint("par_hint_top_value_frame_1", 1));
+    v.push(top_hint("par_hint_top_value_frame_2300", 2_300));
+    v.push(top_hint("par_hint_top_value_frame_2301", 2_301));
+    let mut s = top_hint("par_hint_top_value_deposit_frame_2300", 2_300);
+    s.deposit = Some(0);
+    s.rules.push("SATIN-ORCL-005");
+    v.push(s);
+    // The body's 474 bytes and the hint's 164 cross a limit of 600.
+    let mut s = top_hint("par_hint_top_value_over_data_limit", 2_000);
+    s.limits = Limits { data: Some(600), ..Limits::default() };
+    s.rules.push("SATIN-ORCL-010");
+    v.push(s);
     v
 }
 
