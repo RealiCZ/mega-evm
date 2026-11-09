@@ -130,6 +130,17 @@ The engine replay gate runs a transaction again for that class alone (`gate::REP
 The block executor gate runs a block that differs again, whole, under that rule, and takes it only when that run, plain and inspected, has no difference from any of the reference's rows (its transactions, counters and post-state): a transaction that ran close to its gas can end otherwise under the new rule, and every later row of its block moves with it.
 Such a block's rows count in the `GATE block` line as the rerun's verdicts; the number of blocks it took is pinned on its own (`SAMPLE_BLOCK_RERUN_CLASS`, `FULL_BLOCK_RERUN_CLASS` in `common.sh`, checked by the block gate's test).
 Such a case is accepted and counted as `class=`; any other field that differs, or any other shape, fails it.
+No rerun is made for a case whose own records have a fault (`gate::candidate_differences`, and the replay and block gates' checks of the same): an engine record without exactly the fields the engine renders, or the engine's plain and inspected records disagreeing; a rerun stands in for the comparison with the reference, never for the engine's own checks, and such a case differs.
+
+What the summaries certify for `reservoir_give_back`: a `class=` case is one whose engine records are complete and agree, plain and inspected, and whose every difference from the reference is the old rule's, since the engine run under EIP-8037's rule matches the reference in every field.
+That proves the change is confined to the give-back rule and the legacy share; it says nothing of the new rule's own figures, which the reference cannot check.
+Those rest on the regular-gas invariant and on tests.
+The invariant (`mega-evm2/src/regular_check.rs`, feature `compare`; `diff/src/invariant.rs`) is checked on every case of the four gates, on the engine's own runs under Satin's rule, plain and inspected (not on a rerun): within a frame regular gas, the withheld part included, never rises, except when a child returns, and then by at most the unused regular gas the child returned.
+It is observed when a frame is built, after every instruction the engine defines (each state-gas site, call, creation and volatile read among them), when a code deposit is admitted and when the frame ends; between those points only evm2's stock instructions run, none of which gives gas back.
+A violation puts the field `regular_gas_invariant` in the case's engine record, so the case differs whatever its class and no rerun waives it.
+`gate.sh` sums the gates' counts into its last line, `INVARIANT regular-gas scope=<sample|full> checked=<cases> violations=0`, and fails on a violation or a gate without a count.
+The tests pin the rule's worked figures: `mega-evm2/tests/give_back.rs` and `migration_checks.rs`, `diff/tests/give_back.rs`, and the evm2 fork's tests of the rule ([`evm2-fork.md`](evm2-fork.md)).
+
 The `class=` counts are pinned like the others: `MAIN_EXPECT`, `SAMPLE_FUZZ_CLASS` and `FULL_FUZZ_CLASS` in `diff/scripts/common.sh`, and for the replay gate `count_expected.py` (an applied transaction no entry lists whose reference recorded no frame) plus `SAMPLE_REPLAY_RERUN_CLASS` and `FULL_REPLAY_RERUN_CLASS` in `common.sh`, the transactions the replay gate's rerun takes, which `gate_inputs` moves from `match` to `class`.
 
 ## Blocks of several transactions, simulation switches and rule ids
@@ -166,6 +177,7 @@ To add a control, run a gate test with `MEGA_EVM2_DISABLE=<name>`, pick a differ
 
 `faults.sh` injects faults into a copy of the sample's reference data, one at a time, and runs the gate each concerns; the repository is not modified.
 The faults are a representative set, listed in `diff/scripts/faults.py`: for each kind of check a gate makes, one wrong value, entry, count or accepted difference.
+A candidate-side fault changes the engine's own first records of one case instead, through `MEGA_EVM2_CANDIDATE_FAULT` (`gate::candidate_fault`), which `gate.sh` refuses: one plain and inspected disagreement and one missing field for a case of the give-back class in each of the synthetic, replay and block gates, and a disagreement for a case only the combined rerun accepts; each must differ, not be waived by its rerun.
 
 A fault counts as rejected only when its gate fails and the output shows the check the fault names, while the unmutated run's output does not, and every test of the run completed: a run killed or crashed before its libtest result proves no check, whatever it printed (the fault `main-killed-after-differ` kills one after its difference to show that).
 The unmutated copy must pass every gate first.

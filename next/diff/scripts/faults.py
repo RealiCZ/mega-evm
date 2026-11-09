@@ -1,7 +1,9 @@
 """The fixed list of faults `faults.sh` injects into a copy of the sample's gate inputs.
 
 Each fault changes one thing in the reference data (or the run's environment) that a gate must
-reject, and names the check that must catch it: a regular expression that must match the gate's
+reject, and names the check that must catch it. A candidate-side fault changes the engine's own
+first records of one case instead, through `MEGA_EVM2_CANDIDATE_FAULT` (`gate::candidate_fault`):
+a rerun under a reference's rule must never waive it. Each names the check that must catch it: a regular expression that must match the gate's
 log or comparison output (and not the unmutated run's), or `summary` when the gate's tests pass
 and only the comparison of its summary line with the expected counts can reject it. A fault whose
 evidence is `killed:<regex>` faults `faults.sh` itself: its run is killed right after a line
@@ -349,6 +351,19 @@ GIVE_BACK = "gb_t3_slot_m1"
 GIVE_BACK_REPLAY = "0x178b4f22d82d3cf6278bfa7879d59a4573dc74b360bdd4e71174512a3c51bf35"
 
 
+# The case of the main set that only the run under two reference rules at once accepts (the
+# give-back rule and `SLOTNUM`'s), and a row of the sample's blocks: the give-back class's recorded
+# transaction (`d4`, block 2045117, row 1).
+COMBINED = "gb_combined_slotnum_reverted_child"
+BLOCK_ROW = "d4:2045117:1"
+
+
+def candidate(case, record, field, action):
+    """A candidate-side fault: the engine's first `record` (plain or inspected) of `case` with
+    `field` bumped by 1 or dropped."""
+    return lambda work: ["MEGA_EVM2_CANDIDATE_FAULT=%s|%s|%s|%s" % (case, record, field, action)]
+
+
 def reads_also(account):
     """The reference also read `account`, which the engine did not."""
     return lambda o: o["reads"]["accounts"].append(account)
@@ -409,6 +424,10 @@ FAULTS = [
     ("giveback-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % GIVE_BACK, scen_edit(M, named(GIVE_BACK, bumped("gas_used")))),
     ("giveback-class-other-frame", "main", r'^DIFFER %s \[' % GIVE_BACK, scen_edit(M, named(GIVE_BACK, lambda o: o["frames"][1].update(status="halt")))),
     ("giveback-class-not-enabled", "main", r'^DIFFER %s \[' % GIVE_BACK, known_toml(lambda t: drop_class(t, "reservoir_give_back"))),
+    # main: a rerun never waives the candidate's own checks, single or combined
+    ("main-giveback-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % GIVE_BACK, candidate(GIVE_BACK, "inspected", "gas_used", "bump")),
+    ("main-giveback-candidate-field", "main", r'^DIFFER %s \[.*"record_fields:Engine:' % GIVE_BACK, candidate(GIVE_BACK, "plain", "ledger", "drop")),
+    ("main-combined-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % COMBINED, candidate(COMBINED, "inspected", "gas_used", "bump")),
     # fuzz
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),
     ("fuzz-duplicate-entry", "fuzz", r"duplicate oracle names", scen_edit(F, dup_entry)),
@@ -434,6 +453,9 @@ FAULTS = [
     ("replay-giveback-other-field", "replay", cmp("gas_used"), row_edit("replay", lambda r: is_tx(r) and r.get("hash") == GIVE_BACK_REPLAY, lambda r: r["satin"].update(gas_used=r["satin"]["gas_used"] + 1), "the class's recorded transaction")),
     ("replay-giveback-not-enabled", "replay", cmp("reservoir_remaining"), known_toml(lambda t: drop_class(t, "reservoir_give_back"))),
     ("replay-expected-class", "replay", SUMMARY, expect("EXPECT_REPLAY", count("class", 1))),
+    # replay: its rerun never waives the candidate's own checks
+    ("replay-giveback-candidate-inspected", "replay", cmp("evm2_plain_vs_inspected"), candidate(GIVE_BACK_REPLAY, "inspected", "gas_used", "bump")),
+    ("replay-giveback-candidate-field", "replay", r'"fields": ?\[[^]]*"record_fields:plain:', candidate(GIVE_BACK_REPLAY, "plain", "ledger", "drop")),
     # block
     ("block-gas-used", "block", cmp("gas_used"), block_row("tx", "gas_used")),
     ("block-expected-rerun", "block", r"MEGA_EVM2_EXPECT_RERUN", expect("EXPECT_BLOCK_RERUN", lambda v: str(int(v) + 1))),
@@ -441,6 +463,9 @@ FAULTS = [
     ("block-counters-gas", "block", cmp("gas_used"), block_row("block_counters", "gas_used")),
     ("block-post-storage", "block", cmp("storage"), block_row("post_state", "storage", lambda r: r["storage"], first_value(lambda s: s + "1"))),
     ("block-missing-row", "block", r"oracle count", file_edit("block", has_txs(2), drop_tx, "block with two transactions")),
+    # block: its whole-block rerun never waives the candidate's own checks
+    ("block-candidate-inspected", "block", cmp("evm2_inspected:gas_used"), candidate(BLOCK_ROW, "inspected", "gas_used", "bump")),
+    ("block-candidate-field", "block", r'"fields": ?\[[^]]*"record_fields:plain:', candidate(BLOCK_ROW, "plain", "receipt_gas", "drop")),
 ]
 
 NOTE = []

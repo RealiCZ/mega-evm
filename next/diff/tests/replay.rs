@@ -7,11 +7,13 @@
 //! Environment: `MEGA_EVM2_BLOCK_DIR` (recorded blocks), `MEGA_EVM2_REPLAY_REF`, the optional
 //! `MEGA_EVM2_EXPECT` count check of `src/gate.rs`; `MEGA_EVM2_OUT` additionally writes every
 //! comparison.
-//! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line.
+//! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line and the regular-gas
+//! invariant's `INVARIANT` line (`mega_evm2_diff::invariant`).
 
 use alloy_primitives::{Address, B256, Bytes, U256, address, keccak256};
 use mega_evm2_diff::{
     gate::{self, Verdict},
+    invariant,
     replay::{self, blockdb},
 };
 use serde_json::{Value, json};
@@ -31,16 +33,25 @@ fn differ(a: &Value, b: &Value) -> Vec<String> {
 
 /// The differences of one replayed transaction: its reference row `line` (the outcome `satin`, the
 /// recorded `frames`, `inspected_equal`) against the engine's plain and inspected records and the
-/// inspected run's `frames`; also whether the frames differ, and the engine's own plain-versus-
-/// inspected differences.
+/// inspected run's `frames`; also whether the frames differ, the engine's own plain-versus-
+/// inspected differences, and whether the engine's records have a fault of their own (a record
+/// without exactly the fields the engine renders, `record_fields:<run>:<what>`, or the two
+/// disagreeing), which no rerun waives.
 fn tx_differences(
     line: &Value,
     plain: &Value,
     inspected: &Value,
     frames: &Value,
-) -> (Vec<String>, bool, Vec<String>) {
+) -> (Vec<String>, bool, Vec<String>, bool) {
     let satin = &line["satin"];
     let mut d = differ(satin, plain);
+    let mut candidate_fault = false;
+    for (run, r) in [("plain", plain), ("inspected", inspected)] {
+        if let Err(e) = replay::check_record_fields(r) {
+            d.push(format!("record_fields:{run}:{e}"));
+            candidate_fault = true;
+        }
+    }
     let frames_differ = if satin.get("error").is_none() &&
         inspected.get("error").is_none() &&
         let Some(f) = gate::frames_diff(&line["frames"], frames)
@@ -53,11 +64,12 @@ fn tx_differences(
     let insp = gate::same_engine_differences(plain, inspected);
     if !insp.is_empty() {
         d.push("evm2_plain_vs_inspected".into());
+        candidate_fault = true;
     }
     if line["inspected_equal"].as_bool() != Some(true) {
         d.push("satin_plain_vs_inspected".into());
     }
-    (d, frames_differ, insp)
+    (d, frames_differ, insp, candidate_fault)
 }
 
 #[test]
@@ -68,6 +80,7 @@ fn test_replay_matches_reference_plain_and_inspected() {
     let classes = gate::known_classes();
     let mut totals: BTreeMap<String, u64> = BTreeMap::new();
     let mut field_counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut invariant = invariant::Tally::default();
     let mut processed = Vec::new();
     for (set, path) in blockdb::block_list() {
         let b = blockdb::load_block(&path, &set);
@@ -221,13 +234,15 @@ fn test_replay_matches_reference_plain_and_inspected() {
                     } else {
                         let raw = blockdb::bytes(&line["raw"]);
                         let tx = replay::decode(&raw, txs_by_hash[hash]).expect("decode");
-                        let (plain, _) =
+                        let (mut plain, _) =
                             replay::run_tx(&header, chain_id, &db, &code_cache, &tx, false);
-                        let (inspected, frames) =
+                        let (mut inspected, frames) =
                             replay::run_tx(&header, chain_id, &db, &code_cache, &tx, true);
+                        invariant.case(hash, invariant::take_runs() >= 2, [&plain, &inspected]);
+                        gate::candidate_fault(hash, &mut plain, &mut inspected);
                         let satin = &line["satin"];
                         let frames = json!(frames);
-                        let (mut d, frames_differ, insp) =
+                        let (mut d, frames_differ, insp, candidate_fault) =
                             tx_differences(line, &plain, &inspected, &frames);
                         for f in &d {
                             *field_counts.entry(f.clone()).or_default() += 1;
@@ -263,7 +278,12 @@ fn test_replay_matches_reference_plain_and_inspected() {
                         // A transaction without an entry that no class above takes is of a class
                         // the replay gate runs again for, when the file enables it, if the engine
                         // run again under its rule, plain and inspected, has no difference at all.
-                        if matches!(accepted, Verdict::Differ(_)) && listed.is_empty() {
+                        // A rerun stands in for the comparison with the reference only: none is
+                        // made when the engine's own records have a fault.
+                        if matches!(accepted, Verdict::Differ(_)) &&
+                            listed.is_empty() &&
+                            !candidate_fault
+                        {
                             for (class, rule) in gate::REPLAY_RERUN_CLASSES {
                                 if !classes.iter().any(|c| c == class) {
                                     continue;
@@ -281,7 +301,7 @@ fn test_replay_matches_reference_plain_and_inspected() {
                                 };
                                 let (plain, _) = run(false);
                                 let (inspected, frames) = run(true);
-                                let (d, _, _) =
+                                let (d, _, _, _) =
                                     tx_differences(line, &plain, &inspected, &json!(frames));
                                 if d.is_empty() {
                                     accepted = Verdict::Class(class);
@@ -352,6 +372,7 @@ fn test_replay_matches_reference_plain_and_inspected() {
     // Only a run of exactly the manifest's blocks is the gate: any other selection prints a
     // line `gate.sh` does not take for a summary.
     let complete = blockdb::check_processed_identities(&processed);
+    println!("{}", invariant.line("replay"));
     println!("{}{}", if complete { "" } else { "PARTIAL " }, gate::replay_line(&totals));
     gate::finish(&totals);
 }

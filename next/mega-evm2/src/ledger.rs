@@ -214,6 +214,10 @@ pub struct Lite {
     /// again under it to check the accepted class of that difference. Kept across transactions.
     #[cfg(feature = "compare")]
     pub reference_rule: Option<ReferenceRule>,
+    /// Comparison only: the regular-gas invariant of Satin's give-back rule, checked as the
+    /// transaction runs (`crate::regular_check`).
+    #[cfg(feature = "compare")]
+    pub regular_check: crate::regular_check::RegularGasCheck,
 }
 
 /// A rule of the implementation under review that the engine has changed by a decision that
@@ -310,6 +314,8 @@ impl Lite {
         self.top_stop = None;
         #[cfg(feature = "compare")]
         self.settlements.clear();
+        #[cfg(feature = "compare")]
+        self.regular_check.reset();
         self.stops = 0;
         self.detention.reset(self.limits.cap, self.limits.oracle_cap);
         self.tx_start_charge = 0;

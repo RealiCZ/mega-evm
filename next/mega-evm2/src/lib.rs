@@ -21,6 +21,8 @@ pub mod eip7702;
 pub mod intercept;
 pub mod keyless;
 pub mod ledger;
+#[cfg(feature = "compare")]
+pub mod regular_check;
 #[cfg(not(feature = "salt-test-hasher"))]
 pub mod salt_hash;
 pub mod satin_ext;
@@ -199,35 +201,42 @@ impl<const BASE: u32, const CUSTOM: u32> EvmConfig<MegaTypes> for MegaConfig<BAS
     const OPCODE_CONFIG: &'static OpcodeConfig<MegaTypes> = &satin_table();
 }
 
+/// An instruction the engine defines, observed by the regular-gas check in comparison builds
+/// ([`regular_check::Observed`]); the instruction itself otherwise.
+#[cfg(feature = "compare")]
+pub(crate) type Obs<I> = regular_check::Observed<I>;
+#[cfg(not(feature = "compare"))]
+pub(crate) type Obs<I> = I;
+
 /// Osaka's table + Amsterdam opcodes and prices + Satin's wrappers.
 pub const fn satin_table() -> OpcodeConfig<MegaTypes> {
     let mut c = OpcodeConfig::<MegaTypes>::base::<evm2::BaseEvmConfig<{ SpecId::OSAKA as u32 }>>();
-    c.set_instruction::<ins::dupn<MegaTypes>>(op::DUPN, 3);
-    c.set_instruction::<ins::swapn<MegaTypes>>(op::SWAPN, 3);
-    c.set_instruction::<ins::exchange<MegaTypes>>(op::EXCHANGE, 3);
-    c.set_instruction::<mega_slotnum>(op::SLOTNUM, 2);
+    c.set_instruction::<Obs<ins::dupn<MegaTypes>>>(op::DUPN, 3);
+    c.set_instruction::<Obs<ins::swapn<MegaTypes>>>(op::SWAPN, 3);
+    c.set_instruction::<Obs<ins::exchange<MegaTypes>>>(op::EXCHANGE, 3);
+    c.set_instruction::<Obs<mega_slotnum>>(op::SLOTNUM, 2);
     c.set_static_gas(op::EXTCODESIZE, 200);
     c.set_static_gas(op::EXTCODECOPY, 200);
-    c.set_instruction::<mega_sstore>(op::SSTORE, c.static_gas(op::SSTORE));
-    c.set_instruction::<mega_sload>(op::SLOAD, c.static_gas(op::SLOAD));
-    c.set_instruction::<mega_balance>(op::BALANCE, c.static_gas(op::BALANCE));
-    c.set_instruction::<mega_extcodesize>(op::EXTCODESIZE, c.static_gas(op::EXTCODESIZE));
-    c.set_instruction::<mega_extcodehash>(op::EXTCODEHASH, c.static_gas(op::EXTCODEHASH));
-    c.set_instruction::<mega_extcodecopy>(op::EXTCODECOPY, c.static_gas(op::EXTCODECOPY));
-    c.set_instruction::<mega_selfbalance>(op::SELFBALANCE, c.static_gas(op::SELFBALANCE));
-    c.set_instruction::<mega_call>(op::CALL, c.static_gas(op::CALL));
-    c.set_instruction::<mega_callcode>(op::CALLCODE, c.static_gas(op::CALLCODE));
-    c.set_instruction::<mega_delegatecall>(op::DELEGATECALL, c.static_gas(op::DELEGATECALL));
-    c.set_instruction::<mega_staticcall>(op::STATICCALL, c.static_gas(op::STATICCALL));
-    c.set_instruction::<mega_create>(op::CREATE, c.static_gas(op::CREATE));
-    c.set_instruction::<mega_create2>(op::CREATE2, c.static_gas(op::CREATE2));
-    c.set_instruction::<mega_log<0>>(op::LOG0, c.static_gas(op::LOG0));
-    c.set_instruction::<mega_log<1>>(op::LOG1, c.static_gas(op::LOG1));
-    c.set_instruction::<mega_log<2>>(op::LOG2, c.static_gas(op::LOG2));
-    c.set_instruction::<mega_log<3>>(op::LOG3, c.static_gas(op::LOG3));
-    c.set_instruction::<mega_log<4>>(op::LOG4, c.static_gas(op::LOG4));
-    c.set_instruction::<mega_selfdestruct>(op::SELFDESTRUCT, c.static_gas(op::SELFDESTRUCT));
-    c.set_instruction::<keyless::mega_keyless>(keyless::DISPATCHER, 0);
+    c.set_instruction::<Obs<mega_sstore>>(op::SSTORE, c.static_gas(op::SSTORE));
+    c.set_instruction::<Obs<mega_sload>>(op::SLOAD, c.static_gas(op::SLOAD));
+    c.set_instruction::<Obs<mega_balance>>(op::BALANCE, c.static_gas(op::BALANCE));
+    c.set_instruction::<Obs<mega_extcodesize>>(op::EXTCODESIZE, c.static_gas(op::EXTCODESIZE));
+    c.set_instruction::<Obs<mega_extcodehash>>(op::EXTCODEHASH, c.static_gas(op::EXTCODEHASH));
+    c.set_instruction::<Obs<mega_extcodecopy>>(op::EXTCODECOPY, c.static_gas(op::EXTCODECOPY));
+    c.set_instruction::<Obs<mega_selfbalance>>(op::SELFBALANCE, c.static_gas(op::SELFBALANCE));
+    c.set_instruction::<Obs<mega_call>>(op::CALL, c.static_gas(op::CALL));
+    c.set_instruction::<Obs<mega_callcode>>(op::CALLCODE, c.static_gas(op::CALLCODE));
+    c.set_instruction::<Obs<mega_delegatecall>>(op::DELEGATECALL, c.static_gas(op::DELEGATECALL));
+    c.set_instruction::<Obs<mega_staticcall>>(op::STATICCALL, c.static_gas(op::STATICCALL));
+    c.set_instruction::<Obs<mega_create>>(op::CREATE, c.static_gas(op::CREATE));
+    c.set_instruction::<Obs<mega_create2>>(op::CREATE2, c.static_gas(op::CREATE2));
+    c.set_instruction::<Obs<mega_log<0>>>(op::LOG0, c.static_gas(op::LOG0));
+    c.set_instruction::<Obs<mega_log<1>>>(op::LOG1, c.static_gas(op::LOG1));
+    c.set_instruction::<Obs<mega_log<2>>>(op::LOG2, c.static_gas(op::LOG2));
+    c.set_instruction::<Obs<mega_log<3>>>(op::LOG3, c.static_gas(op::LOG3));
+    c.set_instruction::<Obs<mega_log<4>>>(op::LOG4, c.static_gas(op::LOG4));
+    c.set_instruction::<Obs<mega_selfdestruct>>(op::SELFDESTRUCT, c.static_gas(op::SELFDESTRUCT));
+    c.set_instruction::<Obs<keyless::mega_keyless>>(keyless::DISPATCHER, 0);
     detention::wrap_table(c)
 }
 
@@ -1058,6 +1067,8 @@ fn mega_call_impl(
             Ok(())
         },
         |gas, state, _msg, result| {
+            #[cfg(feature = "compare")]
+            regular_check::child_returned(state.host(), result.gas.remaining());
             let success = result.stop.is_success();
             let entry = state.host().ext_mut().pop_child(success);
             gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
@@ -1148,6 +1159,8 @@ fn mega_create_impl(
             Ok(())
         },
         |gas, state, _msg, result| {
+            #[cfg(feature = "compare")]
+            regular_check::child_returned(state.host(), result.gas.remaining());
             let success = result.stop.is_success() && result.created_address.is_some();
             let entry = state.host().ext_mut().pop_child(success);
             gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
@@ -1323,6 +1336,8 @@ impl MessageHooks<MegaTypes> for StartHooks {
 
     fn frame_built(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>, gas: &mut GasTracker) {
         detention::on_frame_built(evm, msg, gas);
+        #[cfg(feature = "compare")]
+        regular_check::on_frame_built(evm, msg, gas);
     }
 
     fn before_commit(
@@ -1340,6 +1355,8 @@ impl MessageHooks<MegaTypes> for StartHooks {
         }
         let answered = is_answered(evm, msg);
         detention::before_commit(evm, msg, answered, stop, output, gas);
+        #[cfg(feature = "compare")]
+        regular_check::on_frame_end(evm, msg, stop.is_halt(), gas);
         // A frame's return switches back on what it (or a frame below it) switched off.
         if evm.ext().mechanisms.disabled_from.is_some_and(|from| from >= msg.depth as usize) {
             evm.ext_mut().mechanisms.disabled_from = None;
@@ -1387,6 +1404,8 @@ impl MessageHooks<MegaTypes> for StartHooks {
         _gas_before: &GasTracker,
         gas: &mut Gas,
     ) -> core::result::Result<Option<(InstrStop, Bytes)>, evm2::ExecutionError> {
+        #[cfg(feature = "compare")]
+        regular_check::observe(evm, gas.tracker(), "code deposit charges");
         if keyless::refuses_empty_deposit(evm, _msg, code) {
             return Ok(Some((InstrStop::Revert, Bytes::new())));
         }

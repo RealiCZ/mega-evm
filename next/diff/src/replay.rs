@@ -8,7 +8,10 @@
 #[path = "../shared/blockdb.rs"]
 pub mod blockdb;
 
-use crate::driver::{Frames, changed_json, collect_changes, render_outcome};
+use crate::{
+    driver::{Frames, changed_json, collect_changes, render_outcome},
+    invariant,
+};
 use alloy_consensus::transaction::Recovered;
 use alloy_eips::Decodable2718;
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
@@ -169,6 +172,50 @@ pub fn run_tx(
 
 /// [`run_tx`] with the engine under the reference's `rule` (`Lite::reference_rule`): the run a
 /// replay transaction of a class of a change the reference has not made yet is checked with.
+/// The fields of a replayed transaction's record ([`run_tx_under`]): an executed one's, the
+/// outcome's ([`render_outcome`]) then the read set, the database misses and the changed accounts'
+/// flags.
+pub const RECORD_FIELDS: [&str; 20] = [
+    "status",
+    "halt",
+    "output",
+    "gas_used",
+    "regular",
+    "state",
+    "history",
+    "history_bytes",
+    "reservoir_remaining",
+    "data_size",
+    "kv",
+    "growth",
+    "limit_exceeded",
+    "logs",
+    "accounts",
+    "storage",
+    "ledger",
+    "reads",
+    "misses",
+    "account_flags",
+];
+
+/// The fields of a refused transaction's record ([`run_tx_under`]).
+pub const REFUSED_FIELDS: [&str; 3] = ["error", "reads", "misses"];
+
+/// Whether `record` has exactly the fields [`run_tx_under`] renders, [`RECORD_FIELDS`] or, with
+/// `error`, [`REFUSED_FIELDS`]; `Err` names the missing and the unexpected fields (a regular-gas
+/// invariant violation, [`crate::invariant::KEY`], among them).
+pub fn check_record_fields(record: &Value) -> Result<(), String> {
+    let o = record.as_object().ok_or("record fields: not an object")?;
+    let want: &[&str] = if o.contains_key("error") { &REFUSED_FIELDS } else { &RECORD_FIELDS };
+    let missing: Vec<_> = want.iter().filter(|k| !o.contains_key(**k)).collect();
+    let unexpected: Vec<_> = o.keys().filter(|k| !want.contains(&k.as_str())).collect();
+    if missing.is_empty() && unexpected.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("record fields: missing {missing:?}, unexpected {unexpected:?}"))
+    }
+}
+
 pub fn run_tx_under(
     h: &Header,
     chain_id: u64,
@@ -183,6 +230,12 @@ pub fn run_tx_under(
     let mut evm = new_evm_under(h, chain_id, evm2db, rule);
     if inspected {
         evm.set_inspector(Frames::default());
+    }
+    // A run under Satin's rule is checked for the regular-gas invariant; a run under a
+    // reference's rule is not (`invariant`).
+    let checked = rule.is_none();
+    if checked {
+        invariant::ran();
     }
     let (r, changes) = {
         let executed = match evm.transact(tx) {
@@ -228,6 +281,9 @@ pub fn run_tx_under(
         [("reads", reads), ("misses", json!(d.run_misses)), ("account_flags", Value::Object(flags))]
     {
         out.insert(k.into(), v);
+    }
+    if checked {
+        invariant::note(&mut out, invariant::violations(ext));
     }
     (Value::Object(out), frames)
 }

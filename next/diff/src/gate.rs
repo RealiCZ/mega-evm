@@ -446,6 +446,60 @@ pub fn scenario_differences(reference: &Value, plain: &Value, inspected: &Value)
     diffs
 }
 
+/// The candidate's own faults in a scenario's records: a plain or inspected record without exactly
+/// the fields the engine renders (`record_fields:Engine:<what>`, a record carrying a regular-gas
+/// invariant violation among them, [`crate::invariant`]) and the two records disagreeing
+/// (`candidate_inspected:<field>`). Both are also among [`scenario_differences`]; a rerun under a
+/// reference's rule never waives them ([`scenario_verdict`]).
+pub fn candidate_differences(plain: &Value, inspected: &Value) -> Vec<String> {
+    let mut diffs = Vec::new();
+    for r in [plain, inspected] {
+        let keys = r.as_object().expect("outcome object").keys().map(String::as_str);
+        if let Err(e) = record::check_fields(Harness::Engine, keys) {
+            diffs.push(format!("record_fields:{:?}:{e}", Harness::Engine));
+        }
+    }
+    diffs.extend(
+        same_engine_differences(plain, inspected)
+            .into_iter()
+            .map(|k| format!("candidate_inspected:{k}")),
+    );
+    diffs
+}
+
+/// Applies the candidate-side fault `MEGA_EVM2_CANDIDATE_FAULT` names to a case's first records,
+/// for `faults.sh` (`faults.py`), which shows the gates reject it: `<case>|<plain or
+/// inspected>|<field>|<bump or drop>` adds 1 to the numeric field, or removes it, in that record
+/// of the case whose key is `<case>` (a scenario's name, a replayed transaction's hash, a block
+/// row's `<set>:<block>:<row>`). `gate.sh` refuses to run with the variable set.
+pub fn candidate_fault(case: &str, plain: &mut Value, inspected: &mut Value) {
+    let Ok(spec) = std::env::var("MEGA_EVM2_CANDIDATE_FAULT") else { return };
+    let parts: Vec<&str> = spec.split('|').collect();
+    let [target, side, field, action] = parts[..] else {
+        panic!("MEGA_EVM2_CANDIDATE_FAULT: <case>|<plain|inspected>|<field>|<bump|drop>: {spec}")
+    };
+    if target != case {
+        return;
+    }
+    let record = match side {
+        "plain" => plain,
+        "inspected" => inspected,
+        _ => panic!("MEGA_EVM2_CANDIDATE_FAULT: unknown record {side}"),
+    };
+    let o = record.as_object_mut().expect("outcome object");
+    match action {
+        "bump" => {
+            let v = o.get(field).and_then(Value::as_u64).expect("a numeric field to bump");
+            o.insert(field.into(), serde_json::json!(v + 1));
+        }
+        "drop" => {
+            o.remove(field).expect("a field to drop");
+        }
+        _ => panic!("MEGA_EVM2_CANDIDATE_FAULT: unknown action {action}"),
+    }
+    println!("CANDIDATE-FAULT {case} {side} {field} {action}");
+}
+
 /// The classes checked by running the case again on the engine under the reference's rule, each
 /// with that rule.
 pub const RERUN_CLASSES: [(&str, ReferenceRule); 4] = [
@@ -469,6 +523,8 @@ pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 1] =
 /// decided changes, the give-back rule and another class's, is of that other class when both
 /// classes are accepted and the run under both rules (the give-back rule is a setting of the
 /// version, the others of `Lite::reference_rule`, so they combine) has no difference at all.
+/// No rerun is made for a case whose own records have a fault ([`candidate_differences`]): a rerun
+/// stands in for the comparison with the reference, never for the candidate's checks.
 pub fn scenario_verdict(
     known: &[Known],
     classes: &[String],
@@ -490,6 +546,11 @@ pub fn scenario_verdict(
     );
     let listed = known.iter().any(|k| k.scenario == name);
     if !matches!(verdict, Verdict::Differ(_)) || listed {
+        return verdict;
+    }
+    // A rerun replaces only the comparison with the reference: the candidate's own records must
+    // be complete and agree, plain and inspected, before any rerun can accept the case.
+    if !candidate_differences(plain, inspected).is_empty() {
         return verdict;
     }
     let enabled = |class: &str| classes.iter().any(|c| c == class);

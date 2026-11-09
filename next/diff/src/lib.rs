@@ -7,4 +7,5 @@
 pub mod controls;
 pub mod driver;
 pub mod gate;
+pub mod invariant;
 pub mod replay;

@@ -364,6 +364,8 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         return Err(result.stop);
     }
     let given_back = (result.gas.remaining(), result.gas.reservoir());
+    #[cfg(feature = "compare")]
+    crate::regular_check::child_returned(state.host(), given_back.0);
     evm2::interpreter::instructions::merge_returned_gas(gas, state, result.gas, result.stop);
     let success = result.stop.is_success() && result.created_address.is_some();
     if create_price != 0 && !success {

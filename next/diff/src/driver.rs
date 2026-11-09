@@ -3,6 +3,7 @@
 
 pub use mega_evm2_scenarios as scenarios;
 
+use crate::invariant;
 use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
 use evm2::{
@@ -495,6 +496,10 @@ fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
         rules.iter().copied().find(|r| *r != give_back).or(rules.first().copied());
     let mut block_accounts = Map::new();
     let mut block_storage = Map::new();
+    // A run under Satin's rule is checked for the regular-gas invariant, every transaction of it;
+    // a run under a reference's rule is not (`invariant`).
+    let checked = rules.is_empty();
+    let mut violations = Vec::new();
     for p in &s.prior {
         if inspected {
             evm.set_inspector(Frames::default());
@@ -507,6 +512,12 @@ fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
             block_accounts.extend(a);
             block_storage.extend(st);
         }
+        if checked {
+            violations.extend(invariant::violations(evm.ext()));
+        }
+    }
+    if checked {
+        invariant::ran();
     }
     if inspected {
         evm.set_inspector(Frames::default());
@@ -517,11 +528,18 @@ fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
     let (r, changes) = {
         let executed = match evm.transact(&tx) {
             Ok(e) => e,
-            Err(e) => return json!({"name": s.name, "group": s.group, "error": format!("{e:?}")}),
+            Err(e) => {
+                let mut out = json!({"name": s.name, "group": s.group, "error": format!("{e:?}")});
+                invariant::note(out.as_object_mut().unwrap(), violations);
+                return out;
+            }
         };
         let changes = collect_changes(&executed);
         (executed.commit(), changes)
     };
+    if checked {
+        violations.extend(invariant::violations(evm.ext()));
+    }
     let frames = if inspected {
         evm.clear_inspector_as::<Frames>().map(|f| f.frames.clone()).unwrap_or_default()
     } else {
@@ -568,6 +586,7 @@ fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
         out.insert("block_accounts".into(), Value::Object(block_accounts));
         out.insert("block_storage".into(), Value::Object(block_storage));
     }
+    invariant::note(&mut out, violations);
     Value::Object(out)
 }
 

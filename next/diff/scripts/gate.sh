@@ -9,6 +9,11 @@
 # class accepts by its shape (`gate::halted_first_frame`).
 #   GATE block blocks=<b> included=<i> refused=<r> counters=<b> post=<b> differ=0
 #
+# and last the regular-gas invariant of Satin's give-back rule (`src/invariant.rs`), checked on
+# every case of the four gates, plain and inspected: the gates' counts summed,
+#
+#   INVARIANT regular-gas scope=<sample|full> checked=<cases> violations=0
+#
 # Usage: gate.sh sample|full
 #   sample  the in-repo sample under `next/diff/data`
 #   full    the full corpus under $MEGA_EVM2_CORPUS_DIR (layout in `data/README.md`)
@@ -46,6 +51,23 @@ for gate in main fuzz replay block; do
 done
 
 printf '%s\n' "${summaries[@]}"
+# Every gate's test prints one `INVARIANT regular-gas gate=...` line (a fuzz batch, one each); a
+# log without it is a gate that did not complete, and fails the run as its summary does.
+checked=0 violations=0 unchecked=0
+for log in "$logs"/*.log; do
+  inv=$(grep -E '^INVARIANT regular-gas gate=[a-z]+ checked=[0-9]+ violations=[0-9]+$' "$log" || true)
+  if [ -z "$inv" ] || [ "$(wc -l <<< "$inv" | tr -d ' ')" != 1 ]; then
+    unchecked=$((unchecked + 1))
+    continue
+  fi
+  checked=$((checked + $(sed -E 's/.* checked=([0-9]+) .*/\1/' <<< "$inv")))
+  violations=$((violations + $(sed -E 's/.* violations=([0-9]+)$/\1/' <<< "$inv")))
+done
+echo "INVARIANT regular-gas scope=$mode checked=$checked violations=$violations"
+if [ "$violations" != 0 ] || [ "$unchecked" != 0 ]; then
+  echo "gate.sh $mode: the regular-gas invariant: $violations violating cases, $unchecked gate logs without a count" >&2
+  fail=1
+fi
 if [ "$fail" != 0 ]; then
   echo "gate.sh $mode: FAILED (a summary above differs from the expected line, or a gate failed; logs in $logs)" >&2
   exit 1

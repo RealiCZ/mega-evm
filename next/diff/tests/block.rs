@@ -6,7 +6,8 @@
 //! reference lines), `MEGA_EVM2_BLOCK_REF` (block-level reference lines), the optional
 //! `MEGA_EVM2_EXPECT` count check of `src/gate.rs`; `MEGA_EVM2_OUT` additionally writes every
 //! comparison.
-//! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line.
+//! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line and the regular-gas
+//! invariant's `INVARIANT` line (`mega_evm2_diff::invariant`).
 use alloy_primitives::B256;
 use evm2::evm::AccountInfo;
 use mega_evm2::{
@@ -15,7 +16,7 @@ use mega_evm2::{
 };
 use mega_evm2_diff::{
     driver::{self, Frames},
-    gate,
+    gate, invariant,
     replay::{self, Evm2Db, blockdb},
 };
 use serde_json::{Map, Value, json};
@@ -145,6 +146,12 @@ fn run_block(
                 }
             }
         }
+        // A run under Satin's rule is checked for the regular-gas invariant, every transaction of
+        // the block; a run under a reference's rule is not (`invariant`).
+        if rule.is_none() {
+            invariant::ran();
+            invariant::note(row.as_object_mut().unwrap(), invariant::violations(ex.evm.ext()));
+        }
         rows.push(row);
     }
     let l = &ex.limiter;
@@ -168,14 +175,73 @@ fn run_block(
     rows.push(json!({"kind":"post_state","block":n,"accounts":accounts,"storage":storage}));
     rows
 }
-/// The differences of one row of a block: the reference's row `s` against the engine's plain row
-/// `p`, the engine's plain against its inspected row `q`, and the reference's own plain and
-/// inspected runs disagreeing.
-fn row_differences(s: &Value, p: &Value, q: &Value) -> Vec<String> {
-    let mut d = gate::differences(s, p);
+/// The fields of a block row as [`run_block`] renders it: a transaction's (by how far it got:
+/// refused, refused at its commit, or committed), the block counters' and the post-state's.
+fn row_fields(row: &Value) -> Vec<&'static str> {
+    const TX: [&str; 6] = ["kind", "block", "index", "hash", "type", "status"];
+    const EXECUTED: [&str; 10] = [
+        "halt",
+        "output",
+        "gas_used",
+        "receipt_gas",
+        "usage",
+        "gas_split",
+        "system_tx",
+        "da_size",
+        "tx_size",
+        "diff",
+    ];
+    const COMMITTED: [&str; 4] = ["receipt", "receipt_status", "cumulative_gas_used", "logs"];
+    match (row["kind"].as_str(), row["status"].as_str()) {
+        (Some("tx"), Some("refused")) => TX.into_iter().chain(["reason"]).collect(),
+        (Some("tx"), Some("refused_at_commit")) => {
+            TX.into_iter().chain(EXECUTED).chain(["reason"]).collect()
+        }
+        (Some("tx"), _) => TX.into_iter().chain(EXECUTED).chain(COMMITTED).collect(),
+        (Some("block_counters"), _) => vec![
+            "kind",
+            "block",
+            "gas_used",
+            "da_footprint_used",
+            "da_size_used",
+            "tx_size_used",
+            "usage",
+            "gas",
+        ],
+        (Some("post_state"), _) => vec!["kind", "block", "accounts", "storage"],
+        _ => Vec::new(),
+    }
+}
+
+/// The engine's own faults in one row of a block: its plain row `p` or inspected row `q` without
+/// exactly the fields [`row_fields`] names (`record_fields:<run>:<what>`, a regular-gas invariant
+/// violation, `invariant::KEY`, among them), and the two rows disagreeing
+/// (`evm2_inspected:<field>`). A whole-block rerun never waives them.
+fn candidate_differences(p: &Value, q: &Value) -> Vec<String> {
+    let mut d = Vec::new();
+    for (run, r) in [("plain", p), ("inspected", q)] {
+        let want = row_fields(r);
+        let o = r.as_object().expect("a row object");
+        let missing: Vec<_> = want.iter().filter(|k| !o.contains_key(**k)).collect();
+        let unexpected: Vec<_> = o.keys().filter(|k| !want.contains(&k.as_str())).collect();
+        if !missing.is_empty() || !unexpected.is_empty() {
+            d.push(format!(
+                "record_fields:{run}:record fields: missing {missing:?}, unexpected {unexpected:?}"
+            ));
+        }
+    }
     d.extend(
         gate::same_engine_differences(p, q).into_iter().map(|f| format!("evm2_inspected:{f}")),
     );
+    d
+}
+
+/// The differences of one row of a block: the reference's row `s` against the engine's plain row
+/// `p`, the engine's own faults ([`candidate_differences`]), and the reference's own plain and
+/// inspected runs disagreeing.
+fn row_differences(s: &Value, p: &Value, q: &Value) -> Vec<String> {
+    let mut d = gate::differences(s, p);
+    d.extend(candidate_differences(p, q));
     if s["inspected_equal"] != true {
         d.push("satin_plain_vs_inspected".into());
     }
@@ -189,6 +255,7 @@ fn test_blocks_match_reference_plain_and_inspected() {
     let outdir = std::env::var("MEGA_EVM2_OUT").ok();
     let classes = gate::known_classes();
     let mut reruns: Vec<(String, &str)> = Vec::new();
+    let mut invariant = invariant::Tally::default();
     let mut totals = BTreeMap::<String, u64>::new();
     let mut fields = BTreeMap::<String, u64>::new();
     let mut processed = Vec::new();
@@ -205,11 +272,22 @@ fn test_blocks_match_reference_plain_and_inspected() {
         let mut q = run_block(&set, &path, &st, true, None);
         assert_eq!(p.len(), sb.len());
         assert_eq!(q.len(), sb.len());
+        let both_runs = invariant::take_runs() == 2 * txcount as u64;
+        for (i, (p, q)) in p.iter_mut().zip(q.iter_mut()).enumerate() {
+            if i < txcount {
+                invariant.case(&format!("{set}:{n}:{i}"), both_runs, [p, q]);
+            }
+            gate::candidate_fault(&format!("{set}:{n}:{i}"), p, q);
+        }
         // A block that differs is of a class the gate runs blocks again for, when the file enables
         // it, if the whole block run again under its rule, plain and inspected, has no difference
-        // from any row; its rows are then that run's, and count as they would.
+        // from any row; its rows are then that run's, and count as they would. A rerun stands in
+        // for the comparison with the reference only: none is made when a row of the engine's has
+        // a fault of its own.
         let mut class = None;
-        if sb.iter().zip(&p).zip(&q).any(|((s, p), q)| !row_differences(s, p, q).is_empty()) {
+        if sb.iter().zip(&p).zip(&q).any(|((s, p), q)| !row_differences(s, p, q).is_empty()) &&
+            p.iter().zip(&q).all(|(p, q)| candidate_differences(p, q).is_empty())
+        {
             for (name, rule) in gate::REPLAY_RERUN_CLASSES {
                 if !classes.iter().any(|c| c == name) {
                     continue;
@@ -282,6 +360,7 @@ fn test_blocks_match_reference_plain_and_inspected() {
     // Only a run of exactly the manifest's blocks is the gate: any other selection prints a
     // line `gate.sh` does not take for a summary.
     let complete = blockdb::check_processed_identities(&processed);
+    println!("{}", invariant.line("block"));
     println!("{}{}", if complete { "" } else { "PARTIAL " }, gate::block_line(&totals));
     gate::expected("MEGA_EVM2_EXPECT_RERUN", reruns.len() as u64);
     gate::finish(&totals);

@@ -277,18 +277,32 @@ impl<I: Instruction<MegaTypes>, const A: u8> Instruction<MegaTypes> for Volatile
 }
 
 pub const fn wrap_table(mut c: OpcodeConfig<MegaTypes>) -> OpcodeConfig<MegaTypes> {
-    c.set_instruction::<Volatile<instructions::coinbase<MegaTypes>, { crate::satin_ext::access::COINBASE }>>(op::COINBASE, c.static_gas(op::COINBASE));
-    c.set_instruction::<Volatile<instructions::difficulty<MegaTypes>, { crate::satin_ext::access::PREV_RANDAO }>>(op::DIFFICULTY, c.static_gas(op::DIFFICULTY));
-    c.set_instruction::<Volatile<instructions::gaslimit<MegaTypes>, { crate::satin_ext::access::GAS_LIMIT }>>(op::GASLIMIT, c.static_gas(op::GASLIMIT));
-    c.set_instruction::<Volatile<instructions::basefee<MegaTypes>, { crate::satin_ext::access::BASE_FEE }>>(op::BASEFEE, c.static_gas(op::BASEFEE));
-    c.set_instruction::<Volatile<instructions::blobbasefee<MegaTypes>, { crate::satin_ext::access::BLOB_BASE_FEE }>>(op::BLOBBASEFEE, c.static_gas(op::BLOBBASEFEE));
-    c.set_instruction::<Volatile<crate::mega_slotnum, { crate::satin_ext::access::SLOT_NUM }>>(
+    c.set_instruction::<crate::Obs<
+        Volatile<instructions::coinbase<MegaTypes>, { crate::satin_ext::access::COINBASE }>,
+    >>(op::COINBASE, c.static_gas(op::COINBASE));
+    c.set_instruction::<crate::Obs<
+        Volatile<instructions::difficulty<MegaTypes>, { crate::satin_ext::access::PREV_RANDAO }>,
+    >>(op::DIFFICULTY, c.static_gas(op::DIFFICULTY));
+    c.set_instruction::<crate::Obs<
+        Volatile<instructions::gaslimit<MegaTypes>, { crate::satin_ext::access::GAS_LIMIT }>,
+    >>(op::GASLIMIT, c.static_gas(op::GASLIMIT));
+    c.set_instruction::<crate::Obs<Volatile<instructions::basefee<MegaTypes>, { crate::satin_ext::access::BASE_FEE }>>>(op::BASEFEE, c.static_gas(op::BASEFEE));
+    c.set_instruction::<crate::Obs<
+        Volatile<instructions::blobbasefee<MegaTypes>, { crate::satin_ext::access::BLOB_BASE_FEE }>,
+    >>(op::BLOBBASEFEE, c.static_gas(op::BLOBBASEFEE));
+    c.set_instruction::<crate::Obs<Volatile<crate::mega_slotnum, { crate::satin_ext::access::SLOT_NUM }>>>(
         op::SLOTNUM,
         c.static_gas(op::SLOTNUM),
     );
-    c.set_instruction::<Volatile<instructions::blockhash<MegaTypes>, { crate::satin_ext::access::BLOCK_HASH }>>(op::BLOCKHASH, c.static_gas(op::BLOCKHASH));
-    c.set_instruction::<Volatile<instructions::timestamp<MegaTypes>, { crate::satin_ext::access::TIMESTAMP }>>(op::TIMESTAMP, c.static_gas(op::TIMESTAMP));
-    c.set_instruction::<Volatile<instructions::block_number<MegaTypes>, { crate::satin_ext::access::BLOCK_NUMBER }>>(op::NUMBER, c.static_gas(op::NUMBER));
+    c.set_instruction::<crate::Obs<
+        Volatile<instructions::blockhash<MegaTypes>, { crate::satin_ext::access::BLOCK_HASH }>,
+    >>(op::BLOCKHASH, c.static_gas(op::BLOCKHASH));
+    c.set_instruction::<crate::Obs<
+        Volatile<instructions::timestamp<MegaTypes>, { crate::satin_ext::access::TIMESTAMP }>,
+    >>(op::TIMESTAMP, c.static_gas(op::TIMESTAMP));
+    c.set_instruction::<crate::Obs<
+        Volatile<instructions::block_number<MegaTypes>, { crate::satin_ext::access::BLOCK_NUMBER }>,
+    >>(op::NUMBER, c.static_gas(op::NUMBER));
     c
 }
 
