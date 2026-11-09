@@ -12,7 +12,7 @@ use evm2::{
     inspector::Inspector,
     interpreter::{InstrStop, Interpreter, Message, MessageResult},
 };
-use mega_evm2::{MegaSpec, MegaTypes, keyless, precompiles, satin_version, tx::registry};
+use mega_evm2::{MegaSpec, MegaTypes, TxLimits, keyless, precompiles, satin_version, tx::registry};
 use op_evm2::OpTxEnvelope;
 
 pub const SENDER: Address = Address::with_last_byte(0x50);
@@ -44,10 +44,12 @@ pub mod op {
     pub const GAS: u8 = 0x5a;
     pub const PUSH0: u8 = 0x5f;
     pub const PUSH1: u8 = 0x60;
+    pub const PUSH2: u8 = 0x61;
     pub const PUSH20: u8 = 0x73;
     pub const PUSH32: u8 = 0x7f;
     pub const SWAP1: u8 = 0x90;
     pub const LOG0: u8 = 0xa0;
+    pub const CREATE: u8 = 0xf0;
     pub const CALL: u8 = 0xf1;
     pub const RETURN: u8 = 0xf3;
     pub const DELEGATECALL: u8 = 0xf4;
@@ -178,6 +180,23 @@ pub fn run_detained(
     gas_limit: u64,
     cap: Option<u64>,
 ) -> Run {
+    run_limited(db, to, value, input, gas_limit, |limits| {
+        if let Some(cap) = cap {
+            limits.cap = cap;
+        }
+    })
+}
+
+/// [`run_with`], with Satin's transaction limits changed by `limits` first (a counterfactual limit
+/// a test sets, `Lite::limits`).
+pub fn run_limited(
+    db: InMemoryDB,
+    to: TxKind,
+    value: U256,
+    input: Bytes,
+    gas_limit: u64,
+    limits: impl FnOnce(&mut TxLimits),
+) -> Run {
     let config =
         ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
@@ -195,9 +214,7 @@ pub fn run_detained(
         precompiles(),
     );
     evm.state_mut().set_read_absent_storage(true);
-    if let Some(cap) = cap {
-        evm.ext_mut().limits.cap = cap;
-    }
+    limits(&mut evm.ext_mut().limits);
     evm.set_inspector(Frames::default());
     let tx = TxLegacy { chain_id: Some(1), nonce: 0, gas_price: 0, gas_limit, to, value, input };
     let signature = Signature::new(U256::from(1), U256::from(1), false);

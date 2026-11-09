@@ -973,7 +973,11 @@ fn mega_call_impl(
         kind,
         |gas, state, msg| {
             let mut start = StartRecords::default();
-            let transfers = matches!(kind, MessageKind::Call | MessageKind::CallCode) &&
+            // A call past the call-stack limit is refused for its depth before it moves value, so
+            // it makes no record and is charged none, as a creation refused for its depth is not.
+            let too_deep = msg.depth > state.version().max_call_depth();
+            let transfers = !too_deep &&
+                matches!(kind, MessageKind::Call | MessageKind::CallCode) &&
                 !msg.value.is_zero() &&
                 msg.caller != msg.destination;
             if transfers {
@@ -1407,9 +1411,12 @@ impl MessageHooks<MegaTypes> for StartHooks {
         }
         let loan = evm.ext_mut().deposit_loan.settle();
         if let Some(cross) = evm.ext_mut().draw([len as i64, 0, 0]) {
-            // The refusal restores the frame's gas from before the deposit, which does not hold
-            // what the deposit drew: the withheld gas takes it back.
+            // Under EIP-8037's rule the refusal restores the frame's gas from before the deposit,
+            // which does not hold what the deposit drew: the withheld gas takes it back. Under
+            // Satin's the charges stay and the revert gives the state and history into the
+            // reservoir, the drawn gas among them, so the withheld gas does not get it back.
             if !off("deposit_loan_back") &&
+                !reservoir_refills(evm) &&
                 let Some(frame) = evm.ext_mut().detention.frames.last_mut()
             {
                 frame.withheld += loan;

@@ -159,7 +159,7 @@ switch = "deposit_loan_back"
 gate = "main"
 scenario = "q62_det_refused_deposit_alone"
 scope = "sample"
-why = "When a code deposit's data-size draw is refused, the withheld gas its state spill and its history drew (the deposit loan) goes back to the frame, since the refusal restores the frame's gas from before the deposit; off, it is lost (a creator's gas_left of 2,780,357 against the reference's 2,942,157)."
+why = "Under EIP-8037's rule, which the class reservoir_give_back's rerun runs, a code deposit whose data-size draw is refused restores the frame's gas from before the deposit, and the withheld gas its state spill and its history drew (the deposit loan) goes back to the frame; off, it is lost, and the rerun's gas differs from the reference's, so the case differs. Under Satin's rule the refused deposit keeps its charges and gives the state and history, the drawn gas among them, into the reservoir: nothing goes back (an engine test pins it)."
 
 [[control]]
 switch = "deposit_loan_reset"
