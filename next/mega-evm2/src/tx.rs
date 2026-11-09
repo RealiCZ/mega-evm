@@ -319,11 +319,11 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
     /// The first frame's start record of a type 0, 1 or 2 transaction (evm2's `execute_prepared`
     /// calls this; EIP-7702 and deposits charge theirs in their own handlers): Satin validates
     /// the gas limit against the intrinsic gas and the body's history, then charges the record as
-    /// history before the first frame, the reservoir first, on the transaction's gas, where a
-    /// reservoir the first frame returns unwinds its spill. A transaction that cannot pay it is
-    /// included as an out-of-gas that runs no frame (nonce bumped, fees paid, the gas limit used),
-    /// with nothing of its start made. Once it is paid the target is read
-    /// ([`start_pending`]), right before the first frame.
+    /// history before the first frame, the reservoir first, on the transaction's gas (where, under
+    /// EIP-8037's give-back rule, a reservoir the first frame returns unwinds its spill). A
+    /// transaction that cannot pay it is included as an out-of-gas that runs no frame (nonce
+    /// bumped, fees paid, the gas limit used), with nothing of its start made. Once it is paid the
+    /// target is read ([`start_pending`]), right before the first frame.
     fn before_initial_frame(
         host: &mut Evm<'_, MegaTypes>,
         envelope: &OpTxEnvelope,
@@ -356,7 +356,8 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
             drop_start(host.ext_mut());
         }
         // The first-frame settlement: a failed transaction frame gives its start charge back as
-        // history (spill first); after a halt the regular gas the credit put back is burned.
+        // history, into the reservoir under Satin's give-back rule (under EIP-8037's spill
+        // first, the regular gas the credit put back being burned after a halt).
         let mut gas = gas;
         let charge = host.ext().tx_start_charge;
         // The part of the start charge the regular gas paid: the reservoir pays the body's
@@ -374,22 +375,33 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
             };
             (charge - from_reservoir, from_reservoir)
         };
+        let reservoir_refills = crate::reservoir_refills(host);
         if charge > 0 && !gas.result.stop.is_success() {
             let (spilled, from_reservoir) = spilled();
+            let halted = gas.result.stop.is_halt();
             let g = &mut gas.result.gas;
-            g.erase_cost(spilled);
-            g.set_reservoir(g.reservoir() + from_reservoir);
+            if reservoir_refills {
+                // Satin's give-back rule (`SATIN-HIST-005`): into the transaction's reservoir,
+                // all of it on a revert or a stop, and on a halt only the part the reservoir
+                // paid; the part regular gas paid stays spent.
+                g.set_reservoir(g.reservoir() + if halted { from_reservoir } else { charge });
+            } else {
+                g.erase_cost(spilled);
+                g.set_reservoir(g.reservoir() + from_reservoir);
+            }
             g.add_state_gas_spent(-(charge as i64));
-            if gas.result.stop.is_halt() {
+            if halted {
                 gas.result.gas.spend_all();
             }
         }
-        // A reservoir the first frame returned has unwound the transaction's outstanding spill
-        // (Satin's child-merge return): evm2's merge did it on the transaction's gas, which holds
-        // the spill of every charge made before the first frame but the intrinsic state gas (the
-        // body's history). That one never has a spill left to unwind: it is charged first, so a
-        // spill of it emptied the reservoir, every later charge spilled whole, and what a frame
-        // returns is a refill of one of those later charges, which their spill absorbs.
+        // Under Satin's give-back rule a reservoir the first frame returned joins the
+        // transaction's and unwinds nothing (`SATIN-POOL-012`). Under EIP-8037's (the comparison's
+        // rerun) it has unwound the transaction's outstanding spill: evm2's merge did it on the
+        // transaction's gas, which holds the spill of every charge made before the first frame but
+        // the intrinsic state gas (the body's history). That one never has a spill left to unwind:
+        // it is charged first, so a spill of it emptied the reservoir, every later charge spilled
+        // whole, and what a frame returns is a refill of one of those later charges, which their
+        // spill absorbs.
         host.ext_mut().reservoir_left = gas.result.gas.reservoir();
         settle_first_frame(host.ext_mut(), gas.result.stop.is_success());
         <OpHandlerHooks as TxHandlerHooks<MegaTypes>>::settle_transaction(host, envelope, gas)
@@ -485,9 +497,10 @@ fn execute_legacy(
 }
 
 /// Charges `cost` of state gas made before the first frame on the transaction's gas, the reservoir
-/// first; `false`, with nothing charged, when the gas cannot pay it. Its spill is the
-/// transaction's outstanding spill, which a reservoir the first frame returns unwinds (with the
-/// switch off it is not recorded, as for intrinsic state gas).
+/// first; `false`, with nothing charged, when the gas cannot pay it. Under EIP-8037's give-back
+/// rule its spill is the transaction's outstanding spill, which a reservoir the first frame returns
+/// unwinds (with the switch off it is not recorded, as for intrinsic state gas); under Satin's
+/// nothing unwinds it (`SATIN-POOL-024`).
 fn charge_tx_state(tx_gas: &mut GasTracker, cost: u64) -> bool {
     if !crate::off("tx_spill_unwind") {
         return tx_gas.spend_state(cost).is_ok();

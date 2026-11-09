@@ -1,7 +1,8 @@
 //! The engine's per-transaction ledger: the start ledger with the three resource pools, the signed
 //! history ledger, the write records, the SALT multipliers and what a transaction reports.
 //! History is state gas on evm2's shared spill plus a signed per-frame ledger, with the LOG
-//! allowance.
+//! allowance; a history give-back follows the version's give-back rule, into a reservoir alone
+//! under Satin's (`SATIN-HIST-012`).
 
 use crate::{MegaTypes, detention::DetentionState};
 use alloy_primitives::{Address, B256, U256, keccak256, map::HashMap};
@@ -21,6 +22,12 @@ pub const TX_BODY_SIZE: u64 = 310;
 pub const TRANSFER_LOG_SIZE: u64 = 160;
 pub const HISTORY_ALLOWANCE_BYTES: u64 = 160;
 pub const EXECUTION_CAP: u64 = 200_000_000;
+/// The pre-Satin price of a fresh slot's `SSTORE`, the legacy share's base for a slot.
+pub const PRE_FORK_SSTORE_SET_COST: u64 = 20_000;
+/// The pre-Satin price of a new account, the legacy share's base for an account.
+pub const PRE_FORK_NEW_ACCOUNT_COST: u64 = 25_000;
+/// The pre-Satin price of a `CREATE`, the legacy share's base for a created account.
+pub const PRE_FORK_CREATE_COST: u64 = 32_000;
 pub const MIN_BUCKET_SIZE: u64 = 256;
 /// Limit kinds by pool index: data size, KV updates, state growth.
 pub const KIND: [u8; 3] = [0, 1, 3];
@@ -222,6 +229,15 @@ pub enum ReferenceRule {
     /// ModExp checks EIP-7823's bound before its formula price: an input over the bound costs the
     /// 500 minimum and fails, and is priced at that minimum.
     ModexpBoundFirst,
+    /// EIP-8037's pinned give-back rule and no legacy share: a give-back of state or history gas
+    /// credits the frame's execution gas first, up to the state gas that gas paid; a failed
+    /// frame's spill returns to its execution gas; a returned reservoir unwinds its caller's
+    /// spill; every state charge draws the reservoir first; and gas detention, the
+    /// `remainingComputeGas()` answer and a keyless deployment's `gasUsed` read that rule's
+    /// outstanding spill. The version runs without `EIP8037_RESERVOIR_REFILLS` and with every
+    /// legacy share zero ([`crate::satin_version_under`]), so the rule combines with any of the
+    /// others, which `Lite::reference_rule` then holds.
+    Eip8037GiveBack,
 }
 
 /// Withheld gas a code deposit drew (its state spill, its history), which an admission refusal
@@ -639,11 +655,13 @@ pub fn charge_history(
     Ok(())
 }
 
+/// Gives `bytes` of history back to the running frame, by the version's give-back rule: into its
+/// reservoir alone under Satin's (`SATIN-HIST-012`).
 pub fn refill_history(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>, bytes: u64) {
     if !state.host().ext().prices_history || bytes == 0 {
         return;
     }
-    gas.refill_reservoir(bytes * CPHB);
+    evm2::interpreter::instructions::give_back_state_gas(gas, state, bytes * CPHB);
     state.host().ext_mut().book_history(-((bytes * CPHB) as i64), -(bytes as i64));
 }
 

@@ -270,6 +270,27 @@ pub fn satin_version_at(cost_per_state_byte: u64) -> Version {
     p.set(GasId::CreateState, entry(120));
     p.set(GasId::CodeDepositState, entry(1));
     p.set(GasId::TxEip7702PerAuthState, entry(23));
+    // Every give-back of state and history gas credits a reservoir, never regular gas
+    // (`SATIN-HIST-012`), and the state an opcode creates takes its legacy share from regular gas
+    // first (`SATIN-STATE-012`): its pre-Satin price less the regular cost the schedule gives the
+    // component, flat, at every multiplier.
+    v.features.insert(EvmFeatures::EIP8037_RESERVOIR_REFILLS);
+    let share = |pre_fork: u64, execution: u64| {
+        u32::try_from(pre_fork.saturating_sub(execution)).expect("a legacy share fits 32 bits")
+    };
+    p.set(
+        GasId::SstoreSetStateLegacyShare,
+        share(PRE_FORK_SSTORE_SET_COST, p.get(GasId::SstoreSetWithoutLoadCost)),
+    );
+    p.set(
+        GasId::CallNewAccountStateLegacyShare,
+        share(PRE_FORK_NEW_ACCOUNT_COST, p.get(GasId::NewAccountCost)),
+    );
+    p.set(
+        GasId::SelfdestructNewAccountStateLegacyShare,
+        share(PRE_FORK_NEW_ACCOUNT_COST, p.get(GasId::NewAccountCostForSelfdestruct)),
+    );
+    p.set(GasId::CreateStateLegacyShare, share(PRE_FORK_CREATE_COST, p.get(GasId::Create)));
     p.set(GasId::CallStipendReduction, 50);
     v.tx_gas_limit_cap = EXECUTION_CAP;
     v.tx_total_gas_cap = u64::MAX;
@@ -277,6 +298,34 @@ pub fn satin_version_at(cost_per_state_byte: u64) -> Version {
     v.max_initcode_size = 1024 * 1024;
     v.chain_id = 1;
     v
+}
+
+/// [`satin_version`] as the comparison runs a case under the reference's `rules`
+/// (`Lite::reference_rule`): with [`ReferenceRule::Eip8037GiveBack`] among them without the
+/// reservoir-only give-back rule and with every legacy share zero; otherwise Satin's.
+#[cfg(feature = "compare")]
+pub fn satin_version_under(rules: &[ReferenceRule]) -> Version {
+    let mut v = satin_version();
+    if rules.contains(&ReferenceRule::Eip8037GiveBack) {
+        v.features.remove(EvmFeatures::EIP8037_RESERVOIR_REFILLS);
+        for id in [
+            GasId::SstoreSetStateLegacyShare,
+            GasId::CallNewAccountStateLegacyShare,
+            GasId::SelfdestructNewAccountStateLegacyShare,
+            GasId::CreateStateLegacyShare,
+        ] {
+            v.gas_params.set(id, 0);
+        }
+    }
+    v
+}
+
+/// Whether the running version gives state and history gas back into reservoirs only
+/// (`SATIN-HIST-012`): Satin's rule, which the comparison turns off to run a case under the
+/// reference's ([`ReferenceRule::Eip8037GiveBack`]).
+#[inline(always)]
+pub(crate) fn reservoir_refills(evm: &Evm<'_, MegaTypes>) -> bool {
+    evm.feature(EvmFeatures::EIP8037_RESERVOIR_REFILLS)
 }
 
 /// The Satin precompile set: op-evm2's Karst map, KZG repriced to 100,000.
@@ -779,6 +828,14 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         ];
         refill_state = leaf + code + slot_gas;
         refill_bytes = records * WRITE_RECORD_SIZE + code_len;
+        // A keyless deployment's creation destroying the account it creates: the give-back of
+        // the account's own leaf and record, which the call charged at its step 14.
+        let ext = state.host().ext_mut();
+        let record =
+            if ext.prices_history { (records - fresh) * WRITE_RECORD_SIZE * CPHB } else { 0 };
+        if let Some(k) = ext.mechanisms.keyless.as_mut().filter(|k| k.deploy == me) {
+            k.table_gave_back = leaf + record;
+        }
     }
     // The operation's own records, rebuilt from what it moved: the account it clears (unless the
     // table gave it back) and the beneficiary, each by its change since before the opcode — a
@@ -804,7 +861,7 @@ pub fn mega_selfdestruct(cx: _) -> Result {
         return stop_frame(gas, state, stop);
     }
     if eligible {
-        gas.refill_reservoir(refill_state);
+        ins::give_back_state_gas(gas, state, refill_state);
         refill_history(gas, state, refill_bytes);
         let ext = state.host().ext_mut();
         let keys: Vec<_> = ext.slot_records.keys().filter(|(a, _)| *a == me).copied().collect();
@@ -1385,5 +1442,24 @@ mod tests {
         assert_eq!(p.get(GasId::TxEip7702PerAuthState), 23_000);
         // Satin's own: 23 × 1,530.
         assert_eq!(satin_version().gas_params.get(GasId::TxEip7702PerAuthState), 35_190);
+    }
+
+    /// `SATIN-STATE-012`'s shares at the schedule's current prices: a fresh slot 20,000 − 10,000,
+    /// a value call's or a keyless signer's new account 25,000 − 0, a `SELFDESTRUCT`'s new
+    /// beneficiary 25,000 − 9,000 and a created account 32,000 − 12,000, flat; give-backs credit
+    /// reservoirs only (`SATIN-HIST-012`).
+    #[test]
+    fn test_satin_takes_the_legacy_shares_and_gives_back_into_reservoirs() {
+        let v = satin_version();
+        assert!(v.feature(EvmFeatures::EIP8037_RESERVOIR_REFILLS));
+        let p = v.gas_params;
+        assert_eq!(p.get(GasId::SstoreSetStateLegacyShare), 10_000);
+        assert_eq!(p.get(GasId::CallNewAccountStateLegacyShare), 25_000);
+        assert_eq!(p.get(GasId::SelfdestructNewAccountStateLegacyShare), 16_000);
+        assert_eq!(p.get(GasId::CreateStateLegacyShare), 20_000);
+        // Flat: a cost per state byte that moves the state charges leaves the shares.
+        let q = satin_version_at(1_000).gas_params;
+        assert_eq!(q.get(GasId::SstoreSetStateLegacyShare), 10_000);
+        assert_eq!(q.get(GasId::CreateStateLegacyShare), 20_000);
     }
 }

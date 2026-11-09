@@ -24,9 +24,12 @@ The engine also uses two upstream changes that are already in the base: `call_wi
 | `f6d21862` let a type family refuse an instruction's account load                   | `EvmTypesHost::before_account_load`, `AccountLoadSite`           | +395/−5  | none yet                                                                                                                  | lets a type family stop an instruction at its own account load                             |
 | `b9fa9909` pop CREATE2's salt after the init-code and memory charges                | none (instruction order)                                         | +33/−1   | not yet proposed                                                                                                          | pops CREATE2's salt after the init-code charge and the memory expansion                    |
 | `cee7bfb4` let a type family act on the transaction before its first frame          | `TxHandlerHooks::before_initial_frame`                           | +375/−45 | not yet proposed                                                                                                          | has a handler hook before the first frame that can charge the transaction or settle it     |
+| `546c689f` let a version credit state-gas give-backs to the reservoir only          | `EvmFeatures::EIP8037_RESERVOIR_REFILLS`, `give_back_state_gas`, `merge_returned_gas` | +523/−11 | the rule is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2 | has the reservoir-only give-back rule as a version option                                  |
+| `ee61e8b3` let a version take a legacy share of a state charge from execution gas   | the four `GasId::*LegacyShare` parameters, `spend_state_with_share_reserve_first` | +232/−8  | the share is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2 | has a legacy share of the new-state charges as gas parameters                             |
 
-Size is the commit's own stat against its parent; most of the insertions of `f37259b6`, `9df29b6a`, `f6d21862`, `b9fa9909` and `cee7bfb4` are tests.
+Size is the commit's own stat against its parent; most of the insertions of `f37259b6`, `9df29b6a`, `f6d21862`, `b9fa9909`, `cee7bfb4`, `546c689f` and `ee61e8b3` are tests.
 Upstream order, smallest and least contested first: `0f373350`, `28301ff3` (both filed), `b9fa9909`, `cee7bfb4`, `94011dec`, `f623a776`, `41525289` with the halt record of `f37259b6`, `9df29b6a`, the rest of `f37259b6`, `f6d21862`, and `70bbeb67` last, because it runs on every message.
+`546c689f` and `ee61e8b3` follow ethereum/EIPs #12581: offered with it if Ethereum takes that rule into EIP-8037, kept as Satin's own departure if it does not.
 
 ## The patches
 
@@ -169,10 +172,39 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Tests cover the default's placement (after the environment, the nonce bump and the delegations, once, on the gas the first frame starts from) and both non-default uses on every envelope (`tests::before_initial_frame`).
 - **Why.** Satin validates a transaction's gas against the intrinsic gas and the body's history and charges the first frame's start record after validation, before the first frame; a transaction that cannot pay it is included as an out-of-gas that runs no frame.
   The engine charges it in `MegaHooks::before_initial_frame` and runs types 0, 1 and 2 through evm2's own `execute_prepared`, so a creation's address comes from the prepared state nonce, not the envelope, also with the nonce check off (`mega-evm2/tests/nonce_check_off.rs`).
-  Charging on the transaction's tracker records the record's spill where evm2's merge unwinds it with a reservoir the first frame returns, so a creation destroyed in its constructor needs no case of its own (`tx_spill_unwind`).
+  Charging on the transaction's tracker records the record's spill where evm2's merge unwinds it with a reservoir the first frame returns, under EIP-8037's give-back rule, so a creation destroyed in its constructor needs no case of its own (`tx_spill_unwind`); under Satin's rule (`546c689f`) a returned reservoir unwinds nothing, and the switch shows in the rerun of the class `reservoir_give_back`, which runs EIP-8037's.
   Controls: `start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`.
 - **Upstream.** Not yet proposed.
 - **Drop** when upstream has a handler hook before the first frame that can charge the transaction's gas or settle it without a frame.
+
+### `546c689f` reservoir-only give-backs
+
+- **API.** `EvmFeatures::EIP8037_RESERVOIR_REFILLS`, off by default, credits every give-back of EIP-8037 state gas to a reservoir and never to execution gas.
+  `GasTracker::refill_reservoir_only` is the refill: the reservoir rises by the amount and `state_gas_spent` falls by it; `remaining` does not move.
+  `GasTracker::settle_gas_into_reservoir(stop, received_reservoir)` settles a returning frame: a revert gives `state_gas_spent`, the charges the frame and its successful children made less the give-backs they received, into its own reservoir (`reservoir + state_gas_spent`) and returns `remaining` as it is; a halt restores the reservoir the frame received (the message's) and consumes `remaining`.
+  `GasTracker::merge_child_gas_into_reservoir` makes the child's reservoir the caller's without unwinding the caller's spill, and merges the child's `state_gas_spilled` whatever the child ended with, so under the flag that counter is every state charge the frame and its returned children paid from execution gas, which nothing gives back.
+  The frame exit (`execute_message_impl`) and the first frame's settlement (`settle_initial_frame_gas_into_reservoir`) choose by the flag; a halted first frame gets back only the part of its upfront account charge the reservoir paid (`InitialFrame::charged_state_gas_from_reservoir`), and the part execution gas paid is consumed as execution gas, off the state gas spent, as a halted frame's own charges are.
+  The opcodes reach the rule through `give_back_state_gas` (SSTORE's 0 → x → 0, a failed call's or creation's upfront account charge) and `merge_returned_gas` (the call and creation bodies), which a type family's own opcodes use too.
+  Without the flag every path is EIP-8037's, the tracker's layout is unchanged, and the JIT builtins keep EIP-8037's rule whatever the flag says.
+  Tests: `gas::tests` (`test_refill_reservoir_only_leaves_remaining_and_spill`, `test_settle_gas_into_reservoir_by_stop`, `test_merge_child_gas_into_reservoir_never_unwinds`) and `tests::eip8037_reservoir_refills_*` (a sibling's refill, a reverted child, a halted first frame whose account charge the reservoir paid in part).
+- **Why.** Satin's give-back rule (`SATIN-HIST-012`, `SATIN-POOL-014`): a frame's regular gas never rises within the frame but by the unused regular gas a child returns, so a lock cleared after a starved call or an intermediary's revert cannot hand spent gas back to `GAS`.
+  `satin_version` sets the flag; the engine's own give-backs (a record's history, the destruction table, a start's charge, KeylessDeploy's) call `give_back_state_gas`, its keyless creation merges through `merge_returned_gas`, and gas detention reads the never-lowered `state_gas_spilled` (`SATIN-DET-009`).
+  No switch: the change is one the reference has not made yet, so turned off the engine would match the reference; the class `reservoir_give_back` checks the difference by running the case again without the flag (`satin_version_under`).
+- **Upstream.** The rule is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; nothing filed in evm2.
+- **Drop** when evm2 carries the reservoir-only rule as a version option, or when EIP-8037 takes it and evm2 follows.
+
+### `ee61e8b3` the legacy share
+
+- **API.** Four gas parameters give a state charge an opcode makes for new state a legacy share, the part of the charge, at most all of it, that execution gas pays before the reservoir: `SstoreSetStateLegacyShare` (a fresh slot), `CallNewAccountStateLegacyShare` (a value call's new account, taken before the forward), `SelfdestructNewAccountStateLegacyShare` (a `SELFDESTRUCT`'s new beneficiary) and `CreateStateLegacyShare` (a creation's account, before the forward).
+  They are zero in every Ethereum version.
+  `GasTracker::spend_state_with_share(cost, share)` takes the share and the reservoir's shortfall as one execution-gas charge (a frame that cannot pay both runs out of gas whatever its reservoir holds) and counts both as state gas and as `state_gas_spilled`; `spend_state_with_share_reserve_first` draws the gas reserve first for that execution gas, so withheld gas pays a share as it pays a spill.
+  The charges made before the first frame and the code deposit have no share; the JIT builtins take none.
+  Tests: `test_spend_state_with_share_takes_the_share_first` and `tests::legacy_share_*` (each of the four sites, the call's and the creation's share before the forward, the `SELFDESTRUCT` entry kept apart from the call's).
+- **Why.** `SATIN-STATE-012`: the share is the pre-Satin price less the regular cost the schedule gives the component, flat — 10,000, 25,000, 16,000 and 20,000 with Satin's prices — so a contract written for Rex keeps paying at least that in regular gas for new state with a reservoir.
+  `satin_version_at` sets the four parameters from the schedule, and KeylessDeploy's steps 10 and 14 take the call's and the creation's share (`keyless.rs`).
+  No switch, as for `546c689f`; the class's rerun sets the shares to zero.
+- **Upstream.** The share is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; nothing filed in evm2.
+- **Drop** with `546c689f`.
 
 ## Dropped from the earlier series
 
@@ -198,9 +230,12 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
 
 - **Budget readers and state spills go through the seam.**
   Read every new `remaining()`, `spend_state` and `try_spend_state` site under `crates/evm2/src/interpreter/instructions` and in `crates/evm2/src/evm/mod.rs`.
-  A budget decision (a skip-cold check, a guard, a forward base, a value pushed to the stack) must read `gas_budget` with its `BudgetUse`; a state charge must call `spend_state_reserve_first`; a forward must call `spend_reserve_first`.
+  A budget decision (a skip-cold check, a guard, a forward base, a value pushed to the stack) must read `gas_budget` with its `BudgetUse`; a state charge must call `spend_state_reserve_first`, and one an opcode makes for new state `spend_state_with_share_reserve_first` with its legacy-share parameter; a forward must call `spend_reserve_first`.
   A new reader that merges without a conflict still ignores the withheld gas.
   Recount the sites, update the count above, and give a new `BudgetUse` or draw its own engine switch and control.
+- **Every give-back and child merge follows the version's rule.**
+  Read every `refill_reservoir`, `merge_child_gas`, `rollback_state_gas` and `settle_gas` call under `crates/evm2/src`: an instruction must call `give_back_state_gas` or `merge_returned_gas`, and the frame exit and the first frame's settlement must branch on `EIP8037_RESERVOIR_REFILLS`; a new call that merges without a conflict credits execution gas under Satin's rule.
+  The engine's own give-backs and its keyless merge go through the same helpers (`ledger::refill_history`, `mega_selfdestruct`, `keyless.rs`).
 - **The no-debit halt record stays at the inspected zeroing point.**
   `inspect_step_end` in `crates/evm2/src/interpreter/runtime.rs` zeroes `remaining` at an out-of-gas instruction the inspector steps; the record must be written there, before the zeroing, and any upstream rework of that function has to keep it.
   The failed-charge record must cover every dispatch backend upstream adds.

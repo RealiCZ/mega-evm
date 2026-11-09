@@ -77,6 +77,10 @@ pub struct Keyless {
     pub signer_nonce_before: u64,
     pub value: U256,
     pub empty_deposit_refused: bool,
+    /// What the destruction table last gave back for the deploy address's own account during the
+    /// creation: its leaf's state gas and its record's history, the charges of step 14
+    /// (`SATIN-KEY-015`). Added back to what the creation returned when that destruction stands.
+    pub table_gave_back: u64,
 }
 
 pub const ACCESS_CONTROL: Address =

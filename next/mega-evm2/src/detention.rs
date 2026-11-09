@@ -8,8 +8,13 @@
 //! ```text
 //! compute = Σ suspended callers (spent at suspension − gas forwarded)
 //!         + regular_spent(running frame) + Σ stipends of returned value calls − burned
-//! regular_spent(gas, self) = limit − (spendable + withheld) − state/history gas spilled
+//! regular_spent(gas, self) = limit − (spendable + withheld) − state/history gas regular gas paid
 //! ```
+//!
+//! The last term is evm2's `state_gas_spilled`: under Satin's give-back rule
+//! (`EIP8037_RESERVOIR_REFILLS`) every state and history charge regular gas paid, legacy shares
+//! included, by the frame and every child that returned to it, which no give-back lowers
+//! (`SATIN-DET-009`).
 //!
 //! A read sets `limit = compute + cap` (lowest binds); every frame is held at
 //! `spendable = limit − compute` at its start, at every resume, after the read and after SSTORE;
@@ -74,7 +79,8 @@ pub struct DFrame {
 }
 
 /// The regular gas a frame spent: its limit, less what it has left (both parts), less the state
-/// and history gas that spilled onto its regular gas.
+/// and history gas its regular gas paid (under Satin's give-back rule, also once it was given back
+/// into a reservoir).
 pub fn available(gas: &GasTracker, det: &DetentionState) -> u64 {
     gas.remaining() + det.frames.last().map_or(0, |f| f.withheld)
 }
@@ -286,7 +292,9 @@ pub const fn wrap_table(mut c: OpcodeConfig<MegaTypes>) -> OpcodeConfig<MegaType
     c
 }
 
-/// After SSTORE: a restore can refill regular gas, so the frame is held again.
+/// After SSTORE: the frame is held again (under EIP-8037's give-back rule a restore refills
+/// regular gas; under Satin's it refills only the reservoir, and the hold leaves the split as it
+/// was).
 pub fn after_sstore(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result {
     let ext = state.host().ext_mut();
     if detains(ext) {
@@ -343,6 +351,7 @@ pub fn before_commit(
     output: &mut Bytes,
     gas: &mut GasTracker,
 ) {
+    let reservoir_refills = crate::reservoir_refills(evm);
     let ext = evm.ext_mut();
     if !detains(ext) {
         return;
@@ -401,7 +410,12 @@ pub fn before_commit(
             det.burned
         );
     }
-    det.burned = det.burned.saturating_add(left).saturating_add(gas.state_gas_spilled());
+    // The state and history gas the frame's regular gas paid is no compute either. Under Satin's
+    // give-back rule nothing gives it back: the caller merges it into the count its own
+    // `regular_spent` leaves out, so the burn is what the frame had left. Under EIP-8037's the
+    // halt credits it back to the frame's regular gas before consuming it, so the burn holds it.
+    let spilled = if reservoir_refills { 0 } else { gas.state_gas_spilled() };
+    det.burned = det.burned.saturating_add(left).saturating_add(spilled);
 }
 
 // ---------------------------------------------------------------------------------------------

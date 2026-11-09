@@ -244,11 +244,13 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     }
     let signer_account_charged = info.is_empty();
     if signer_account_charged {
+        // Step 10, with a value call's legacy share for a new account (`SATIN-STATE-012`).
         let price = state_price(state, GasId::NewAccountState, StateGasSite::Account(signer))?;
-        evm2::interpreter::instructions::spend_state_reserve_first(
+        evm2::interpreter::instructions::spend_state_with_share_reserve_first(
             gas,
             state,
             GasId::NewAccountState,
+            GasId::CallNewAccountStateLegacyShare,
             price,
         )?;
     }
@@ -289,10 +291,12 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         0
     };
     if create_price > 0 {
-        evm2::interpreter::instructions::spend_state_reserve_first(
+        // Step 14's created account, with a creation's legacy share (`SATIN-STATE-012`).
+        evm2::interpreter::instructions::spend_state_with_share_reserve_first(
             gas,
             state,
             GasId::CreateState,
+            GasId::CreateStateLegacyShare,
             create_price,
         )?;
     }
@@ -338,6 +342,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         signer_nonce_before: info.nonce,
         value: tx.value,
         empty_deposit_refused: false,
+        table_gave_back: 0,
     });
 
     let mut message = state.message().clone();
@@ -358,12 +363,11 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     if result.stop.is_fatal() {
         return Err(result.stop);
     }
-    let used = forward.saturating_sub(result.gas.remaining()) +
-        share.saturating_sub(result.gas.reservoir());
-    gas.merge_child_gas(result.gas, result.stop);
+    let given_back = (result.gas.remaining(), result.gas.reservoir());
+    evm2::interpreter::instructions::merge_returned_gas(gas, state, result.gas, result.stop);
     let success = result.stop.is_success() && result.created_address.is_some();
     if create_price != 0 && !success {
-        gas.refill_reservoir(create_price);
+        evm2::interpreter::instructions::give_back_state_gas(gas, state, create_price);
     }
     let entry = state.host().ext_mut().pop_child(success);
     gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
@@ -371,6 +375,19 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         refill_history(gas, state, entry.start_charge / CPHB);
     }
     let keyless = state.host().ext_mut().mechanisms.keyless.take().unwrap_or_default();
+    let used = if crate::reservoir_refills(state.host()) {
+        // `SATIN-KEY-015`: both pools netted together, plus the give-backs of step 14's charges
+        // the creation received (the destruction table's for the account it creates, when that
+        // destruction stands), so never less than the creation's regular charges.
+        let destroyed = state.host().ext().destroyed.contains(&started.deploy);
+        let added_back = if destroyed { keyless.table_gave_back } else { 0 };
+        let used = i128::from(forward) - i128::from(given_back.0) + i128::from(share) -
+            i128::from(given_back.1) +
+            i128::from(added_back);
+        u64::try_from(used.max(0)).unwrap_or(u64::MAX)
+    } else {
+        forward.saturating_sub(given_back.0) + share.saturating_sub(given_back.1)
+    };
     // Satin `keyless::settle`.
     let nonce = state
         .host()
@@ -382,7 +399,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     if nonce == started.signer_nonce && started.signer_account_charged {
         let price =
             state_price(state, GasId::NewAccountState, StateGasSite::Account(started.signer))?;
-        gas.refill_reservoir(price);
+        evm2::interpreter::instructions::give_back_state_gas(gas, state, price);
     }
     if started.signer_nonce > 0 &&
         nonce == started.signer_nonce + 1 &&
