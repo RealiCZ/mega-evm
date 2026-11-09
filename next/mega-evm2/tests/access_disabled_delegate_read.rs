@@ -99,13 +99,8 @@ fn child() -> Vec<u8> {
     c
 }
 
-/// The transaction's outcome and the child's frame (its stop and the gas it left), or the error.
-fn run(fail: bool, delegates: bool) -> Result<(bool, common::Frame), String> {
-    let mut inner = InMemoryDB::default();
-    inner.insert_account_info(&CALLER, code(caller()));
-    inner.insert_account_info(&CHILD, code(child()));
-    let source = if delegates { Bytecode::new_eip7702(BENEFICIARY) } else { Bytecode::default() };
-    inner.insert_account_info(&SOURCE, AccountInfo::default().with_nonce(1).with_code(source));
+/// A Satin EVM over `backend`, the block's beneficiary [`BENEFICIARY`].
+fn evm_over(backend: Backend) -> Evm<'static, MegaTypes> {
     let config =
         ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
@@ -120,10 +115,15 @@ fn run(fail: bool, delegates: bool) -> Result<(bool, common::Frame), String> {
         MegaSpec::Satin,
         block,
         registry(),
-        Db::new(Backend { inner, fail }),
+        Db::new(backend),
         precompiles(),
     );
     evm.state_mut().set_read_absent_storage(true);
+    evm
+}
+
+/// The transaction: a call of [`CALLER`] from the sender.
+fn tx() -> Recovered<OpTxEnvelope> {
     let tx = TxLegacy {
         chain_id: Some(1),
         nonce: 0,
@@ -134,7 +134,18 @@ fn run(fail: bool, delegates: bool) -> Result<(bool, common::Frame), String> {
         input: Bytes::new(),
     };
     let signature = Signature::new(U256::from(1), U256::from(1), false);
-    let tx = Recovered::new_unchecked(OpTxEnvelope::from_signed(tx.into_signed(signature)), SENDER);
+    Recovered::new_unchecked(OpTxEnvelope::from_signed(tx.into_signed(signature)), SENDER)
+}
+
+/// The transaction's outcome and the child's frame (its stop and the gas it left), or the error.
+fn run(fail: bool, delegates: bool) -> Result<(bool, common::Frame), String> {
+    let mut inner = InMemoryDB::default();
+    inner.insert_account_info(&CALLER, code(caller()));
+    inner.insert_account_info(&CHILD, code(child()));
+    let source = if delegates { Bytecode::new_eip7702(BENEFICIARY) } else { Bytecode::default() };
+    inner.insert_account_info(&SOURCE, AccountInfo::default().with_nonce(1).with_code(source));
+    let mut evm = evm_over(Backend { inner, fail });
+    let tx = tx();
     evm.set_inspector(common::Frames::default());
     let result =
         evm.transact(&tx).map(|executed| executed.commit()).map_err(|e| format!("{e:?}"))?;
@@ -154,6 +165,24 @@ fn test_a_call_whose_source_delegates_to_the_beneficiary_is_refused_before_its_m
     let (status, child) = run(false, false).expect("an outcome");
     assert!(status);
     assert_eq!(child.stop, Some(InstrStop::MemoryOOG));
+}
+
+/// The read that found the delegate lands in the transaction's read set: the source's account is in
+/// the state the refused call's transaction returns, though the call never ran.
+#[test]
+fn test_the_delegate_lookup_lands_in_the_read_set() {
+    let mut inner = InMemoryDB::default();
+    inner.insert_account_info(&CALLER, code(caller()));
+    inner.insert_account_info(&CHILD, code(child()));
+    inner.insert_account_info(
+        &SOURCE,
+        AccountInfo::default().with_nonce(1).with_code(Bytecode::new_eip7702(BENEFICIARY)),
+    );
+    let mut evm = evm_over(Backend { inner, fail: false });
+    let out = evm.transact(&tx()).expect("an outcome").detach();
+    assert!(out.result.status);
+    let source = out.pending_state.account_changes_for(&SOURCE).expect("the source was read");
+    assert!(!source.is_changed());
 }
 
 /// The source's account cannot be read: the transaction has no outcome.

@@ -1081,8 +1081,9 @@ fn start_charge_or_hand_back(
 /// Whether a call opcode of `operands` operands is refused before it charges or checks anything
 /// (`SATIN-MAC-003`, `SATIN-MAC-007`): in a frame whose volatile access is off, once its operands
 /// are on the stack, when its target is the block beneficiary or delegates to it by EIP-7702, one
-/// hop. The delegate is found by reading the target's account and code, which warms neither; the
-/// read is required, a failure of it the transaction's (`SATIN-VAL-010`).
+/// hop. The delegate is found by reading the target's account and code into the transaction's
+/// state, so the read lands in its read set, which warms neither; the read is required, a failure
+/// of it the transaction's (`SATIN-VAL-010`).
 fn call_refused_up_front(
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     stack: &StackMut<'_>,
@@ -1100,13 +1101,8 @@ fn call_refused_up_front(
         return Ok(false);
     }
     let read: core::result::Result<_, evm2::DatabaseError> = (|| {
-        let s = state.host().state_mut();
-        match s.account_info_untracked(&target)? {
-            Some(info) if !info.is_empty_code_hash() => {
-                Ok(s.code_untracked(&target)?.eip7702_address())
-            }
-            _ => Ok(None),
-        }
+        let mut account = state.host().state_mut().account(&target)?;
+        Ok(account.load_code()?.eip7702_address())
     })();
     let delegate = read.map_err(|e| state.fail(evm2::HostError::from(e)))?;
     Ok(delegate == Some(state.host().block().beneficiary))

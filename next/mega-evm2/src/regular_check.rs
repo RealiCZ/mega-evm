@@ -567,6 +567,20 @@ mod catches {
         assert!(found.iter().any(|v| v.starts_with("child merge: regular")), "{found:?}");
     }
 
+    /// No violation on a legal run that moves a give-back between frames and takes it back: TOP
+    /// writes a fresh slot, then delegates to C, which writes it back to zero (its give-backs go
+    /// into C's reservoir, its charges negative by as much) and reverts, the rollback taking the
+    /// give-back back out of the reservoir it returns.
+    #[test]
+    fn test_a_reverted_child_that_gave_back_its_callers_charge_is_conserved() {
+        let mut top = vec![PUSH1, 1, PUSH0, SSTORE];
+        top.extend(call_c(true));
+        top.push(STOP);
+        let c = [PUSH0, PUSH0, SSTORE, PUSH0, PUSH0, REVERT];
+        let found = violations(&top, &c, satin_version(), false, None);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
     /// The settlement injection: under EIP-8037's rule a reverted frame's spill returns to its
     /// regular gas when the frame settles, after its last instruction. C writes a fresh slot from
     /// regular gas and reverts; its settlement gives the 101,440 back. Seen only once the frame's

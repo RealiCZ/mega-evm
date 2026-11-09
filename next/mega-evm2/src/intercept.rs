@@ -129,13 +129,19 @@ pub fn hint_before(
     m: &Message<MegaTypes>,
 ) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
     use crate::satin_ext::*;
+    // The gas the call forwards: a value call's stipend is not forwarded gas (`SATIN-DET-010`).
+    let forwarded = if m.kind == MessageKind::Call && !m.value.is_zero() {
+        m.gas_limit.saturating_sub(evm.version().gas_params.get(evm2::version::GasId::CallStipend))
+    } else {
+        m.gas_limit
+    };
     if crate::off("oracle_hints") ||
         m.call_target != crate::ORACLE ||
         !matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) ||
         !is_send_hint(&m.input) ||
         (!m.value.is_zero() &&
             crate::under_reference_rule(evm.ext(), crate::ReferenceRule::HintValueRefused)) ||
-        m.gas_limit == 0 ||
+        forwarded == 0 ||
         (m.depth as usize).checked_sub(1).is_some_and(|c| refuses(&evm.ext().mechanisms, c))
     {
         return None;

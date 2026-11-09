@@ -22,16 +22,19 @@ fn send_hint() -> Vec<u8> {
     input
 }
 
-/// TOP copies the hint's input into memory and calls the Oracle with it, `value` wei and 50,000
-/// of gas; the Oracle's code reverts when it receives value, as its non-payable method does.
-fn hint_call(value: u8) -> (InMemoryDB, usize) {
+/// TOP copies the hint's input into memory and calls the Oracle with it, `value` wei and `gas`
+/// (at most 65,535); the Oracle's code reverts when it receives value, as its non-payable method
+/// does.
+fn hint_call(value: u8, gas: u16) -> (InMemoryDB, usize) {
     let input = send_hint();
     let len = input.len() as u8;
     let mut code = vec![op::PUSH1, len, op::PUSH1, 0, op::PUSH0, 0x39 /* CODECOPY */];
     // CALL(gas, ORACLE, value, 0, len, 0, 0)
     code.extend([op::PUSH0, op::PUSH0, op::PUSH1, len, op::PUSH0, op::PUSH1, value, op::PUSH20]);
     code.extend_from_slice(ORACLE.as_slice());
-    code.extend([op::PUSH2, 0xc3, 0x50, op::CALL, op::STOP]);
+    code.push(op::PUSH2);
+    code.extend(gas.to_be_bytes());
+    code.extend([op::CALL, op::STOP]);
     let start = code.len() as u8;
     code[3] = start;
     code.extend_from_slice(&input);
@@ -50,7 +53,7 @@ fn hint_call(value: u8) -> (InMemoryDB, usize) {
 #[test]
 fn test_a_hint_with_value_is_admitted_forwarded_and_counted() {
     for value in [0u8, 1] {
-        let (db, len) = hint_call(value);
+        let (db, len) = hint_call(value, 50_000);
         let mut evm = satin_evm(db);
         let r = run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000);
         assert!(r.success, "{value}");
@@ -66,5 +69,21 @@ fn test_a_hint_with_value_is_admitted_forwarded_and_counted() {
         assert_eq!(m.hints.len(), 1, "the hint forwarded, value {value}");
         assert_eq!(m.hints[0].1, B256::repeat_byte(0x11));
         assert_eq!(m.hints[0].2.as_ref(), &[0xaa]);
+    }
+}
+
+/// A call forwarded no gas is not admitted, with value or without: a value call's 2,300 stipend is
+/// not forwarded gas (`SATIN-DET-010`), so a `sendHint` sent with value and no gas runs the
+/// Oracle's code on its stipend alone and counts nothing.
+#[test]
+fn test_a_hint_forwarded_no_gas_is_not_admitted_whatever_its_value() {
+    for value in [0u8, 1] {
+        let (db, _) = hint_call(value, 0);
+        let mut evm = satin_evm(db);
+        let r = run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000);
+        assert!(r.success, "{value}");
+        let m = &evm.ext().mechanisms;
+        assert_eq!(m.hint_bytes, 0, "no hint counted, value {value}");
+        assert!(m.hints.is_empty(), "no hint forwarded, value {value}");
     }
 }
