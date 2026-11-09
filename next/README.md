@@ -92,7 +92,7 @@ The total median and p95 describe complete corpus passes, summing corresponding 
 The per-block median and p95 describe the distribution of each block's median time.
 Spread is reported as total minimum and maximum, and gas/s uses included transactions' cumulative receipt gas divided by the median total time.
 Transaction counts include refused transactions, whose attempted execution also consumes time.
-The script checks that block identities, transaction counts, inclusion, refusals and receipt gas agree across the timed sides and repetitions.
+The script checks that block identities and transaction counts agree across the timed sides, and inclusion, refusals and receipt gas across each side's repetitions; across the sides those are each side's own, which the block gate that ran first holds to each other, an accepted class's difference included (a deposit's history gas can leave a later transaction without room in the block's gas).
 It ends with `BENCH blocks=<n> txs=<n> engine_ms=<total> reference_ms=<total>`.
 Raw timings and gate logs remain under `<target>/mega-evm2-diff/bench-sample` or `bench-full`.
 `BENCH_ORDER=reference-first` reverses the default timing order for a follow-up run.
