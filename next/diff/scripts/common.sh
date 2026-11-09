@@ -28,12 +28,12 @@ SAMPLE_FUZZ_BATCHES=(
   pairs:14:1..=330:330 blocks:15:1..=150:452
 )
 
-# The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, five of
-# them listed differences and the rest of the differing ones accepted by a class
+# The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, thirteen
+# of them listed differences and the rest of the differing ones accepted by a class
 # (`known-differences.toml`). This is the one place that states them. Adding a scenario or a known
 # difference means changing it here (and the data under `next/diff/data`, see `data/README.md`);
 # `gate-lib.sh`, `check-reference.sh` and `regen-reference.sh` read it.
-MAIN_EXPECT="total=2915 match=1124 known=5 class=1786"
+MAIN_EXPECT="total=4250 match=1908 known=13 class=2329"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (mode 11's first-frame window, mode 14's pairs and mode 15's blocks, `halted_first_frame`;
 # mode 14's pairs, `modexp_formula_price`; mode 14's pairs and mode 4's seeds,

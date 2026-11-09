@@ -24,6 +24,13 @@ fn port(name: &'static str, rules: &[&'static str], accounts: Vec<Account>, gas:
 pub fn all() -> Vec<Scenario> {
     let mut v = Vec::new();
     v.extend(switches());
+    v.extend(super::port_lim::all());
+    v.extend(super::port_lim2::all());
+    v.extend(super::port_det::all());
+    v.extend(super::port_hist::all());
+    v.extend(super::port_write::all());
+    v.extend(super::port_sys::all());
+    v.extend(super::port_keyless::all());
     v
 }
 
