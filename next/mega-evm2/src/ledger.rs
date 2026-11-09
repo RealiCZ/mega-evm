@@ -159,8 +159,12 @@ pub struct Lite {
     pub limits: TxLimits,
     pub l1: op_evm2::L1BlockInfo,
     pub sender: Address,
-    /// Deposits pay no history (`prices_history`).
+    /// Whether the transaction pays history gas: every transaction, deposits and system-originated
+    /// ones included, but a system call (`SATIN-HIST-016`).
     pub prices_history: bool,
+    /// The transaction is a failed deposit: it reports no history gas, and its body and calldata
+    /// as history bytes (`SATIN-DEP-005`, `SATIN-HIST-022`).
+    pub failed_deposit: bool,
     pub is_deposit: bool,
     pub tx_net: [i64; 3],
     pub frames: Vec<Entry>,
@@ -353,6 +357,7 @@ impl Lite {
         self.tx_growth = 0;
         self.is_system = false;
         self.deposit_created_caller = false;
+        self.failed_deposit = false;
         self.top_started = false;
         self.oracle_reads = 0;
         self.tx_start_pending = None;
@@ -379,14 +384,18 @@ impl Lite {
         self.mechanisms.system_call = true;
     }
 
-    /// Marks the running execution as the protocol's own (see `exempt`).
+    /// Marks the running execution as the protocol's own (see `exempt`). A system-originated
+    /// transaction still pays history gas as any transaction does (`SATIN-MST-008`); a system call
+    /// is begun without it ([`Self::begin_system_call`]).
     pub fn set_system_originated(&mut self) {
         self.exempt = true;
         self.frames[0].budget = [u64::MAX; 3];
         self.is_system = true;
-        self.prices_history = false;
-        self.body_history = 0;
-        self.body_bytes = 0;
+        if crate::under_reference_rule(self, crate::ReferenceRule::DepositHistoryExempt) {
+            self.prices_history = false;
+            self.body_history = 0;
+            self.body_bytes = 0;
+        }
         self.detention.cap = u64::MAX;
         self.detention.oracle_cap = u64::MAX;
     }
@@ -578,8 +587,12 @@ impl Lite {
         })
     }
 
-    /// (history gas, history bytes) the transaction reports.
+    /// (history gas, history bytes) the transaction reports. A failed deposit reports no history
+    /// gas, and the body and calldata it keeps as its history bytes.
     pub fn history(&self, success: bool) -> (u64, u64) {
+        if self.failed_deposit {
+            return (0, self.body_bytes);
+        }
         let (h, b) = if success {
             let f = &self.frames[0];
             (self.tx_start_charge as i64 + f.hist, self.tx_start_bytes as i64 + f.hbytes)

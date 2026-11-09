@@ -8,9 +8,10 @@
 //! - **per transaction, before it runs** (`run_transaction`): the activation-block rule, the Mega
 //!   System Transaction decision off the block's state (`live_system_address` + the system shape),
 //!   `BlockLimiter::pre_execution_check` (the block's gas limit, the builder's size limits, the
-//!   three packing budgets: data size, KV updates, state growth; a deposit or a system transaction
-//!   is held to the gas limit alone), the DA footprint against the block's gas limit, the sender's
-//!   account read; then `Evm::transact` and `ExecutedTx::detach` (nothing committed);
+//!   three packing budgets: data size, KV updates, state growth; a deposit is held to the gas limit
+//!   alone, a Mega System Transaction to all of them as any other non-deposit transaction), the DA
+//!   footprint against the block's gas limit, the sender's account read; then `Evm::transact` and
+//!   `ExecutedTx::detach` (nothing committed);
 //! - **commit** (`commit_transaction_outcome`): the room check and the sender check again, the
 //!   block's counters, the receipt (status, cumulative gas, logs; a deposit's nonce and receipt
 //!   version), the state into the EVM's overlay and the block's change set
@@ -275,6 +276,18 @@ impl<'a> BlockExecutor<'a> {
     /// transaction reads off the block's state, with the system shape (a transaction of another
     /// shape from that address is refused when the engine validates it). A read the database
     /// cannot serve is an error.
+    /// Whether a transaction escapes the three packing budgets: a deposit does (`SATIN-BLK-006`); a
+    /// Mega System Transaction is held to them as any other non-deposit transaction is
+    /// (`SATIN-BLK-007`), except under the reference's rule (comparison only).
+    fn packing_exempt(&self, is_deposit: bool, is_system_transaction: bool) -> bool {
+        is_deposit ||
+            is_system_transaction &&
+                crate::under_reference_rule(
+                    self.evm.ext(),
+                    crate::ReferenceRule::MstPackingExempt,
+                )
+    }
+
     fn is_system_transaction(&mut self, tx: &Recovered<OpTxEnvelope>) -> Result<bool, String> {
         let live = crate::tx::live_system_address(&mut self.evm)
             .map_err(|e| format!("registry read: {e:?}"))?;
@@ -300,7 +313,10 @@ impl<'a> BlockExecutor<'a> {
         let da_size = estimated_da_size(encoded);
         let gas_limit = env.gas_limit();
         let is_system_transaction = !is_deposit && self.is_system_transaction(tx)?;
-        self.limiter.pre_execution_check(gas_limit, is_deposit || is_system_transaction)?;
+        self.limiter.pre_execution_check(
+            gas_limit,
+            self.packing_exempt(is_deposit, is_system_transaction),
+        )?;
         let da_footprint = if is_deposit {
             0
         } else {
@@ -350,8 +366,8 @@ impl<'a> BlockExecutor<'a> {
     /// Re-checks the block's room and the sender, then commits `out` (Satin
     /// `commit_transaction_outcome`). Returns the receipt's gas.
     pub fn commit_transaction_outcome(&mut self, out: Executed) -> Result<u64, String> {
-        self.limiter
-            .pre_execution_check(out.gas_limit, out.is_deposit || out.is_system_transaction)?;
+        let exempt = self.packing_exempt(out.is_deposit, out.is_system_transaction);
+        self.limiter.pre_execution_check(out.gas_limit, exempt)?;
         self.limiter.check_da_footprint(out.da_footprint)?;
         let now = self
             .evm

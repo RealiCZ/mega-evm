@@ -210,8 +210,53 @@ pub(crate) type Obs<I> = regular_check::Observed<I>;
 #[cfg(not(feature = "compare"))]
 pub(crate) type Obs<I> = I;
 
-/// Osaka's table + Amsterdam opcodes and prices + Satin's wrappers.
+/// The opcodes a frame whose volatile-data access is off may have refused (`SATIN-MAC-003`): each
+/// charges its static gas itself, once it is not refused, so a refused read costs nothing, not
+/// even its static gas (`SATIN-MAC-004`). Their entries in [`satin_table`] carry no static gas;
+/// [`static_gas`] is what they charge.
+pub(crate) const REFUSABLE: [u8; 20] = [
+    op::COINBASE,
+    op::DIFFICULTY,
+    op::GASLIMIT,
+    op::BASEFEE,
+    op::BLOBBASEFEE,
+    op::SLOTNUM,
+    op::BLOCKHASH,
+    op::TIMESTAMP,
+    op::NUMBER,
+    op::BALANCE,
+    op::EXTCODESIZE,
+    op::EXTCODEHASH,
+    op::EXTCODECOPY,
+    op::SELFBALANCE,
+    op::CALL,
+    op::CALLCODE,
+    op::DELEGATECALL,
+    op::STATICCALL,
+    op::SELFDESTRUCT,
+    op::SLOAD,
+];
+
+/// Osaka's table + Amsterdam opcodes and prices + Satin's wrappers; a refusable opcode
+/// ([`REFUSABLE`]) charges its static gas itself, so its entry carries none.
 pub const fn satin_table() -> OpcodeConfig<MegaTypes> {
+    let mut c = priced_table();
+    let mut i = 0;
+    while i < REFUSABLE.len() {
+        c.set_static_gas(REFUSABLE[i], 0);
+        i += 1;
+    }
+    c
+}
+
+/// The static gas of `opcode` in Satin's schedule, which a refusable opcode ([`REFUSABLE`]) charges
+/// itself once it is not refused (read at compile time by its instruction).
+pub(crate) const fn static_gas(opcode: u8) -> u64 {
+    priced_table().static_gas(opcode) as u64
+}
+
+/// [`satin_table`] with every opcode at its static gas.
+const fn priced_table() -> OpcodeConfig<MegaTypes> {
     let mut c = OpcodeConfig::<MegaTypes>::base::<evm2::BaseEvmConfig<{ SpecId::OSAKA as u32 }>>();
     c.set_instruction::<Obs<ins::dupn<MegaTypes>>>(op::DUPN, 3);
     c.set_instruction::<Obs<ins::swapn<MegaTypes>>>(op::SWAPN, 3);
@@ -460,13 +505,29 @@ pub(crate) fn under_reference_rule(_: &Lite, _: ReferenceRule) -> bool {
 #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
 pub fn mega_sload(cx: _) -> Result {
     let destination = cx.state.message().destination;
+    let reference =
+        under_reference_rule(cx.state.host().ext(), ReferenceRule::RefusalAfterStaticGas);
+    // The Oracle's storage in a frame whose access is off: refused once the key is on the stack,
+    // before any gas is charged (`SATIN-MAC-003`, `SATIN-MAC-004`); an empty stack halts on the
+    // underflow as with access on.
+    if destination == ORACLE &&
+        !reference &&
+        !stack.is_empty() &&
+        crate::satin_ext::refused_here(cx.state)
+    {
+        return revert_with(
+            cx.gas,
+            cx.state,
+            &crate::satin_ext::disabled_revert(crate::satin_ext::access::ORACLE),
+        );
+    }
+    cx.gas.spend(const { static_gas(op::SLOAD) })?;
     if destination != ORACLE {
         return ins::sload::<MegaTypes>::execute(cx.pc, stack, cx.state);
     }
-    // The key first, as the stack preamble of evm2's body and revm's take it: an empty stack halts
-    // before anything is refused.
     let key = stack.pop()?;
-    if crate::satin_ext::refused_here(cx.state) {
+    // The reference's order (comparison only): the static gas, the key, then the refusal.
+    if reference && crate::satin_ext::refused_here(cx.state) {
         return revert_with(
             cx.gas,
             cx.state,
@@ -557,9 +618,7 @@ fn settle_refusal(
 #[cold]
 #[inline(never)]
 fn refuse_on(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>, kept: Gas) -> Result {
-    if !off("refusal_gas") {
-        *gas = kept;
-    }
+    *gas = kept;
     revert_with(
         gas,
         state,
@@ -567,15 +626,35 @@ fn refuse_on(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>, kep
     )
 }
 
-/// Whether the block beneficiary is refused before an opcode's body runs: only with the switch
-/// `refuse_at_load` off, which moves the refusal from evm2's load to the opcode's start.
-fn refused_before_body(
+/// Whether Satin refuses a conditionally volatile opcode before it charges or checks anything
+/// (`SATIN-MAC-003`, `SATIN-MAC-004`): in a frame whose volatile-data access is off, once its
+/// `operands` are on the stack, when one of `reads` is the block beneficiary. An opcode short of
+/// its operands is not refused: it fails on them as with access on. Under the reference's rule
+/// (comparison only) nothing is refused here, and the opcode is refused where evm2 loads the
+/// beneficiary's account, once its static gas and its body's earlier charges are made.
+#[inline(always)]
+fn refused_up_front(
     state: &mut InterpreterState<'_, '_, MegaTypes>,
-    operand: Option<Word>,
+    stack_len: usize,
+    operands: usize,
+    reads: &[Address],
 ) -> bool {
-    off("refuse_at_load") &&
-        operand.is_some_and(|w| w.to_address() == state.host().block().beneficiary) &&
-        crate::satin_ext::refused_here(state)
+    stack_len >= operands &&
+        crate::satin_ext::refused_here(state) &&
+        !under_reference_rule(state.host().ext(), ReferenceRule::RefusalAfterStaticGas) &&
+        reads.contains(&state.host().block().beneficiary)
+}
+
+/// The refusal [`refused_up_front`] decided: the frame reverts with `VolatileDataAccessDisabled`
+/// on the gas it held when the opcode was reached.
+#[cold]
+#[inline(never)]
+fn refuse_up_front(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result {
+    revert_with(
+        gas,
+        state,
+        &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
+    )
 }
 
 /// Commits a read of the beneficiary's account once the opcode completed (`read_volatile`).
@@ -586,21 +665,21 @@ fn beneficiary_read(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaType
     }
 }
 
-/// An account opcode: evm2's body (its skip-cold check sees the withheld gas through the gas
-/// reserve; its load of the block beneficiary is refused through `before_account_load` in a frame
-/// whose volatile access is off), then its volatile read once it completed.
+/// An account opcode `$op` of `$operands` operands, its target the first: in a frame whose
+/// volatile access is off, refused before anything when the target is the block beneficiary
+/// ([`refused_up_front`]); then its static gas and evm2's body (its skip-cold check sees the
+/// withheld gas through the gas reserve; under the reference's rule its load of the beneficiary is
+/// refused through `before_account_load`), then its volatile read once it completed.
 macro_rules! account_opcode {
-    ($name:ident, $base:ident) => {
+    ($name:ident, $base:ident, $op:expr, $operands:expr) => {
         #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
         pub fn $name(cx: _) -> Result {
-            let a = stack.peek(0).ok_or(InstrStop::StackUnderflow)?.to_address();
-            if refused_before_body(cx.state, stack.peek(0)) {
-                return revert_with(
-                    cx.gas,
-                    cx.state,
-                    &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
-                );
+            let target = stack.peek(0).map(|w| w.to_address()).unwrap_or_default();
+            if refused_up_front(cx.state, stack.len(), $operands, &[target]) {
+                return refuse_up_front(cx.gas, cx.state);
             }
+            cx.gas.spend(const { static_gas($op) })?;
+            let a = stack.peek(0).ok_or(InstrStop::StackUnderflow)?.to_address();
             let kept = refusal_gas(cx.gas, cx.state);
             let result = ins::$base::<MegaTypes>::execute(cx.pc, stack, cx.state);
             // SAFETY: `gas` is not reached through `state` while both are used.
@@ -611,10 +690,10 @@ macro_rules! account_opcode {
         }
     };
 }
-account_opcode!(mega_balance, balance);
-account_opcode!(mega_extcodesize, extcodesize);
-account_opcode!(mega_extcodehash, extcodehash);
-account_opcode!(mega_extcodecopy, extcodecopy);
+account_opcode!(mega_balance, balance, op::BALANCE, 1);
+account_opcode!(mega_extcodesize, extcodesize, op::EXTCODESIZE, 1);
+account_opcode!(mega_extcodehash, extcodehash, op::EXTCODEHASH, 1);
+account_opcode!(mega_extcodecopy, extcodecopy, op::EXTCODECOPY, 4);
 
 /// SELFBALANCE: the frame's own account, loaded as revm loads it, before the push's stack check:
 /// a refused load comes before a full stack's overflow. evm2's body (and its account-load site) is
@@ -630,7 +709,15 @@ pub fn mega_selfbalance(cx: _) -> Result {
     if overflows && off("selfbalance_stack_order") {
         return Err(InstrStop::StackOverflow);
     }
-    if refused(cx.state) {
+    // Refused before any gas is charged (`SATIN-MAC-004`); under the reference's rule
+    // (comparison only) after the static gas.
+    let reference =
+        under_reference_rule(cx.state.host().ext(), ReferenceRule::RefusalAfterStaticGas);
+    if !reference && refused(cx.state) {
+        return refuse_up_front(cx.gas, cx.state);
+    }
+    cx.gas.spend(const { static_gas(op::SELFBALANCE) })?;
+    if reference && refused(cx.state) {
         return revert_with(
             cx.gas,
             cx.state,
@@ -716,6 +803,14 @@ pub fn mega_log<const N: usize>(cx: _) -> Result {
 /// volatile reads of both ends, once nothing can fail the opcode any more.
 #[instruction(EvmTypes = MegaTypes, no_stack_preamble, dynamic_gas)]
 pub fn mega_selfdestruct(cx: _) -> Result {
+    // In a frame whose access is off, refused before anything, its static-context check included,
+    // when its target or the frame's own account is the beneficiary (`SATIN-MAC-003`).
+    let me = cx.state.message().destination;
+    let target = stack.peek(0).map(|w| w.to_address()).unwrap_or_default();
+    if refused_up_front(cx.state, stack.len(), 1, &[target, me]) {
+        return refuse_up_front(cx.gas, cx.state);
+    }
+    cx.gas.spend(const { static_gas(op::SELFDESTRUCT) })?;
     // The base body's first check: nothing is loaded in a static frame.
     if cx.state.is_static() {
         return Err(InstrStop::StateChangeDuringStaticCall);
@@ -962,21 +1057,59 @@ fn start_charge_or_hand_back(
     }
 }
 
+/// Whether a call opcode of `operands` operands is refused before it charges or checks anything
+/// (`SATIN-MAC-003`, `SATIN-MAC-007`): in a frame whose volatile access is off, once its operands
+/// are on the stack, when its target is the block beneficiary or delegates to it by EIP-7702, one
+/// hop. The delegate is found by reading the target's account and code, which warms neither; the
+/// read is required, a failure of it the transaction's (`SATIN-VAL-010`).
+fn call_refused_up_front(
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    stack: &StackMut<'_>,
+    operands: usize,
+) -> Result<bool> {
+    let target = stack.peek(1).map(|w| w.to_address()).unwrap_or_default();
+    if refused_up_front(state, stack.len(), operands, &[target]) {
+        return Ok(true);
+    }
+    if stack.len() < operands ||
+        !crate::satin_ext::refused_here(state) ||
+        under_reference_rule(state.host().ext(), ReferenceRule::RefusalAfterStaticGas) ||
+        off("delegate_refusal")
+    {
+        return Ok(false);
+    }
+    let read: core::result::Result<_, evm2::DatabaseError> = (|| {
+        let s = state.host().state_mut();
+        match s.account_info_untracked(&target)? {
+            Some(info) if !info.is_empty_code_hash() => {
+                Ok(s.code_untracked(&target)?.eip7702_address())
+            }
+            _ => Ok(None),
+        }
+    })();
+    let delegate = read.map_err(|e| state.fail(evm2::HostError::from(e)))?;
+    Ok(delegate == Some(state.host().block().beneficiary))
+}
+
 fn mega_call_impl(
     stack: StackMut<'_>,
     gas: &mut Gas,
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     kind: MessageKind,
 ) -> Result {
-    if refused_before_body(state, stack.peek(1)) {
-        return revert_with(
-            gas,
-            state,
-            &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
-        );
+    let (operands, static_gas) = match kind {
+        MessageKind::Call => (7, const { static_gas(op::CALL) }),
+        MessageKind::CallCode => (7, const { static_gas(op::CALLCODE) }),
+        MessageKind::DelegateCall => (6, const { static_gas(op::DELEGATECALL) }),
+        _ => (6, const { static_gas(op::STATICCALL) }),
+    };
+    if call_refused_up_front(state, &stack, operands)? {
+        return refuse_up_front(gas, state);
     }
-    // In a frame whose volatile access is off, evm2's body offers the load of the target, and of
-    // its EIP-7702 delegate, to `before_account_load`, which refuses the block beneficiary's.
+    gas.spend(static_gas)?;
+    // Under the reference's rule (comparison only), evm2's body offers the load of the target, and
+    // of its EIP-7702 delegate, to `before_account_load`, which refuses the block beneficiary's in
+    // a frame whose volatile access is off.
     let kept = refusal_gas(gas, state);
     let result = call_with(
         stack,

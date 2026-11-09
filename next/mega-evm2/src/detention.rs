@@ -225,11 +225,15 @@ pub fn commit_read(ext: &mut Lite, gas: &mut GasTracker, cap: u64, forwarded: u6
 // ---------------------------------------------------------------------------------------------
 // Opcode side
 
-/// A volatile read: the base opcode, then the read is committed (the limit set) and the frame
-/// held. Built on evm2's `#[doc(hidden)]` `Instruction` trait.
-pub struct Volatile<I, const A: u8>(PhantomData<I>);
+/// A volatile read whatever its operands, of access type `A`, at opcode `OP`: the base opcode,
+/// then the read is committed (the limit set) and the frame held. Built on evm2's
+/// `#[doc(hidden)]` `Instruction` trait. The opcode's static gas is charged here (its table entry
+/// carries none, [`crate::REFUSABLE`]).
+pub struct Volatile<I, const A: u8, const OP: u8>(PhantomData<I>);
 
-impl<I: Instruction<MegaTypes>, const A: u8> Instruction<MegaTypes> for Volatile<I, A> {
+impl<I: Instruction<MegaTypes>, const A: u8, const OP: u8> Instruction<MegaTypes>
+    for Volatile<I, A, OP>
+{
     const FLAGS: InstructionFlags = I::FLAGS.union(InstructionFlags::DYNAMIC_GAS);
 
     fn execute(
@@ -238,15 +242,35 @@ impl<I: Instruction<MegaTypes>, const A: u8> Instruction<MegaTypes> for Volatile
         state: &mut InterpreterState<'_, '_, MegaTypes>,
     ) -> Result {
         // `MegaAccessControl` switched access off at or above this frame: the read is refused
-        // and the frame reverts on the gas it had after the opcode's static gas.
-        // BLOCKHASH pops its operand before the Host answers: on an empty stack it halts on the
-        // underflow, and nothing is refused.
-        let pops_first = A == crate::satin_ext::access::BLOCK_HASH &&
-            stack.peek(0).is_none() &&
-            !crate::off("blockhash_underflow");
-        if !pops_first && crate::satin_ext::refused_here(state) {
+        // before its operands are checked and before any of its gas is charged, a `BLOCKHASH` on
+        // an empty stack included, and the frame reverts on the gas it held when the opcode was
+        // reached (`SATIN-MAC-003`, `SATIN-MAC-004`).
+        let reference = crate::under_reference_rule(
+            state.host().ext(),
+            crate::ReferenceRule::RefusalAfterStaticGas,
+        );
+        if !reference && crate::satin_ext::refused_here(state) {
             let (gas, state) = unsafe { split_gas_state(state) };
             return crate::ledger::revert_with(gas, state, &crate::satin_ext::disabled_revert(A));
+        }
+        {
+            // SAFETY: `gas` is not reached through `state` while both are used.
+            let (gas, _) = unsafe { split_gas_state(state) };
+            gas.spend(const { crate::static_gas(OP) })?;
+        }
+        // The reference's order (comparison only): the static gas first, then the refusal, after
+        // `BLOCKHASH`'s operand, which it pops before the Host answers (an empty stack halts on the
+        // underflow and refuses nothing), on the gas the frame had after the static gas.
+        if reference {
+            let pops_first = A == crate::satin_ext::access::BLOCK_HASH && stack.peek(0).is_none();
+            if !pops_first && crate::satin_ext::refused_here(state) {
+                let (gas, state) = unsafe { split_gas_state(state) };
+                return crate::ledger::revert_with(
+                    gas,
+                    state,
+                    &crate::satin_ext::disabled_revert(A),
+                );
+            }
         }
         I::execute(pc, stack, state)?;
         // SAFETY: `gas` is not reached through `state` while both are used.
@@ -278,30 +302,63 @@ impl<I: Instruction<MegaTypes>, const A: u8> Instruction<MegaTypes> for Volatile
 
 pub const fn wrap_table(mut c: OpcodeConfig<MegaTypes>) -> OpcodeConfig<MegaTypes> {
     c.set_instruction::<crate::Obs<
-        Volatile<instructions::coinbase<MegaTypes>, { crate::satin_ext::access::COINBASE }>,
+        Volatile<
+            instructions::coinbase<MegaTypes>,
+            { crate::satin_ext::access::COINBASE },
+            { op::COINBASE },
+        >,
     >>(op::COINBASE, c.static_gas(op::COINBASE));
     c.set_instruction::<crate::Obs<
-        Volatile<instructions::difficulty<MegaTypes>, { crate::satin_ext::access::PREV_RANDAO }>,
+        Volatile<
+            instructions::difficulty<MegaTypes>,
+            { crate::satin_ext::access::PREV_RANDAO },
+            { op::DIFFICULTY },
+        >,
     >>(op::DIFFICULTY, c.static_gas(op::DIFFICULTY));
     c.set_instruction::<crate::Obs<
-        Volatile<instructions::gaslimit<MegaTypes>, { crate::satin_ext::access::GAS_LIMIT }>,
+        Volatile<
+            instructions::gaslimit<MegaTypes>,
+            { crate::satin_ext::access::GAS_LIMIT },
+            { op::GASLIMIT },
+        >,
     >>(op::GASLIMIT, c.static_gas(op::GASLIMIT));
-    c.set_instruction::<crate::Obs<Volatile<instructions::basefee<MegaTypes>, { crate::satin_ext::access::BASE_FEE }>>>(op::BASEFEE, c.static_gas(op::BASEFEE));
     c.set_instruction::<crate::Obs<
-        Volatile<instructions::blobbasefee<MegaTypes>, { crate::satin_ext::access::BLOB_BASE_FEE }>,
+        Volatile<
+            instructions::basefee<MegaTypes>,
+            { crate::satin_ext::access::BASE_FEE },
+            { op::BASEFEE },
+        >,
+    >>(op::BASEFEE, c.static_gas(op::BASEFEE));
+    c.set_instruction::<crate::Obs<
+        Volatile<
+            instructions::blobbasefee<MegaTypes>,
+            { crate::satin_ext::access::BLOB_BASE_FEE },
+            { op::BLOBBASEFEE },
+        >,
     >>(op::BLOBBASEFEE, c.static_gas(op::BLOBBASEFEE));
-    c.set_instruction::<crate::Obs<Volatile<crate::mega_slotnum, { crate::satin_ext::access::SLOT_NUM }>>>(
-        op::SLOTNUM,
-        c.static_gas(op::SLOTNUM),
-    );
     c.set_instruction::<crate::Obs<
-        Volatile<instructions::blockhash<MegaTypes>, { crate::satin_ext::access::BLOCK_HASH }>,
+        Volatile<crate::mega_slotnum, { crate::satin_ext::access::SLOT_NUM }, { op::SLOTNUM }>,
+    >>(op::SLOTNUM, c.static_gas(op::SLOTNUM));
+    c.set_instruction::<crate::Obs<
+        Volatile<
+            instructions::blockhash<MegaTypes>,
+            { crate::satin_ext::access::BLOCK_HASH },
+            { op::BLOCKHASH },
+        >,
     >>(op::BLOCKHASH, c.static_gas(op::BLOCKHASH));
     c.set_instruction::<crate::Obs<
-        Volatile<instructions::timestamp<MegaTypes>, { crate::satin_ext::access::TIMESTAMP }>,
+        Volatile<
+            instructions::timestamp<MegaTypes>,
+            { crate::satin_ext::access::TIMESTAMP },
+            { op::TIMESTAMP },
+        >,
     >>(op::TIMESTAMP, c.static_gas(op::TIMESTAMP));
     c.set_instruction::<crate::Obs<
-        Volatile<instructions::block_number<MegaTypes>, { crate::satin_ext::access::BLOCK_NUMBER }>,
+        Volatile<
+            instructions::block_number<MegaTypes>,
+            { crate::satin_ext::access::BLOCK_NUMBER },
+            { op::NUMBER },
+        >,
     >>(op::NUMBER, c.static_gas(op::NUMBER));
     c
 }

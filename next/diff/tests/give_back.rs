@@ -334,10 +334,13 @@ fn test_example_hist_019_022_the_allowance_pays_a_stipend_callees_log() {
     assert_eq!(u(&r, "history_bytes"), 310 + 2 * 40 + 32);
 }
 
+/// A deposit with empty calldata that makes no write reports 310 bytes of data size and 310
+/// history bytes, its body, whose 27,280 of history gas it pays as any transaction does
+/// (`SATIN-HIST-016`, `SATIN-HIST-022`).
 #[test]
 fn test_example_hist_022_a_deposits_body() {
     let r = record("gb_ex_deposit_body");
-    assert_eq!((u(&r, "data_size"), u(&r, "history_bytes"), u(&r, "history")), (310, 0, 0));
+    assert_eq!((u(&r, "data_size"), u(&r, "history_bytes"), u(&r, "history")), (310, 310, 27_280));
 }
 
 #[test]
@@ -453,7 +456,8 @@ fn test_example_take_010_an_answer_stopped_start() {
 fn test_example_take_012_a_failed_deposit() {
     let r = record("gb_ex_failed_deposit");
     assert_eq!((u(&r, "regular"), u(&r, "state"), u(&r, "history")), (1_000_000, 0, 0));
-    assert_eq!((u(&r, "growth"), u(&r, "kv"), u(&r, "history_bytes")), (1, 0, 0));
+    // No history gas, but the body and calldata it keeps as its history bytes (`SATIN-TAKE-012`).
+    assert_eq!((u(&r, "growth"), u(&r, "kv"), u(&r, "history_bytes")), (1, 0, 310));
     assert_eq!(u(&r, "data_size"), 310);
 }
 

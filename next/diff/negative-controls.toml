@@ -183,27 +183,6 @@ scope = "sample"
 why = "A code deposit's state spill draws the frame's withheld gas first, through the fork's gas reserve (ReserveDraw::StateSpill(CodeDepositState)), and so does the deposited code's history at admission; off, both are charged to the spendable gas only."
 
 [[control]]
-switch = "blockhash_underflow"
-gate = "main"
-scenario = "a25_blockhash_empty_stack_underflows"
-scope = "sample"
-why = "BLOCKHASH pops its operand before the Host answers, so in a frame whose access is off an empty stack halts on the underflow and refuses nothing; off, the refusal runs before the opcode's own stack check and the frame reverts."
-
-[[control]]
-switch = "refuse_at_load"
-gate = "main"
-scenario = "a22_call_beneficiary_memory_unpayable_halts"
-scope = "sample"
-why = "In a frame whose access is off, the block beneficiary's account is refused where evm2's instruction loads it (the fork's account-load hook), after every charge the instruction makes before that load (a call's memory expansion and value transfer, EXTCODECOPY's copy and memory expansion); off, it is refused before the instruction's body, so a call that halts on its memory expansion reverts instead."
-
-[[control]]
-switch = "refusal_gas"
-gate = "main"
-scenario = "a19_extcodecopy_beneficiary_refused_on_static_gas"
-scope = "sample"
-why = "A refused load reverts the frame on the gas it had after the instruction's static gas, none of the dynamic gas charged before the load being owed; off, on the gas left at the load, so an EXTCODECOPY refused after its copy and memory charges uses more gas."
-
-[[control]]
 switch = "delegate_refusal"
 gate = "main"
 scenario = "t05_call_follows_delegation_refused"

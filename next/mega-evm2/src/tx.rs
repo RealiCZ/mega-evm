@@ -3,8 +3,10 @@
 //! classification of every envelope against the live system address it finds, the body's history
 //! as intrinsic state gas, the first frame's start records and their charge after validation (an
 //! out-of-gas there runs no frame and reads nothing of its target), the first-frame settlement,
-//! deposits that pay no history but are charged their created caller's account state
-//! (SALT-priced) before their first frame's start is made, and held to every limit.
+//! and deposits, which pay history gas as any transaction does — their body's in their
+//! validation, their start record's before their first frame — and are charged their created
+//! caller's account state (SALT-priced) before their first frame's start is made, and held to
+//! every limit.
 
 use crate::{MegaTypes, ledger::*};
 use alloy_consensus::{Transaction, TxEip1559, TxEip2930, TxLegacy};
@@ -360,40 +362,19 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         // first, the regular gas the credit put back being burned after a halt).
         let mut gas = gas;
         let charge = host.ext().tx_start_charge;
-        // The part of the start charge the regular gas paid: the reservoir pays the body's
-        // history first, then the start (Satin charges the start on the frame, a spill there).
-        let spilled = || {
-            let from_reservoir = match host.ext().mechanisms.start_from_reservoir {
-                // Charged after validation, as recorded then.
-                Some(paid) => paid,
-                // Charged with the body's history as initial state gas: the reservoir paid the
-                // body first.
-                None => {
-                    let reservoir0 = gas.gas_limit.saturating_sub(EXECUTION_CAP);
-                    charge.min(reservoir0.saturating_sub(gas.initial_state_gas - charge))
-                }
-            };
-            (charge - from_reservoir, from_reservoir)
+        // The part of the start charge the reservoir paid: the reservoir pays the body's history
+        // first, then the start (Satin charges the start on the frame, a spill there).
+        let from_reservoir = match host.ext().mechanisms.start_from_reservoir {
+            // Charged after validation, as recorded then.
+            Some(paid) => paid,
+            // Charged with the body's history as initial state gas: the reservoir paid the body
+            // first.
+            None => {
+                let reservoir0 = gas.gas_limit.saturating_sub(EXECUTION_CAP);
+                charge.min(reservoir0.saturating_sub(gas.initial_state_gas.saturating_sub(charge)))
+            }
         };
-        let reservoir_refills = crate::reservoir_refills(host);
-        if charge > 0 && !gas.result.stop.is_success() {
-            let (spilled, from_reservoir) = spilled();
-            let halted = gas.result.stop.is_halt();
-            let g = &mut gas.result.gas;
-            if reservoir_refills {
-                // Satin's give-back rule (`SATIN-HIST-005`): into the transaction's reservoir,
-                // all of it on a revert or a stop, and on a halt only the part the reservoir
-                // paid; the part regular gas paid stays spent.
-                g.set_reservoir(g.reservoir() + if halted { from_reservoir } else { charge });
-            } else {
-                g.erase_cost(spilled);
-                g.set_reservoir(g.reservoir() + from_reservoir);
-            }
-            g.add_state_gas_spent(-(charge as i64));
-            if halted {
-                gas.result.gas.spend_all();
-            }
-        }
+        give_back_start_charge(host, &mut gas.result, from_reservoir);
         // Under Satin's give-back rule a reservoir the first frame returned joins the
         // transaction's and unwinds nothing (`SATIN-POOL-012`). Under EIP-8037's (the comparison's
         // rerun) it has unwound the transaction's outstanding spill: evm2's merge did it on the
@@ -405,6 +386,40 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         host.ext_mut().reservoir_left = gas.result.gas.reservoir();
         settle_first_frame(host.ext_mut(), gas.result.stop.is_success());
         <OpHandlerHooks as TxHandlerHooks<MegaTypes>>::settle_transaction(host, envelope, gas)
+    }
+}
+
+/// Whether a deposit pays history gas: always (`SATIN-HIST-016`), but under the reference's rule,
+/// which exempts it (comparison only).
+fn deposit_prices_history(host: &Evm<'_, MegaTypes>) -> bool {
+    !crate::under_reference_rule(host.ext(), crate::ReferenceRule::DepositHistoryExempt)
+}
+
+/// The first frame's start record given back into the transaction's reservoir when the frame
+/// failed (`SATIN-HIST-005`), of which the reservoir paid `from_reservoir`: under Satin's give-back
+/// rule all of it on a revert or a stop, and on a halt only the part the reservoir paid, the part
+/// regular gas paid staying spent; under EIP-8037's (the comparison's rerun) the spill first, the
+/// regular gas the credit put back being burned after a halt.
+fn give_back_start_charge(
+    host: &Evm<'_, MegaTypes>,
+    result: &mut MessageResult<MegaTypes>,
+    from_reservoir: u64,
+) {
+    let charge = host.ext().tx_start_charge;
+    if charge == 0 || result.stop.is_success() {
+        return;
+    }
+    let halted = result.stop.is_halt();
+    let g = &mut result.gas;
+    if crate::reservoir_refills(host) {
+        g.set_reservoir(g.reservoir() + if halted { from_reservoir } else { charge });
+    } else {
+        g.erase_cost(charge - from_reservoir);
+        g.set_reservoir(g.reservoir() + from_reservoir);
+    }
+    g.add_state_gas_spent(-(charge as i64));
+    if halted {
+        g.spend_all();
     }
 }
 
@@ -554,7 +569,13 @@ fn prepare_deposit(
             // caller).
             let created =
                 req.host.state_mut().account_info_untracked(&tx.from)?.is_none_or(|i| i.is_empty());
-            req.host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, false, true);
+            let prices = deposit_prices_history(req.host);
+            req.host.ext_mut().begin_tx(
+                tx.from,
+                TX_BODY_SIZE + tx.input.len() as u64,
+                prices,
+                true,
+            );
             if tx.source_hash == MEGA_SYSTEM_TRANSACTION_SOURCE_HASH &&
                 !crate::off("protocol_origin")
             {
@@ -578,8 +599,10 @@ fn prepare_deposit_inner(
     let created = info.as_ref().is_none_or(|i| i.is_empty());
     // A deposit whose body is over the data-size limit is a failed deposit (Satin), refused
     // before anything of it runs: its caller is not validated, its first frame's start is not
-    // even predicted (no read of its recipient), and no start settles.
-    host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, false, true);
+    // even predicted (no read of its recipient), and no start settles. A deposit pays history gas
+    // as any transaction does (`SATIN-HIST-016`, `SATIN-DEP-001`).
+    let prices = deposit_prices_history(host);
+    host.ext_mut().begin_tx(tx.from, TX_BODY_SIZE + tx.input.len() as u64, prices, true);
     if system ||
         (tx.source_hash == MEGA_SYSTEM_TRANSACTION_SOURCE_HASH && !crate::off("protocol_origin"))
     {
@@ -619,7 +642,25 @@ fn prepare_deposit_inner(
     }
     host.ext_mut().deposit_created_caller = created;
     host.ext_mut().mechanisms.body_refused = body_refused;
-    let prepared = op_evm2::prepare_deposit_tx(host, tx)?;
+    // The intrinsic check holds the gas limit to the intrinsic regular gas and the body's history
+    // (`SATIN-DEP-001`): a deposit that cannot pay both fails validation, a failed deposit that
+    // reads nothing more (of its caller's code or its recipient) than one op-revm's own checks
+    // refuse.
+    let body_history = host.ext().body_history;
+    let (intrinsic, _) = evm2::ethereum::intrinsic_and_floor_gas(
+        host.version(),
+        tx.from,
+        tx.to,
+        &tx.input,
+        0,
+        0,
+        tx.value,
+    );
+    let prepared =
+        match evm2::ethereum::validate_intrinsic_gas(tx.gas_limit, intrinsic, body_history) {
+            Err(refusal) if body_history > 0 => PreparedDeposit::Failed(refusal),
+            _ => op_evm2::prepare_deposit_tx(host, tx)?,
+        };
     if caller_code &&
         matches!(prepared, PreparedDeposit::Ready { .. }) &&
         !crate::off("deposit_code_after_intrinsic")
@@ -667,27 +708,46 @@ fn execute_deposit_inner(
     } else {
         0
     };
-    // A created caller the deposit's gas cannot pay is a failed deposit (Satin), not a refusal.
-    if created_state > tx.gas_limit.saturating_sub(intrinsic) {
+    // The body's history, validated with the intrinsic gas, then the created caller, which the
+    // deposit's gas cannot pay as a failed deposit (Satin), not a refusal.
+    let body_history = host.ext().body_history;
+    if created_state > tx.gas_limit.saturating_sub(intrinsic).saturating_sub(body_history) {
         return failed_deposit(host, tx, InstrStop::OutOfGas);
     }
     if let Some(target) = host.ext_mut().mechanisms.deposit_start.take() {
         park_start(host, target, tx.value);
     }
-    start_pending(host);
+    let initial_state_gas = body_history + created_state;
     let (execution_gas_limit, reservoir) =
-        initial_gas_and_reservoir(host.version(), tx.gas_limit, intrinsic, created_state);
+        initial_gas_and_reservoir(host.version(), tx.gas_limit, intrinsic, initial_state_gas);
+    let mut tx_gas =
+        GasTracker::new_with_execution_gas_and_reservoir(execution_gas_limit, reservoir);
+    // The first frame's start record, charged before the frame, the reservoir first: a deposit
+    // that cannot pay it is a failed deposit, with nothing of its start made.
+    let charge = host.ext().tx_start_charge;
+    if charge > 0 {
+        if !charge_tx_state(&mut tx_gas, charge) {
+            drop_start(host.ext_mut());
+            return failed_deposit(host, tx, InstrStop::OutOfGas);
+        }
+        host.ext_mut().mechanisms.start_from_reservoir = Some(charge.min(reservoir));
+    }
+    start_pending(host);
     *host.tx_env_mut() = TxEnvExt {
         origin: tx.from,
         gas_price: U256::ZERO,
         chain_id: U256::from(host.version().chain_id),
         ..TxEnvExt::default()
     };
-    let mut tx_gas =
-        GasTracker::new_with_execution_gas_and_reservoir(execution_gas_limit, reservoir);
     let frame =
         prepare_initial_frame(host, tx.from, nonce, tx.to, &tx.input, tx.value, &mut tx_gas)?;
-    let result = if creation_nonce_unbumpable(host, tx, nonce, &frame)? {
+    let unbumpable = creation_nonce_unbumpable(host, tx, nonce, &frame)?;
+    #[cfg(feature = "compare")]
+    let given_back = host.ext().tx_start_charge;
+    let result = if unbumpable {
+        // The start makes no record, so its charge is given back: the answer's gas is the gas
+        // the deposit had before it.
+        drop_start(host.ext_mut());
         unbumpable_creation(host, frame, execution_gas_limit, reservoir)?
     } else {
         execute_initial_frame(host, frame, &mut tx_gas, execution_gas_limit, reservoir)?
@@ -699,8 +759,20 @@ fn execute_deposit_inner(
     {
         return failed_deposit(host, tx, result.stop);
     }
+    let mut result = result;
+    let from_reservoir = host.ext().mechanisms.start_from_reservoir.unwrap_or(0);
+    give_back_start_charge(host, &mut result, from_reservoir);
     host.ext_mut().reservoir_left = result.gas.reservoir();
     settle_first_frame(host.ext_mut(), result.stop.is_success());
+    // The start's charge given back is the start ledger's settlement's refund, as for a creation
+    // of type 0, 1 or 2 (comparison only).
+    #[cfg(feature = "compare")]
+    if unbumpable &&
+        given_back > 0 &&
+        let Some(s) = host.ext_mut().settlements.last_mut()
+    {
+        s.refund = given_back;
+    }
     finalize_gas(
         host,
         GasSettlement {
@@ -708,7 +780,7 @@ fn execute_deposit_inner(
             gas_price: U256::ZERO,
             gas_limit: tx.gas_limit,
             floor_gas,
-            initial_state_gas: created_state,
+            initial_state_gas,
             state_refund: 0,
             result,
         },
@@ -882,6 +954,7 @@ fn failed_deposit(
         }
     }
     host.ext_mut().reservoir_left = 0;
+    host.ext_mut().failed_deposit = true;
     Ok(TxResultExt {
         status: false,
         total_gas_spent: tx.gas_limit,
