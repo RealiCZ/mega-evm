@@ -404,16 +404,28 @@ def loads_slot(slot):
     return lambda o: o["reads"].update(storage=sorted(o["reads"]["storage"] + [slot]))
 
 
-def pinned_satin_figures(work):
+def pinned_satin_figures(change):
     """The block gate run with a copy of the Satin-rule figures (`data/block-satin.txt`) whose
-    first block of the sample includes one more transaction."""
-    first_block = blocks(work, "block")[0][0].split("/")
-    key = "%s:%s" % (first_block[1], first_block[2].split(".")[0])
-    dst = os.path.join(work, "block-satin.txt")
-    shutil.copyfile(os.path.join(HERE, "..", "data", "block-satin.txt"), dst)
-    edit_text(work, "block-satin.txt", lambda t: re.sub(r"^%s included=(\d+) " % re.escape(key), lambda m: "%s included=%d " % (key, int(m.group(1)) + 1), t, count=1, flags=re.M))
-    NOTE.append(key)
-    return ["MEGA_EVM2_BLOCK_SATIN=" + dst]
+    line of the sample's first block is changed by `change` (its key, the text): a block's
+    pinned counts or its run's digest."""
+    def apply(work):
+        first_block = blocks(work, "block")[0][0].split("/")
+        key = "%s:%s" % (first_block[1], first_block[2].split(".")[0])
+        dst = os.path.join(work, "block-satin.txt")
+        shutil.copyfile(os.path.join(HERE, "..", "data", "block-satin.txt"), dst)
+        edit_text(work, "block-satin.txt", lambda t: change(key, t))
+        NOTE.append(key)
+        return ["MEGA_EVM2_BLOCK_SATIN=" + dst]
+    return apply
+
+
+def one_more_included(key, t):
+    return re.sub(r"^%s included=(\d+) " % re.escape(key), lambda m: "%s included=%d " % (key, int(m.group(1)) + 1), t, count=1, flags=re.M)
+
+
+def other_digest(key, t):
+    """The digest's last hex digit changed."""
+    return re.sub(r"^(%s .* digest=0x[0-9a-f]*)([0-9a-f])$" % re.escape(key), lambda m: m.group(1) + ("0" if m.group(2) != "0" else "1"), t, count=1, flags=re.M)
 
 
 def bumped(field):
@@ -540,7 +552,8 @@ FAULTS = [
     ("block-deposit-history-other-field", "block", cmp("tx_size"), block_row("tx", "tx_size", lambda r: r.get("type") in (126, "0x7e"))),
     ("block-deposit-history-not-enabled", "block", cmp("gas_used"), known_toml(lambda t: drop_class(t, "deposit_history"))),
     # block: the Satin-rule run's own figures, held to the pinned ones
-    ("block-satin-pinned", "block", r"^BLOCK-SATIN DIFFER ", pinned_satin_figures),
+    ("block-satin-pinned", "block", r"^BLOCK-SATIN DIFFER ", pinned_satin_figures(one_more_included)),
+    ("block-satin-digest", "block", r"^BLOCK-SATIN DIGEST ", pinned_satin_figures(other_digest)),
     # block: its whole-block rerun never waives the candidate's own checks
     ("block-candidate-inspected", "block", cmp("evm2_inspected:gas_used"), candidate(BLOCK_ROW, "inspected", "gas_used", "bump")),
     ("block-candidate-field", "block", r'"fields": ?\[[^]]*"record_fields:plain:', candidate(BLOCK_ROW, "plain", "receipt_gas", "drop")),

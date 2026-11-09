@@ -169,7 +169,8 @@ gate_summary() {
 # inputs under <work> and prints its summary line (nothing when its test failed); returns 0 only
 # when the summary is the one <work>/expect.env expects. The block gate also prints the line of
 # the Satin-rule run's figures, `GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b>
-# differ=0`, which must be there with every block pinned and none differing. The assignments are
+# digests=<b> differ=0`, which must be there once, with every block pinned, digest included, and
+# none differing. The assignments are
 # added to the environment of every test of the gate.
 gate_run() {
   local work=$1 logs=$2 gate=$3 line
@@ -224,7 +225,7 @@ gate_run() {
         satin=$(grep '^GATE block-satin ' "$logs/$gate.log" || true)
         echo "${satin:-GATE block-satin MISSING}"
         [ "$(grep -c '^GATE block-satin ' <<< "$satin")" = 1 ] &&
-          grep -Eq "^GATE block-satin blocks=${blocks%% *} included=[0-9]+ refused=[0-9]+ pinned=${blocks%% *} differ=0\$" <<< "$satin" ||
+          grep -Eq "^GATE block-satin blocks=${blocks%% *} included=[0-9]+ refused=[0-9]+ pinned=${blocks%% *} digests=${blocks%% *} differ=0\$" <<< "$satin" ||
           return 1
       fi
       [ "$line" = "GATE $gate $expect differ=0" ]

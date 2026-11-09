@@ -11,8 +11,10 @@
 //!
 //! The engine's own run of a block under Satin's rules is also held to figures of its own, which
 //! no rerun under a reference's rule stands in for: per block, the transactions it included and
-//! refused, pinned in `data/block-satin.txt` (`MEGA_EVM2_BLOCK_SATIN` names another file), on the
-//! line `GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b> differ=0`.
+//! refused and a digest of the run (each transaction's status and gas used, the block counters
+//! and the post-state), pinned in `data/block-satin.txt` (`MEGA_EVM2_BLOCK_SATIN` names another
+//! file), on the line `GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b>
+//! digests=<b> differ=0`.
 use alloy_primitives::B256;
 use evm2::evm::AccountInfo;
 use mega_evm2::{
@@ -181,17 +183,68 @@ fn run_block(
     rows
 }
 /// The Satin-rule run's figures of the recorded blocks: per block, the transactions its own run
-/// included and refused, held to the pinned figures (`<set>:<n> included=<i> refused=<r>` per
-/// line, `#` starting a comment).
+/// included and refused, and a digest of the run ([`run_digest`]), held to the pinned figures
+/// (`<set>:<n> included=<i> refused=<r> digest=<keccak>` per line, `#` starting a comment).
 #[derive(Default)]
 struct SatinFigures {
-    pins: BTreeMap<String, (u64, u64)>,
+    pins: BTreeMap<String, Pin>,
     blocks: u64,
     included: u64,
     refused: u64,
-    /// The blocks whose run has a pinned figure, and those whose run differs from it or has none.
+    /// The blocks whose run has a pinned line, those whose line has a digest, and those whose run
+    /// differs from its line or has no line or no digest.
     pinned: u64,
+    digests: u64,
     differ: u64,
+}
+
+/// One block's pinned figures.
+struct Pin {
+    included: u64,
+    refused: u64,
+    digest: Option<String>,
+}
+
+/// The digest of a block's run: the keccak of its transactions' `status` and `gas_used`, its
+/// block counters row and its post-state row, rendered as JSON with every object's keys sorted.
+fn run_digest(rows: &[Value], txcount: usize) -> String {
+    fn canonical(v: &Value, out: &mut String) {
+        match v {
+            Value::Object(m) => {
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, k) in keys.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(k).unwrap());
+                    out.push(':');
+                    canonical(&m[k], out);
+                }
+                out.push('}');
+            }
+            Value::Array(a) => {
+                out.push('[');
+                for (i, x) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    canonical(x, out);
+                }
+                out.push(']');
+            }
+            _ => out.push_str(&serde_json::to_string(v).unwrap()),
+        }
+    }
+    let mut parts: Vec<Value> = rows[..txcount]
+        .iter()
+        .map(|r| json!({"status": r["status"], "gas_used": r["gas_used"]}))
+        .collect();
+    parts.extend(rows[txcount..].iter().cloned());
+    let mut text = String::new();
+    canonical(&Value::Array(parts), &mut text);
+    format!("{}", alloy_primitives::keccak256(text.as_bytes()))
 }
 
 impl SatinFigures {
@@ -203,51 +256,77 @@ impl SatinFigures {
         let mut pins = BTreeMap::new();
         for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
             let words: Vec<&str> = line.split_whitespace().collect();
-            let count = |i: usize, key: &str| -> u64 {
+            let field = |i: usize, key: &str| -> &str {
                 words
                     .get(i)
                     .and_then(|w| w.strip_prefix(key))
-                    .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| panic!("{path}: malformed line {line:?}"))
             };
-            assert_eq!(words.len(), 3, "{path}: malformed line {line:?}");
-            let old =
-                pins.insert(words[0].to_string(), (count(1, "included="), count(2, "refused=")));
+            let count = |i: usize, key: &str| -> u64 {
+                field(i, key).parse().unwrap_or_else(|_| panic!("{path}: malformed line {line:?}"))
+            };
+            assert!(matches!(words.len(), 3 | 4), "{path}: malformed line {line:?}");
+            let pin = Pin {
+                included: count(1, "included="),
+                refused: count(2, "refused="),
+                digest: (words.len() == 4).then(|| field(3, "digest=").to_string()),
+            };
+            let old = pins.insert(words[0].to_string(), pin);
             assert!(old.is_none(), "{path}: block {} pinned twice", words[0]);
         }
         Self { pins, ..Self::default() }
     }
 
-    /// The block `block`'s transaction rows of its run under Satin's rules.
-    fn check(&mut self, block: &str, rows: &[Value]) {
-        let refused = rows
+    /// The block `block`'s rows of its run under Satin's rules, its first `txcount` its
+    /// transactions'.
+    fn check(&mut self, block: &str, rows: &[Value], txcount: usize) {
+        let refused = rows[..txcount]
             .iter()
             .filter(|r| r["status"].as_str().is_some_and(|s| s.starts_with("refused")))
             .count() as u64;
-        let included = rows.len() as u64 - refused;
+        let included = txcount as u64 - refused;
+        let digest = run_digest(rows, txcount);
         self.blocks += 1;
         self.included += included;
         self.refused += refused;
-        match self.pins.get(block) {
-            Some(&pin) if pin == (included, refused) => self.pinned += 1,
-            Some(&(i, r)) => {
-                self.pinned += 1;
-                self.differ += 1;
-                println!(
-                    "BLOCK-SATIN DIFFER {block} pinned included={i} refused={r} run included={included} refused={refused}"
-                );
+        let Some(pin) = self.pins.get(block) else {
+            self.differ += 1;
+            println!(
+                "BLOCK-SATIN UNPINNED {block} included={included} refused={refused} digest={digest}"
+            );
+            return;
+        };
+        self.pinned += 1;
+        let mut differs = false;
+        if (pin.included, pin.refused) != (included, refused) {
+            differs = true;
+            println!(
+                "BLOCK-SATIN DIFFER {block} pinned included={} refused={} run included={included} refused={refused}",
+                pin.included, pin.refused
+            );
+        }
+        match &pin.digest {
+            Some(d) => {
+                self.digests += 1;
+                if *d != digest {
+                    differs = true;
+                    println!("BLOCK-SATIN DIGEST {block} pinned {d} run {digest}");
+                }
             }
             None => {
-                self.differ += 1;
-                println!("BLOCK-SATIN UNPINNED {block} included={included} refused={refused}");
+                differs = true;
+                println!(
+                    "BLOCK-SATIN UNPINNED {block} included={included} refused={refused} digest={digest}"
+                );
             }
         }
+        self.differ += u64::from(differs);
     }
 
     fn line(&self) -> String {
         format!(
-            "GATE block-satin blocks={} included={} refused={} pinned={} differ={}",
-            self.blocks, self.included, self.refused, self.pinned, self.differ
+            "GATE block-satin blocks={} included={} refused={} pinned={} digests={} differ={}",
+            self.blocks, self.included, self.refused, self.pinned, self.digests, self.differ
         )
     }
 }
@@ -353,7 +432,7 @@ fn test_blocks_match_reference_plain_and_inspected() {
         let both_runs = invariant::take_runs() == 2 * txcount as u64;
         // The block's own run under Satin's rules, before a rerun under a reference's rule takes
         // its place in the comparison: what it included and refused, held to the pinned figures.
-        satin.check(&format!("{set}:{n}"), &p[..txcount]);
+        satin.check(&format!("{set}:{n}"), &p, txcount);
         for (i, (p, q)) in p.iter_mut().zip(q.iter_mut()).enumerate() {
             if i < txcount {
                 invariant.case(&format!("{set}:{n}:{i}"), both_runs, [p, q]);

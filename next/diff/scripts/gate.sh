@@ -8,11 +8,12 @@
 # `known` counts the cases a `known-differences.toml` entry accepts, `class` those an accepted
 # class accepts by its shape (`gate::halted_first_frame`).
 #   GATE block blocks=<b> included=<i> refused=<r> counters=<b> post=<b> differ=0
-#   GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b> differ=0
+#   GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b> digests=<b> differ=0
 #
 # the last the engine's own run of each block under Satin's rules, which a rerun under the
-# reference's rules replaces in the comparison: what it included and refused, held to the figures
-# pinned per block in `data/block-satin.txt`;
+# reference's rules replaces in the comparison: what it included and refused, and a digest of the
+# run (each transaction's status and gas used, the block counters and the post-state), held to the
+# figures pinned per block in `data/block-satin.txt`;
 #
 # and last the regular-gas invariant of Satin's give-back rule (`src/invariant.rs`), checked on
 # every case of the four gates, plain and inspected: the gates' counts summed,

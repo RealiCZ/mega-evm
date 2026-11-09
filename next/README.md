@@ -152,7 +152,7 @@ The tests pin the rule's worked figures: `mega-evm2/tests/give_back.rs` and `mig
 
 A rerun proves a class's case differs from the reference only by the old rule; it cannot check the new rule's own figures, and an engine defect confined to a decided change's own path passes it whenever the reference's old rule happens to agree.
 Two things hold that path instead.
-First, the block gate holds the engine's own run of every recorded block under Satin's rules, the run a rerun replaces in the comparison, to figures pinned per block in `diff/data/block-satin.txt`: the transactions it included and refused, printed as `GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b> differ=0`; a block whose run differs, or that has no figure, fails the gate (the fault `block-satin-pinned` shows it).
+First, the block gate holds the engine's own run of every recorded block under Satin's rules, the run a rerun replaces in the comparison, to figures pinned per block in `diff/data/block-satin.txt`: the transactions it included and refused, and a digest of the run — the keccak of each transaction's status and gas used, the block counters row and the post-state row — so a change of a recorded transaction's gas, of the block's counters or of its post-state is seen even when no inclusion changes; printed as `GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b> digests=<b> differ=0`, a block whose run differs from its counts or its digest, or that has no figure, fails the gate (the faults `block-satin-pinned` and `block-satin-digest` show it).
 Second, an engine test holds each decided change's own figures:
 
 | Class | What the differential cannot see | Engine test |
