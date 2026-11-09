@@ -328,6 +328,8 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         StartRecords::one((deploy, deploy_changed), deploy_empty as i64, !tx.value.is_zero());
     state.host().ext_mut().push_child(start_charge, r - share, Some(start), 0);
     detention::on_suspend(gas, state, 0);
+    #[cfg(feature = "compare")]
+    crate::regular_check::on_forward(state.host(), gas.tracker());
     let started = Started {
         signer,
         deploy,
@@ -364,8 +366,6 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         return Err(result.stop);
     }
     let given_back = (result.gas.remaining(), result.gas.reservoir());
-    #[cfg(feature = "compare")]
-    crate::regular_check::child_returned(state.host(), given_back.0);
     evm2::interpreter::instructions::merge_returned_gas(gas, state, result.gas, result.stop);
     let success = result.stop.is_success() && result.created_address.is_some();
     if create_price != 0 && !success {
@@ -373,6 +373,8 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     }
     let entry = state.host().ext_mut().pop_child(success);
     gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
+    #[cfg(feature = "compare")]
+    crate::regular_check::on_merged(state.host(), &message, &result, gas.tracker());
     if !success && entry.start_charge > 0 {
         refill_history(gas, state, entry.start_charge / CPHB);
     }

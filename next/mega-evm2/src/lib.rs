@@ -119,6 +119,8 @@ impl EvmTypesHost for MegaTypes {
             return Ok(0);
         }
         let price = reprice(host, id, site)?;
+        #[cfg(feature = "compare")]
+        regular_check::on_state_priced(host, price);
         if matches!(id, GasId::CreateState | GasId::CodeDepositState) {
             host.ext_mut().created_prices.push((address, id, price));
         }
@@ -1064,14 +1066,18 @@ fn mega_call_impl(
             }
             let remaining = detention::available(gas.tracker(), &state.host().ext().detention);
             state.host().ext_mut().last_caller_remaining = remaining;
+            #[cfg(feature = "compare")]
+            regular_check::on_forward(state.host(), gas.tracker());
             Ok(())
         },
-        |gas, state, _msg, result| {
-            #[cfg(feature = "compare")]
-            regular_check::child_returned(state.host(), result.gas.remaining());
+        |gas, state, msg, result| {
             let success = result.stop.is_success();
             let entry = state.host().ext_mut().pop_child(success);
             gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
+            #[cfg(feature = "compare")]
+            regular_check::on_merged(state.host(), msg, result, gas.tracker());
+            #[cfg(not(feature = "compare"))]
+            let _ = msg;
             if !success && entry.start_charge > 0 {
                 refill_history(gas, state, entry.start_charge / CPHB);
             }
@@ -1156,14 +1162,18 @@ fn mega_create_impl(
             gas.set_reservoir(r - share);
             state.host().ext_mut().push_child(start_charge, r - share, Some(start), 0);
             detention::on_suspend(gas, state, 0);
+            #[cfg(feature = "compare")]
+            regular_check::on_forward(state.host(), gas.tracker());
             Ok(())
         },
-        |gas, state, _msg, result| {
-            #[cfg(feature = "compare")]
-            regular_check::child_returned(state.host(), result.gas.remaining());
+        |gas, state, msg, result| {
             let success = result.stop.is_success() && result.created_address.is_some();
             let entry = state.host().ext_mut().pop_child(success);
             gas.set_reservoir(gas.reservoir() + entry.kept_reservoir);
+            #[cfg(feature = "compare")]
+            regular_check::on_merged(state.host(), msg, result, gas.tracker());
+            #[cfg(not(feature = "compare"))]
+            let _ = msg;
             if !success && entry.start_charge > 0 {
                 refill_history(gas, state, entry.start_charge / CPHB);
             }
@@ -1355,8 +1365,6 @@ impl MessageHooks<MegaTypes> for StartHooks {
         }
         let answered = is_answered(evm, msg);
         detention::before_commit(evm, msg, answered, stop, output, gas);
-        #[cfg(feature = "compare")]
-        regular_check::on_frame_end(evm, msg, stop.is_halt(), gas);
         // A frame's return switches back on what it (or a frame below it) switched off.
         if evm.ext().mechanisms.disabled_from.is_some_and(|from| from >= msg.depth as usize) {
             evm.ext_mut().mechanisms.disabled_from = None;
@@ -1397,6 +1405,20 @@ impl MessageHooks<MegaTypes> for StartHooks {
         Ok(())
     }
 
+    /// Every message's end once its gas is settled, before its caller merges it: the regular-gas
+    /// invariant and the conservation check hold it to what it received and observe a followed
+    /// frame one last time (comparison builds only).
+    fn after(
+        evm: &mut Evm<'_, MegaTypes>,
+        msg: &Message<MegaTypes>,
+        result: &mut evm2::interpreter::MessageResult<MegaTypes>,
+    ) -> core::result::Result<(), evm2::ExecutionError> {
+        #[cfg(feature = "compare")]
+        regular_check::on_message_end(evm, msg, result);
+        let _ = (evm, msg, result);
+        Ok(())
+    }
+
     fn admit_code_deposit(
         evm: &mut Evm<'_, MegaTypes>,
         _msg: &Message<MegaTypes>,
@@ -1405,7 +1427,7 @@ impl MessageHooks<MegaTypes> for StartHooks {
         gas: &mut Gas,
     ) -> core::result::Result<Option<(InstrStop, Bytes)>, evm2::ExecutionError> {
         #[cfg(feature = "compare")]
-        regular_check::observe(evm, gas.tracker(), "code deposit charges");
+        regular_check::on_code_deposit(evm, _msg, gas.tracker());
         if keyless::refuses_empty_deposit(evm, _msg, code) {
             return Ok(Some((InstrStop::Revert, Bytes::new())));
         }
