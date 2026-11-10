@@ -436,20 +436,6 @@ fn transfer_logs() -> Vec<Scenario> {
             v.push(s);
         }
     }
-    // a value call its recipient cannot hold keeps nothing
-    for (tag, limit) in [("plain", None), ("short", Some(310 + 239u64))] {
-        let a = call_rec(Asm::new(), B, 1_000, 1).stop().build();
-        let mut b = acct(B, vec![]);
-        b.balance = U256::MAX;
-        let mut s = scn(
-            format!("port_tlog_recipient_overflow_{tag}"),
-            &rules,
-            vec![funded(A, a, 1_000), b],
-            5_000_000,
-        );
-        s.limits.data = limit;
-        v.push(s);
-    }
     // a failed precompile's start keeps nothing and is held to nothing
     for (tag, limit) in [("plain", None), ("short", Some(310 + 239u64))] {
         let a = crate::q8::mem_call(

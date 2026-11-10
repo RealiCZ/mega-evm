@@ -7,7 +7,7 @@
 
 #![allow(unreachable_pub, deprecated, missing_docs, clippy::all)]
 
-use mega_evm2_reference::synthetic::run;
+use mega_evm2_reference::synthetic::{commit_like_a_node, run};
 use mega_evm2_scenarios as scenarios;
 use serde_json::Value;
 
@@ -67,4 +67,37 @@ fn test_reference_synthetic() {
         results.iter().all(|r| r["inspected_equal"] == true),
         "reference plain/inspected differ"
     );
+}
+
+/// A node's database deletes an account that a transaction only touched and that is empty
+/// (EIP-161); the in-memory database the reference runs on would keep it as existing.
+#[test]
+fn test_committing_an_earlier_transaction_deletes_touched_empty_accounts() {
+    use alloy_primitives::{Address, U256};
+    use mega_evm::test_utils::MemoryDatabase;
+    use revm::{
+        Database,
+        state::{Account, AccountStatus, EvmState},
+    };
+
+    let (touched_empty, touched_funded, untouched_empty) = (
+        Address::with_last_byte(0xa1),
+        Address::with_last_byte(0xa2),
+        Address::with_last_byte(0xa3),
+    );
+    let mut state = EvmState::default();
+    let mut a = Account::default();
+    a.mark_touch();
+    state.insert(touched_empty, a);
+    let mut b = Account::default();
+    b.info.balance = U256::from(1);
+    b.status = AccountStatus::Touched;
+    state.insert(touched_funded, b);
+    state.insert(untouched_empty, Account::default());
+
+    let mut db = MemoryDatabase::default();
+    commit_like_a_node(&mut db, state);
+    assert!(db.basic(touched_empty).unwrap().is_none(), "a touched empty account must not exist");
+    assert_eq!(db.basic(touched_funded).unwrap().unwrap().balance, U256::from(1));
+    assert!(db.basic(untouched_empty).unwrap().is_none());
 }
