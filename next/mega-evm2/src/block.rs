@@ -1,29 +1,42 @@
-//! A block executor for the engine, the counterpart of Satin's `MegaBlockExecutor`
-//! (`crates/mega-evm/src/block/executor.rs`, `limit.rs` @ 5e3f30ad) for what a validator runs:
+//! A block session of the engine, the counterpart of Satin's `MegaBlockExecutor`
+//! (`crates/mega-evm/src/block/executor.rs`, `limit.rs` @ 5e3f30ad). A session is made only by
+//! [`SatinFactory`](crate::factory::SatinFactory), which installs the fixed protocol parameters and
+//! derives the block's activation facts from the chain configuration; it holds its EVM privately,
+//! so nothing can change a protocol value under it.
 //!
-//! - **pre-block**: the EIP-2935 and EIP-4788 system calls, the `SequencerRegistry`'s due-change
-//!   read and its `applyPendingChanges()` call when due, each on evm2's `Evm::system_call` as the
-//!   protocol's own work, then the read of the L1 block info slots (read-only, as Satin's
-//!   `read_l1_block_info`). Each step is committed on its own;
-//! - **per transaction, before it runs** (`run_transaction`): the activation-block rule, the Mega
-//!   System Transaction decision off the block's state (`live_system_address` + the system shape),
-//!   `BlockLimiter::pre_execution_check` (the block's gas limit, the builder's size limits, the
-//!   three packing budgets: data size, KV updates, state growth; a deposit is held to the gas limit
-//!   alone, a Mega System Transaction to all of them as any other non-deposit transaction), the DA
-//!   footprint against the block's gas limit, the sender's account read; then `Evm::transact` and
-//!   `ExecutedTx::detach` (nothing committed);
-//! - **commit** (`commit_transaction_outcome`): the room check and the sender check again, the
-//!   block's counters, the receipt (status, cumulative gas, logs; a deposit's nonce and receipt
-//!   version), the state into the EVM's overlay and the block's change set
-//!   (`BlockStateAccumulator`, the counterpart of revm's bundle).
+//! - **pre-block**, before the session is returned: the EIP-2935 and EIP-4788 system calls (block
+//!   zero makes neither, and its parent beacon block root must be zero), the `SequencerRegistry`'s
+//!   due-change read and its `applyPendingChanges()` call when due, each on evm2's
+//!   `Evm::system_call` as the protocol's own work, then the read of the L1 block info slots
+//!   (read-only, as Satin's `read_l1_block_info`). Each step is committed on its own;
+//! - **per candidate, before it runs** ([`BlockSession::execute_candidate`]): the activation
+//!   block's deposit-only rule, the Mega System Transaction decision off the block's state
+//!   (`live_system_address` + the system shape), `BlockLimiter::pre_execution_check` (the block's
+//!   gas limit, the builder's size limits, the three packing budgets: data size, KV updates, state
+//!   growth; a deposit is held to the gas limit alone, a Mega System Transaction to all of them as
+//!   any other non-deposit transaction), the DA footprint against the block's gas limit, the
+//!   sender's account read; then `Evm::transact` and `ExecutedTx::detach` (nothing committed);
+//! - **commit** ([`BlockSession::commit_candidate`]): the candidate's block, the room check and the
+//!   sender check again, the block's counters, the receipt (status, cumulative gas, logs; a
+//!   deposit's nonce and receipt version), the state into the EVM's overlay and the block's change
+//!   set (`BlockStateAccumulator`, the counterpart of revm's bundle).
 //!
 //! The limits are Satin's `ProtocolLimits::for_spec(SATIN)`; the builder's policy is a
-//! validator's (`BlockLimits::default()`: no limit). Errors are strings: a refusal names its rule.
+//! validator's (`BlockLimits::default()`: no limit). Failures are typed ([`crate::error`]): a
+//! refusal names its rule; a failure that decides the block (an internal error or an invalid
+//! block) is kept, and the session refuses every later candidate and cannot finish.
 
-use crate::{MegaTypes, SEQUENCER_REGISTRY, tx::ORACLE};
+use crate::{
+    MegaTypes, SEQUENCER_REGISTRY, TxLimits,
+    chain::Activation,
+    error::{
+        BlockError, BlockIdentity, Budget, CandidateError, ErrorContext, Phase, Refusal, TxContext,
+    },
+    tx::ORACLE,
+};
 use alloy_consensus::{Transaction, transaction::Recovered};
 use alloy_eips::Typed2718;
-use alloy_primitives::{Address, Bytes, Log, TxKind, U256, keccak256};
+use alloy_primitives::{Address, B256, Bytes, Log, TxKind, U256, keccak256};
 use evm2::{
     Evm, TxResult,
     evm::{BlockStateAccumulator, PendingState, StateChangeSource, SystemTx, TxResultWithState},
@@ -67,35 +80,32 @@ pub struct BlockLimiter {
 impl BlockLimiter {
     /// Satin `pre_execution_check` under `BlockLimits::default()`: the builder's per-transaction
     /// and size limits are `u64::MAX`, so the gas limit and the three packing budgets decide.
-    pub fn pre_execution_check(&self, gas_limit: u64, packing_exempt: bool) -> Result<(), String> {
+    pub fn pre_execution_check(&self, gas_limit: u64, packing_exempt: bool) -> Result<(), Refusal> {
         if self.block_gas_used.saturating_add(gas_limit) > self.block_gas_limit {
-            return Err(format!(
-                "transaction gas limit {gas_limit} is more than blocks available gas {}",
-                self.block_gas_limit.saturating_sub(self.block_gas_used)
-            ));
+            return Err(Refusal::BlockGasLimit {
+                gas_limit,
+                available: self.block_gas_limit.saturating_sub(self.block_gas_used),
+            });
         }
         if packing_exempt {
             return Ok(());
         }
-        const NAMES: [&str; 3] =
-            ["Block transactions data limit", "Block KV update limit", "Block state growth limit"];
-        for i in 0..3 {
+        for (i, budget) in Budget::ALL.into_iter().enumerate() {
             if self.usage[i] >= BLOCK_BUDGETS[i] {
-                return Err(format!(
-                    "{} reached: block_used={} >= limit={}",
-                    NAMES[i], self.usage[i], BLOCK_BUDGETS[i]
-                ));
+                return Err(Refusal::Packing {
+                    budget,
+                    used: self.usage[i],
+                    limit: BLOCK_BUDGETS[i],
+                });
             }
         }
         Ok(())
     }
 
-    pub fn check_da_footprint(&self, footprint: u64) -> Result<(), String> {
+    pub fn check_da_footprint(&self, footprint: u64) -> Result<(), Refusal> {
         let available = self.block_gas_limit.saturating_sub(self.block_da_footprint_used);
         if footprint > available {
-            return Err(format!(
-                "transaction DA footprint {footprint} above the block's available {available}"
-            ));
+            return Err(Refusal::DaFootprint { footprint, available });
         }
         Ok(())
     }
@@ -114,9 +124,10 @@ pub struct Receipt {
     pub deposit_nonce: Option<u64>,
 }
 
-/// An executed, not yet committed transaction (Satin `MegaBlockTxResult`).
+/// An executed, not yet committed transaction (Satin `MegaBlockTxResult`), bound to the block it
+/// ran for.
 #[derive(Debug)]
-pub struct Executed {
+pub struct Candidate {
     pub ty: u8,
     pub gas_limit: u64,
     pub tx_size: u64,
@@ -135,37 +146,64 @@ pub struct Executed {
     pub gas: [u64; 4],
     /// Receipt gas (`max(spent − refund, floor)`).
     pub gas_used: u64,
+    block: BlockIdentity,
 }
 
-/// The block executor over one `Evm` for the whole block.
-pub struct BlockExecutor<'a> {
-    pub evm: Evm<'a, MegaTypes>,
-    pub limiter: BlockLimiter,
+impl Candidate {
+    /// The block the candidate ran for.
+    pub const fn block(&self) -> BlockIdentity {
+        self.block
+    }
+}
+
+/// What a finished block produced.
+#[derive(Debug)]
+pub struct BlockOutput {
     pub receipts: Vec<Receipt>,
-    /// The block's change set (revm's bundle counterpart).
+    /// The block's change set, pre-block states included.
     pub changes: BlockStateAccumulator,
     /// Whole pre-block states in commit order, including read-only accounts and slots.
     pub pre_block_states: Vec<PendingState>,
-    /// Valid SALT lookups across every execution in this block, including discarded candidates.
+    pub limiter: BlockLimiter,
+    /// Valid SALT lookups across every execution in the block, including discarded candidates.
     #[cfg(feature = "witness")]
     pub bucket_reads: std::collections::BTreeSet<u64>,
-    pub parent_hash: alloy_primitives::B256,
-    pub parent_beacon_block_root: Option<alloy_primitives::B256>,
-    /// An activation block admits only deposits (false for every replayed block).
-    pub only_deposits: bool,
 }
 
-impl<'a> BlockExecutor<'a> {
-    /// An executor over `evm`. Its transactions run under Satin's limits and detention caps
-    /// ([`crate::TxLimits::SATIN`]) whatever the EVM was set up with ([`Self::run_transaction`]):
-    /// they are block validity.
-    pub fn new(
+/// One block's execution over one `Evm` for the whole block.
+pub struct BlockSession<'a> {
+    evm: Evm<'a, MegaTypes>,
+    limiter: BlockLimiter,
+    receipts: Vec<Receipt>,
+    /// The block's change set (revm's bundle counterpart).
+    changes: BlockStateAccumulator,
+    /// Whole pre-block states in commit order, including read-only accounts and slots.
+    pre_block_states: Vec<PendingState>,
+    /// Valid SALT lookups across every execution in this block, including discarded candidates.
+    #[cfg(feature = "witness")]
+    bucket_reads: std::collections::BTreeSet<u64>,
+    identity: BlockIdentity,
+    parent_beacon_block_root: Option<B256>,
+    activation: Activation,
+    /// The limits every candidate runs under: Satin's, or a simulation's.
+    limits: TxLimits,
+    simulation: bool,
+    /// The failure that decided the block, once one did.
+    fault: Option<BlockError>,
+}
+
+impl<'a> BlockSession<'a> {
+    /// A session over `evm`, which the factory configured, its pre-block sequence run.
+    pub(crate) fn start(
         evm: Evm<'a, MegaTypes>,
-        parent_hash: alloy_primitives::B256,
-        parent_beacon_block_root: Option<alloy_primitives::B256>,
-    ) -> Self {
+        identity: BlockIdentity,
+        parent_beacon_block_root: Option<B256>,
+        activation: Activation,
+        limits: TxLimits,
+        simulation: bool,
+    ) -> Result<Self, BlockError> {
         let block_gas_limit = evm.block().gas_limit.saturating_to();
-        Self {
+        let mut session = Self {
             evm,
             limiter: BlockLimiter { block_gas_limit, ..Default::default() },
             receipts: Vec::new(),
@@ -173,21 +211,88 @@ impl<'a> BlockExecutor<'a> {
             pre_block_states: Vec::new(),
             #[cfg(feature = "witness")]
             bucket_reads: Default::default(),
-            parent_hash,
+            identity,
             parent_beacon_block_root,
-            only_deposits: false,
-        }
+            activation,
+            limits,
+            simulation,
+            fault: None,
+        };
+        session.apply_pre_execution_changes()?;
+        Ok(session)
     }
 
-    fn system_call(&mut self, target: Address, data: Bytes) -> Result<PendingState, String> {
+    /// The session's EVM, read-only.
+    pub const fn evm(&self) -> &Evm<'a, MegaTypes> {
+        &self.evm
+    }
+
+    pub const fn limiter(&self) -> &BlockLimiter {
+        &self.limiter
+    }
+
+    pub fn receipts(&self) -> &[Receipt] {
+        &self.receipts
+    }
+
+    pub const fn changes(&self) -> &BlockStateAccumulator {
+        &self.changes
+    }
+
+    pub fn pre_block_states(&self) -> &[PendingState] {
+        &self.pre_block_states
+    }
+
+    /// Valid SALT lookups across every execution in this block, including discarded candidates
+    /// and a candidate whose later lookup failed.
+    #[cfg(feature = "witness")]
+    pub const fn bucket_reads(&self) -> &std::collections::BTreeSet<u64> {
+        &self.bucket_reads
+    }
+
+    /// What the schedule decided for the block.
+    pub const fn activation(&self) -> &Activation {
+        &self.activation
+    }
+
+    pub const fn identity(&self) -> BlockIdentity {
+        self.identity
+    }
+
+    /// Whether the session runs under a simulation's switches rather than consensus rules.
+    pub const fn is_simulation(&self) -> bool {
+        self.simulation
+    }
+
+    /// The failure that decided the block, once one did.
+    pub const fn fault(&self) -> Option<&BlockError> {
+        self.fault.as_ref()
+    }
+
+    /// The block's output; an error when a failure decided the block.
+    pub fn finish(self) -> Result<BlockOutput, BlockError> {
+        if let Some(fault) = self.fault {
+            return Err(fault);
+        }
+        Ok(BlockOutput {
+            receipts: self.receipts,
+            changes: self.changes,
+            pre_block_states: self.pre_block_states,
+            limiter: self.limiter,
+            #[cfg(feature = "witness")]
+            bucket_reads: self.bucket_reads,
+        })
+    }
+
+    fn system_call(&mut self, target: Address, data: Bytes) -> Result<PendingState, BlockError> {
         self.evm.ext_mut().begin_system_call();
         let executed = self
             .evm
             .system_call(SystemTx::new(target, data))
-            .map_err(|e| format!("system call {target}: {e:?}"))?;
+            .map_err(|e| BlockError::system_call(target, e))?;
         let TxResultWithState { result: r, pending_state, .. } = executed.detach();
         if !r.status {
-            return Err(format!("system call {target} failed: {:?}", r.stop));
+            return Err(BlockError::system_call_failed(target, r.stop));
         }
         Ok(pending_state)
     }
@@ -200,31 +305,39 @@ impl<'a> BlockExecutor<'a> {
 
     /// Whether the registry has a role change due in this block (Satin
     /// `is_apply_pending_changes_due`), read off the block's state: each role's pending value, and
-    /// its activation block when one is pending. A read the database cannot serve is an error.
-    pub fn registry_due(&mut self) -> Result<bool, String> {
+    /// its activation block when one is pending. A read the database cannot serve is an internal
+    /// error.
+    pub fn registry_due(&mut self) -> Result<bool, BlockError> {
         self.read_registry_due().map(|(due, _)| due)
     }
 
-    fn read_registry_due(&mut self) -> Result<(bool, PendingState), String> {
+    fn read_registry_due(&mut self) -> Result<(bool, PendingState), BlockError> {
         let number = self.evm.block().number;
         let state = self.evm.state_mut();
-        let failed = |e: evm2::DatabaseError| format!("registry read: {e:?}");
-        let info = state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(failed)?;
+        let failed = |slot: Option<U256>| {
+            move |e: evm2::DatabaseError| {
+                let context = ErrorContext { slot, ..ErrorContext::account(SEQUENCER_REGISTRY) };
+                BlockError::read(Phase::DueChangeRead, e, context)
+            }
+        };
+        let info = state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(failed(None))?;
         let mut reads = PendingState::default();
         reads.insert_account(SEQUENCER_REGISTRY, info.clone(), info.clone());
         let mut due = false;
         if info.is_some() {
             for (p, a) in REGISTRY_PENDING {
                 let key = U256::from(p);
-                let pending =
-                    state.storage_slot_untracked(&SEQUENCER_REGISTRY, &key).map_err(failed)?;
+                let pending = state
+                    .storage_slot_untracked(&SEQUENCER_REGISTRY, &key)
+                    .map_err(failed(Some(key)))?;
                 reads.insert_storage(SEQUENCER_REGISTRY, key, pending, pending);
                 if pending.is_zero() {
                     continue;
                 }
                 let key = U256::from(a);
-                let activation =
-                    state.storage_slot_untracked(&SEQUENCER_REGISTRY, &key).map_err(failed)?;
+                let activation = state
+                    .storage_slot_untracked(&SEQUENCER_REGISTRY, &key)
+                    .map_err(failed(Some(key)))?;
                 reads.insert_storage(SEQUENCER_REGISTRY, key, activation, activation);
                 due |= number >= activation;
             }
@@ -232,18 +345,29 @@ impl<'a> BlockExecutor<'a> {
         Ok((due, reads))
     }
 
-    /// Satin `apply_pre_execution_changes` (no activation block: the predeploy check is not made).
-    /// A block without a parent beacon block root is refused at the EIP-4788 step.
-    pub fn apply_pre_execution_changes(&mut self) -> Result<(), String> {
-        let parent = Bytes::from(self.parent_hash.0.to_vec());
-        let state = self.system_call(HISTORY_STORAGE, parent)?;
-        self.commit_pre_block_state(state);
-        // A block without a parent beacon block root is invalid (EIP-4788).
-        let root = self
-            .parent_beacon_block_root
-            .ok_or_else(|| "missing parent beacon block root (EIP-4788)".to_owned())?;
-        let state = self.system_call(BEACON_ROOTS, Bytes::from(root.0.to_vec()))?;
-        self.commit_pre_block_state(state);
+    /// Satin `apply_pre_execution_changes` (the activation block's factory check and the system
+    /// contracts' deployment are not made). A block without a parent beacon block root is invalid
+    /// at the EIP-4788 step; block zero makes neither EIP call (`SATIN-ACT-012`).
+    fn apply_pre_execution_changes(&mut self) -> Result<(), BlockError> {
+        if self.activation.block_zero() {
+            // Block zero has no parent: no EIP-2935 or EIP-4788 call, and its parent beacon block
+            // root must be zero.
+            match self.parent_beacon_block_root {
+                Some(root) if root.is_zero() => {}
+                Some(root) => return Err(BlockError::genesis_parent_beacon_root(root)),
+                None => return Err(BlockError::missing_parent_beacon_root(BEACON_ROOTS)),
+            }
+        } else {
+            let parent = Bytes::from(self.identity.parent_hash.0.to_vec());
+            let state = self.system_call(HISTORY_STORAGE, parent)?;
+            self.commit_pre_block_state(state);
+            // A block without a parent beacon block root is invalid (EIP-4788).
+            let root = self
+                .parent_beacon_block_root
+                .ok_or(BlockError::missing_parent_beacon_root(BEACON_ROOTS))?;
+            let state = self.system_call(BEACON_ROOTS, Bytes::from(root.0.to_vec()))?;
+            self.commit_pre_block_state(state);
+        }
         let (due, reads) = self.read_registry_due()?;
         self.commit_pre_block_state(reads);
         if due {
@@ -254,17 +378,23 @@ impl<'a> BlockExecutor<'a> {
             self.commit_pre_block_state(state);
         }
         // Satin `read_l1_block_info`: the account, then its slots when it exists. A read the
-        // database cannot serve fails the block.
+        // database cannot serve is an internal error.
         let state = self.evm.state_mut();
-        let failed = |e: evm2::DatabaseError| format!("L1 block info read: {e:?}");
-        let info = state.account_info_untracked(&L1_BLOCK_CONTRACT).map_err(failed)?;
+        let failed = |slot: Option<U256>| {
+            move |e: evm2::DatabaseError| {
+                let context = ErrorContext { slot, ..ErrorContext::account(L1_BLOCK_CONTRACT) };
+                BlockError::read(Phase::L1BlockInfoRead, e, context)
+            }
+        };
+        let info = state.account_info_untracked(&L1_BLOCK_CONTRACT).map_err(failed(None))?;
         let mut reads = PendingState::default();
         reads.insert_account(L1_BLOCK_CONTRACT, info.clone(), info.clone());
         if info.is_some() {
             for slot in L1_BLOCK_INFO_SLOTS {
                 let key = U256::from(slot);
-                let value =
-                    state.storage_slot_untracked(&L1_BLOCK_CONTRACT, &key).map_err(failed)?;
+                let value = state
+                    .storage_slot_untracked(&L1_BLOCK_CONTRACT, &key)
+                    .map_err(failed(Some(key)))?;
                 reads.insert_storage(L1_BLOCK_CONTRACT, key, value, value);
             }
         }
@@ -272,10 +402,6 @@ impl<'a> BlockExecutor<'a> {
         Ok(())
     }
 
-    /// Whether `tx` is a Mega System Transaction: sent from the live system address, which every
-    /// transaction reads off the block's state, with the system shape (a transaction of another
-    /// shape from that address is refused when the engine validates it). A read the database
-    /// cannot serve is an error.
     /// Whether a transaction escapes the three packing budgets: a deposit does (`SATIN-BLK-006`); a
     /// Mega System Transaction is held to them as any other non-deposit transaction is
     /// (`SATIN-BLK-007`), except under the reference's rule (comparison only).
@@ -288,31 +414,70 @@ impl<'a> BlockExecutor<'a> {
                 )
     }
 
-    fn is_system_transaction(&mut self, tx: &Recovered<OpTxEnvelope>) -> Result<bool, String> {
-        let live = crate::tx::live_system_address(&mut self.evm)
-            .map_err(|e| format!("registry read: {e:?}"))?;
+    /// Whether `tx` is a Mega System Transaction: sent from the live system address, which every
+    /// transaction reads off the block's state, with the system shape (a transaction of another
+    /// shape from that address is refused when the engine validates it). A read the database
+    /// cannot serve is an internal error.
+    fn is_system_transaction(
+        &mut self,
+        tx: &Recovered<OpTxEnvelope>,
+        context: TxContext,
+    ) -> Result<bool, BlockError> {
+        let live = crate::tx::live_system_address(&mut self.evm).map_err(|e| {
+            let context = ErrorContext::account(SEQUENCER_REGISTRY).with_transaction(context);
+            BlockError::read(Phase::SystemAddressResolution, e, context)
+        })?;
         let shape = tx.inner().ty() == 0 && tx.inner().kind() == TxKind::Call(ORACLE);
         Ok(shape && live == Some(tx.signer()))
     }
 
+    /// The kept failure, if one decided the block.
+    fn check_fault(&self) -> Result<(), CandidateError> {
+        match &self.fault {
+            Some(fault) => Err(CandidateError::Block(fault.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// Keeps a failure that decides the block (the first one) and hands the error back.
+    fn decide(&mut self, error: CandidateError) -> CandidateError {
+        if let CandidateError::Block(e) = &error &&
+            self.fault.is_none()
+        {
+            self.fault = Some(e.clone());
+        }
+        error
+    }
+
     /// Runs `tx` (its 2718 bytes `encoded`) against the block's rules; nothing is committed.
-    pub fn run_transaction(
+    pub fn execute_candidate(
         &mut self,
         tx: &Recovered<OpTxEnvelope>,
         encoded: &[u8],
-    ) -> Result<Executed, String> {
+    ) -> Result<Candidate, CandidateError> {
+        self.check_fault()?;
+        self.run(tx, encoded).map_err(|e| self.decide(e))
+    }
+
+    fn run(
+        &mut self,
+        tx: &Recovered<OpTxEnvelope>,
+        encoded: &[u8],
+    ) -> Result<Candidate, CandidateError> {
         let env = tx.inner();
         let ty = env.ty();
         let is_deposit = env.is_deposit();
-        if self.only_deposits && !is_deposit {
-            return Err("unexpected non-deposit transaction in an activation block".into());
+        let sender = tx.signer();
+        let context = TxContext { index: self.receipts.len(), sender, ty };
+        if self.activation.only_deposits() && !is_deposit {
+            return Err(Refusal::OnlyDeposits.into());
         }
-        // Satin's limits, whatever was set on the EVM.
-        self.evm.ext_mut().limits = crate::TxLimits::SATIN;
+        // Satin's limits (a simulation's when the session is one), whatever ran before.
+        self.evm.ext_mut().limits = self.limits;
         let tx_size = encoded.len() as u64;
         let da_size = estimated_da_size(encoded);
         let gas_limit = env.gas_limit();
-        let is_system_transaction = !is_deposit && self.is_system_transaction(tx)?;
+        let is_system_transaction = !is_deposit && self.is_system_transaction(tx, context)?;
         self.limiter.pre_execution_check(
             gas_limit,
             self.packing_exempt(is_deposit, is_system_transaction),
@@ -320,15 +485,24 @@ impl<'a> BlockExecutor<'a> {
         let da_footprint = if is_deposit {
             0
         } else {
-            let scalar = L1BlockInfo::fetch_da_footprint_gas_scalar(self.evm.state_mut())
-                .map_err(|e| format!("{e:?}"))?;
+            let scalar =
+                L1BlockInfo::fetch_da_footprint_gas_scalar(self.evm.state_mut()).map_err(|e| {
+                    let context =
+                        ErrorContext::account(L1_BLOCK_CONTRACT).with_transaction(context);
+                    BlockError::read(Phase::Bookkeeping, e, context)
+                })?;
             let footprint = da_size.saturating_mul(scalar as u64);
             self.limiter.check_da_footprint(footprint)?;
             footprint
         };
-        let sender = tx.signer();
-        let before =
-            self.evm.read_account_info(&sender).map_err(|e| format!("{e:?}"))?.unwrap_or_default();
+        let before = self
+            .evm
+            .read_account_info(&sender)
+            .map_err(|e| {
+                let context = ErrorContext::account(sender).with_transaction(context);
+                BlockError::read(Phase::Bookkeeping, e, context)
+            })?
+            .unwrap_or_default();
         #[cfg(feature = "witness")]
         self.evm.ext_mut().bucket_reads.clear();
         let executed = self.evm.transact(tx).map(|executed| executed.detach());
@@ -337,14 +511,14 @@ impl<'a> BlockExecutor<'a> {
         #[cfg(feature = "witness")]
         self.bucket_reads.extend(self.evm.ext().bucket_reads.iter().copied());
         let TxResultWithState { result, pending_state, .. } =
-            executed.map_err(|e| format!("EVM reported invalid transaction: {e:?}"))?;
+            executed.map_err(|e| CandidateError::from_execution(e, context))?;
         let ext = self.evm.ext();
         let usage = ext.usage(result.status);
         let (history, history_bytes) = ext.history(result.status);
         let state = result.state_gas_spent.saturating_sub(history);
         let gas = [result.execution_gas_spent(), state, history, history_bytes];
         let gas_used = result.tx_gas_used();
-        Ok(Executed {
+        Ok(Candidate {
             ty,
             gas_limit,
             tx_size,
@@ -360,22 +534,38 @@ impl<'a> BlockExecutor<'a> {
             usage,
             gas,
             gas_used,
+            block: self.identity,
         })
     }
 
-    /// Re-checks the block's room and the sender, then commits `out` (Satin
+    /// Re-checks the candidate's block, the block's room and the sender, then commits `out` (Satin
     /// `commit_transaction_outcome`). Returns the receipt's gas.
-    pub fn commit_transaction_outcome(&mut self, out: Executed) -> Result<u64, String> {
+    pub fn commit_candidate(&mut self, out: Candidate) -> Result<u64, CandidateError> {
+        self.check_fault()?;
+        self.commit(out).map_err(|e| self.decide(e))
+    }
+
+    fn commit(&mut self, out: Candidate) -> Result<u64, CandidateError> {
+        if out.block != self.identity {
+            return Err(CandidateError::Foreign { expected: self.identity, found: out.block });
+        }
         let exempt = self.packing_exempt(out.is_deposit, out.is_system_transaction);
         self.limiter.pre_execution_check(out.gas_limit, exempt)?;
         self.limiter.check_da_footprint(out.da_footprint)?;
         let now = self
             .evm
             .read_account_info(&out.sender)
-            .map_err(|e| format!("{e:?}"))?
+            .map_err(|e| {
+                let context = ErrorContext::account(out.sender).with_transaction(TxContext {
+                    index: self.receipts.len(),
+                    sender: out.sender,
+                    ty: out.ty,
+                });
+                BlockError::read(Phase::Commit, e, context)
+            })?
             .unwrap_or_default();
         if (now.nonce, now.balance) != (out.sender_nonce, out.sender_balance) {
-            return Err(format!("stale outcome: sender {}", out.sender));
+            return Err(CandidateError::Stale { sender: out.sender });
         }
         let l = &mut self.limiter;
         l.block_gas_used = l.block_gas_used.saturating_add(out.gas_used);
@@ -390,7 +580,7 @@ impl<'a> BlockExecutor<'a> {
             l.block_da_size_used = l.block_da_size_used.saturating_add(out.da_size);
             l.block_da_footprint_used = l.block_da_footprint_used.saturating_add(out.da_footprint);
         }
-        let Executed { ty, is_deposit, sender_nonce, result, pending, gas_used, .. } = out;
+        let Candidate { ty, is_deposit, sender_nonce, result, pending, gas_used, .. } = out;
         let status = result.status && !result.ext.failed_deposit;
         let bloom = alloy_primitives::logs_bloom(result.logs.iter());
         self.receipts.push(Receipt {

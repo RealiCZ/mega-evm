@@ -7,14 +7,14 @@ use crate::invariant;
 use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
 use evm2::{
-    Evm, ExecutionConfig, TxResult,
+    Evm, TxResult,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Database, InMemoryDB},
     inspector::Inspector,
     interpreter::{InstrStop, Interpreter, Message, MessageKind, MessageResult, Word},
 };
-use mega_evm2::{MegaSpec, MegaTypes, ledger::*};
+use mega_evm2::{MegaTypes, ledger::*};
 use op_evm2::{OpTxEnvelope, TxDeposit};
 use scenarios::{Scenario, record, record::hex};
 
@@ -318,15 +318,23 @@ fn evm_under(
     reads: Rc<RefCell<Reads>>,
     rules: &[ReferenceRule],
 ) -> Evm<'static, MegaTypes> {
-    // The node's simulation switches (`Scenario::skip_nonce_check`, `skip_eip3607`).
-    let mut version = mega_evm2::satin_version_under(rules);
-    if s.skip_nonce_check {
-        version.features.remove(evm2::EvmFeatures::NONCE_CHECK);
-    }
-    if s.skip_eip3607 {
-        version.features.remove(evm2::EvmFeatures::EIP3607);
-    }
-    let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, version);
+    // The node's simulation switches (`Scenario::skip_nonce_check`, `skip_eip3607`), and a
+    // scenario's own limits: a test's explicit override of Satin's (`TxLimits::SATIN`), as the
+    // reference's harness overrides its spec's limits.
+    let simulation = mega_evm2::factory::Simulation {
+        skip_nonce_check: s.skip_nonce_check,
+        skip_eip3607: s.skip_eip3607,
+        limits: Some(mega_evm2::TxLimits {
+            tx: [
+                s.limits.data.unwrap_or(DEFAULT_LIMITS[0]),
+                s.limits.kv.unwrap_or(DEFAULT_LIMITS[1]),
+                s.limits.growth.unwrap_or(DEFAULT_LIMITS[2]),
+            ],
+            cap: s.limits.block_env_cap.unwrap_or(DEFAULT_DETENTION_CAP),
+            oracle_cap: s.limits.oracle_cap.unwrap_or(mega_evm2::TxLimits::SATIN.oracle_cap),
+        }),
+        reference_rules: rules.to_vec(),
+    };
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
@@ -335,28 +343,12 @@ fn evm_under(
         beneficiary: s.beneficiary,
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        mega_evm2::tx::registry(),
-        evm2::evm::Db::new(RecordingDb { inner: db(s), reads }),
-        mega_evm2::precompiles(),
-    );
-    // Read storage of an account the database lacks, as revm does.
-    evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
+    let database = evm2::evm::Db::new(RecordingDb { inner: db(s), reads });
+    // The scenarios sign for the chain id of Satin's version as the engine defines it.
+    let mut evm = crate::replay::factory(mega_evm2::satin_version().chain_id)
+        .simulated_evm(block, database, &simulation)
+        .expect("a Satin block");
     let ext = evm.ext_mut();
-    // A scenario's own limits are a test's explicit override of Satin's (`TxLimits::SATIN`), as
-    // the reference's harness overrides its spec's limits.
-    ext.limits = mega_evm2::TxLimits {
-        tx: [
-            s.limits.data.unwrap_or(DEFAULT_LIMITS[0]),
-            s.limits.kv.unwrap_or(DEFAULT_LIMITS[1]),
-            s.limits.growth.unwrap_or(DEFAULT_LIMITS[2]),
-        ],
-        cap: s.limits.block_env_cap.unwrap_or(DEFAULT_DETENTION_CAP),
-        oracle_cap: s.limits.oracle_cap.unwrap_or(mega_evm2::TxLimits::SATIN.oracle_cap),
-    };
     for (k, v) in &s.oracle {
         ext.cfg.oracle.insert(U256::from(*k), U256::from(*v));
     }
@@ -491,7 +483,6 @@ pub fn runs_under(s: &Scenario, rules: &[ReferenceRule]) -> (Value, Value) {
 fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
     let reads = Rc::new(RefCell::new(Reads::default()));
     let mut evm = evm_under(s, reads.clone(), rules);
-    evm.ext_mut().reference_rules = rules.to_vec();
     let mut block_accounts = Map::new();
     let mut block_storage = Map::new();
     // A run under Satin's rule is checked for the regular-gas invariant, every transaction of it;

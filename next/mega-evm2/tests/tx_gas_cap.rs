@@ -4,6 +4,8 @@
 //! Each transaction-type test declares a gas limit of 2^32 and calls a contract that stores 1 in
 //! slot 0, so an accepted transaction is also seen to execute.
 
+mod common;
+
 use alloy_consensus::{
     SignableTransaction, TxEip1559, TxEip2930, TxEip7702, TxLegacy, transaction::Recovered,
 };
@@ -13,17 +15,17 @@ use alloy_eips::{
 };
 use alloy_primitives::{Address, B256, Bytes, Signature, TxKind, U256, hex, keccak256};
 use evm2::{
-    Evm, ExecutionConfig, TxResult,
+    Evm, TxResult,
     bytecode::Bytecode,
     env::BlockEnv,
     ethereum::LazyTxEip7702,
     evm::{AccountInfo, Db, InMemoryDB},
 };
 use mega_evm2::{
-    MegaSpec, MegaTypes, SEQUENCER_REGISTRY,
-    block::BlockExecutor,
-    precompiles, satin_version,
-    tx::{ORACLE, SEQUENCER_REGISTRY_CODE_HASH, registry},
+    MegaTypes, SEQUENCER_REGISTRY,
+    block::BlockSession,
+    error::{CandidateError, Disposition, Refusal},
+    tx::{ORACLE, SEQUENCER_REGISTRY_CODE_HASH},
 };
 use op_evm2::{OpTxEnvelope, TxDeposit};
 
@@ -79,24 +81,19 @@ fn db_with_system_address() -> InMemoryDB {
 
 /// A Satin EVM over `db`, configured as the replay configures a node.
 fn satin_evm(db: InMemoryDB, block_gas_limit: u64) -> Evm<'static, MegaTypes> {
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(block_gas_limit),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
-    evm
+    common::evm(block, Db::new(db))
+}
+
+/// A consensus block session over [`db`] with a block gas limit of `block_gas_limit`.
+fn block(block_gas_limit: u64) -> BlockSession<'static> {
+    let input = common::block_input(1, 1_000, block_gas_limit, Some(B256::ZERO));
+    common::start_block(&input, Db::new(db()))
 }
 
 fn signature() -> Signature {
@@ -260,11 +257,19 @@ fn test_system_address_tx_above_total_cap_executes() {
 
 #[test]
 fn test_block_refuses_gas_limit_above_block_gas_limit() {
-    let mut block = BlockExecutor::new(satin_evm(db(), ABOVE_TOTAL_CAP), B256::ZERO, None);
+    let mut block = block(ABOVE_TOTAL_CAP);
     let tx = legacy(ABOVE_TOTAL_CAP + 1);
-    let error = block.run_transaction(&tx, &encoded(&tx)).unwrap_err();
+    let error = block.execute_candidate(&tx, &encoded(&tx)).unwrap_err();
     assert_eq!(
         error,
+        CandidateError::Refused(Refusal::BlockGasLimit {
+            gas_limit: ABOVE_TOTAL_CAP + 1,
+            available: ABOVE_TOTAL_CAP
+        })
+    );
+    assert_eq!(error.disposition(), Disposition::Refused);
+    assert_eq!(
+        error.to_string(),
         "transaction gas limit 4294967297 is more than blocks available gas 4294967296"
     );
 }
@@ -273,12 +278,12 @@ fn test_block_refuses_gas_limit_above_block_gas_limit() {
 /// transaction that declares all of it.
 #[test]
 fn test_block_includes_gas_limit_equal_to_block_gas_limit_above_total_cap() {
-    let mut block = BlockExecutor::new(satin_evm(db(), ABOVE_TOTAL_CAP), B256::ZERO, None);
+    let mut block = block(ABOVE_TOTAL_CAP);
     let tx = legacy(ABOVE_TOTAL_CAP);
-    let executed = block.run_transaction(&tx, &encoded(&tx)).unwrap();
+    let executed = block.execute_candidate(&tx, &encoded(&tx)).unwrap();
     assert!(executed.result.status, "{:?}", executed.result);
-    block.commit_transaction_outcome(executed).unwrap();
-    assert_eq!(block.receipts.len(), 1);
-    assert!(block.receipts[0].status);
-    assert_eq!(slot_zero(&mut block.evm, TARGET), U256::from(1));
+    block.commit_candidate(executed).unwrap();
+    assert_eq!(block.receipts().len(), 1);
+    assert!(block.receipts()[0].status);
+    assert_eq!(common::committed_slot(&block, TARGET, U256::ZERO), Some(U256::from(1)));
 }

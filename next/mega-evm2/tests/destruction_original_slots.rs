@@ -8,16 +8,18 @@
 //! an access list only pre-warms), so the test loads it as a tool does: an inspector reads it from
 //! its `log` hook, at a LOG0 the factory emits right before its CREATE2.
 
+mod common;
+
 use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, Log, Signature, TxKind, U256, keccak256};
 use evm2::{
-    Evm, ExecutionConfig,
+    Evm,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     inspector::Inspector,
 };
-use mega_evm2::{MegaSpec, MegaTypes, WRITE_RECORD_SIZE, precompiles, satin_version, tx::registry};
+use mega_evm2::{MegaTypes, WRITE_RECORD_SIZE};
 use op_evm2::OpTxEnvelope;
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -80,23 +82,13 @@ fn run(writes: bool, tool_load: bool) -> [u64; 4] {
     // The address the factory creates onto: nonce zero, no code, slot `SLOT` = 7.
     db.insert_account_info(&address, AccountInfo::default());
     db.insert_account_storage(&address, &U256::from(SLOT), &U256::from(7));
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(10_000_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
+    let mut evm = common::evm(block, Db::new(db));
     if tool_load {
         evm.set_inspector(ToolLoad(address));
     }

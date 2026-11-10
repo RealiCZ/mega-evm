@@ -12,13 +12,13 @@ mod common;
 use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, Bytes, Signature, TxKind, U256, keccak256};
 use evm2::{
-    Evm, ExecutionConfig, TxResult,
+    Evm, TxResult,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     interpreter::InstrStop,
 };
-use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
+use mega_evm2::MegaTypes;
 use op_evm2::OpTxEnvelope;
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -65,8 +65,6 @@ fn caller_of_child() -> Vec<u8> {
 const CHILD: Address = Address::with_last_byte(0xc0);
 
 fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
@@ -74,16 +72,7 @@ fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
         beneficiary: BENEFICIARY,
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
-    evm
+    common::evm(block, Db::new(db))
 }
 
 /// Runs a transaction to [`CALLER`] whose CALL of [`TARGET`] returns into `ret_offset`.

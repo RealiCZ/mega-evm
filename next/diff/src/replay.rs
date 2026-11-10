@@ -17,13 +17,18 @@ use alloy_eips::Decodable2718;
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
 use blockdb::{BlockDb, EMPTY_CODE_HASH, Header, addr, b256, bytes, u64v, u256};
 use evm2::{
-    Evm, ExecutionConfig,
+    Evm,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Database},
     interpreter::Word,
 };
-use mega_evm2::{MegaSpec, MegaTypes, ledger::*};
+use mega_evm2::{
+    MegaTypes,
+    chain::{BootstrapInput, ChainConfig},
+    factory::{BlockHeader, BlockInput, ParentContext, SatinFactory, Simulation},
+    ledger::*,
+};
 use op_evm2::{OpTxEnvelope, TxDeposit};
 use serde_json::{Map, Value, json};
 use std::{cell::RefCell, collections::HashMap, convert::Infallible, rc::Rc};
@@ -103,30 +108,71 @@ pub fn new_evm(h: &Header, chain_id: u64, db: Evm2Db) -> Evm<'static, MegaTypes>
     new_evm_under(h, chain_id, db, &[])
 }
 
+/// The chain the gates execute the recorded blocks on: Satin and every fork below it active from
+/// genesis (so every recorded block is a Satin block in which nothing activates), the recorded
+/// block's chain id, and placeholder registry bootstrap values (no recorded block deploys the
+/// registry).
+pub fn gate_chain(chain_id: u64) -> ChainConfig {
+    let bootstrap = BootstrapInput {
+        initial_sequencer: Some(Address::repeat_byte(0x5e)),
+        initial_admin: Some(Address::repeat_byte(0xad)),
+        min_rotation_delay: Some(1),
+    };
+    ChainConfig::satin_from_genesis(chain_id, bootstrap).expect("the gate chain is valid")
+}
+
+/// The engine's factory on [`gate_chain`].
+pub fn factory(chain_id: u64) -> SatinFactory {
+    SatinFactory::new(gate_chain(chain_id))
+}
+
+/// The simulation of the reference's `rules` (`Lite::reference_rules`), `None` for Satin's.
+pub fn simulation_under(rules: &[ReferenceRule]) -> Option<Simulation> {
+    (!rules.is_empty())
+        .then(|| Simulation { reference_rules: rules.to_vec(), ..Simulation::default() })
+}
+
+/// The recorded block's input: its header and its parent. The recording does not carry the
+/// parent's timestamp; on [`gate_chain`], where every fork is active from genesis, no parent
+/// timestamp changes what the block's activation is, and the second before the block is used.
+pub fn block_input(h: &Header) -> BlockInput {
+    BlockInput {
+        header: BlockHeader {
+            number: h.number,
+            timestamp: h.timestamp,
+            beneficiary: h.beneficiary,
+            gas_limit: h.gas_limit,
+            base_fee: h.base_fee,
+            difficulty: h.difficulty,
+            prevrandao: h.mix_hash,
+            excess_blob_gas: h.excess_blob_gas,
+            parent_hash: h.parent_hash,
+            parent_beacon_block_root: h.parent_beacon_block_root,
+        },
+        parent: ParentContext::Parent {
+            number: h.number - 1,
+            hash: h.parent_hash,
+            timestamp: h.timestamp.saturating_sub(1),
+        },
+    }
+}
+
 /// [`new_evm`] with the engine under the reference's `rules` (`Lite::reference_rules`), whose
-/// version [`mega_evm2::satin_version_under`] builds.
+/// version [`mega_evm2::satin_version_under`] builds: the factory's simulation of them, Satin's
+/// own EVM when there are none.
 pub fn new_evm_under(
     h: &Header,
     chain_id: u64,
     db: Evm2Db,
     rules: &[ReferenceRule],
 ) -> Evm<'static, MegaTypes> {
-    let mut version = mega_evm2::satin_version_under(rules);
-    version.chain_id = chain_id;
-    let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, version);
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block_env(h),
-        mega_evm2::tx::registry(),
-        evm2::evm::Db::new(db),
-        mega_evm2::precompiles(),
-    );
-    // Read storage of an account the database lacks, as revm does.
-    // Satin's limits and detention caps are the engine's defaults (`TxLimits::SATIN`).
-    evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
-    evm.ext_mut().reference_rules = rules.to_vec();
-    evm
+    let factory = factory(chain_id);
+    let db = evm2::evm::Db::new(db);
+    match simulation_under(rules) {
+        None => factory.evm(block_env(h), db),
+        Some(simulation) => factory.simulated_evm(block_env(h), db, &simulation),
+    }
+    .expect("a Satin block")
 }
 
 /// The transaction the Satin side recorded: its 2718 bytes for every non-deposit (an Ethereum

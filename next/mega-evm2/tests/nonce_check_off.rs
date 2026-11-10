@@ -5,18 +5,20 @@
 //! at the envelope nonce's address. A creation from a sender whose nonce cannot be bumped
 //! (`2^64 − 1`) creates nothing and succeeds, as revm answers it.
 
+mod common;
+
 use alloy_consensus::{
     SignableTransaction, TxEip1559, TxEip2930, TxLegacy, transaction::Recovered,
 };
 use alloy_primitives::{Address, Bytes, Signature, TxKind, U256};
 use evm2::{
-    Evm, EvmFeatures, ExecutionConfig, TxResult,
+    Evm, TxResult,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     interpreter::InstrStop,
 };
-use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
+use mega_evm2::{MegaTypes, factory::Simulation};
 use op_evm2::OpTxEnvelope;
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -46,23 +48,14 @@ fn db(occupied: bool) -> InMemoryDB {
 
 /// A Satin EVM without the nonce check.
 fn evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
-    let mut version = satin_version();
-    version.features.remove(EvmFeatures::NONCE_CHECK);
-    let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, version);
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
     };
-    Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    )
+    let simulation = Simulation { skip_nonce_check: true, ..Simulation::default() };
+    common::simulated_evm(block, Db::new(db), &simulation)
 }
 
 /// A creation of envelope type `ty` (0, 1 or 2) with nonce 0.

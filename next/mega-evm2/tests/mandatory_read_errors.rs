@@ -6,13 +6,16 @@
 //! the envelope; it is never taken for an absent account.
 //!
 //! The differential gates run on infallible databases, so this file covers the error path with a
-//! database adapter that fails those reads.
+//! database adapter that fails those reads. A block session runs its pre-block sequence before it
+//! is returned, so a test of a transaction's read arms the failure once the session has started.
+
+mod common;
 
 use alloy_consensus::{TxEip1559, TxEip2930, TxEip7702, TxLegacy, transaction::Recovered};
 use alloy_eips::eip7702::{Authorization, SignedAuthorization};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256, hex, keccak256};
 use evm2::{
-    DatabaseError, Evm, ExecutionConfig,
+    DatabaseError, Evm,
     bytecode::Bytecode,
     env::BlockEnv,
     ethereum::LazyTxEip7702,
@@ -21,12 +24,14 @@ use evm2::{
     registry::HandlerError,
 };
 use mega_evm2::{
-    MegaSpec, MegaTypes, SEQUENCER_REGISTRY,
-    block::BlockExecutor,
-    precompiles, satin_version,
-    tx::{SEQUENCER_REGISTRY_CODE_HASH, registry},
+    MegaTypes, SEQUENCER_REGISTRY,
+    block::BlockSession,
+    error::{BlockError, CandidateError, Disposition, Phase},
+    factory::BlockServices,
+    tx::SEQUENCER_REGISTRY_CODE_HASH,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit, constants::L1_BLOCK_CONTRACT};
+use std::{cell::Cell, rc::Rc};
 
 const SENDER: Address = Address::with_last_byte(0x50);
 /// Stores 1 in slot 0.
@@ -64,6 +69,8 @@ struct RegistryBackend {
     inner: InMemoryDB,
     fail: Fail,
     sender_reads: usize,
+    /// Whether the reads `fail` names fail yet.
+    armed: Rc<Cell<bool>>,
 }
 
 impl RegistryBackend {
@@ -94,7 +101,7 @@ impl RegistryBackend {
         inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::from(0x77));
         inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::from(1));
         inner.insert_account_info(&L1_BLOCK_CONTRACT, AccountInfo::default().with_nonce(1));
-        Self { inner, fail, sender_reads: 0 }
+        Self { inner, fail, sender_reads: 0, armed: Rc::new(Cell::new(true)) }
     }
 
     fn unavailable() -> DatabaseError {
@@ -106,6 +113,9 @@ impl Database for RegistryBackend {
     type Error = DatabaseError;
 
     fn get_account(&mut self, address: &Address) -> Result<Option<AccountInfo>, Self::Error> {
+        if !self.armed.get() {
+            return self.inner.get_account(address);
+        }
         if *address == SENDER {
             self.sender_reads += 1;
             if matches!(self.fail, Fail::SenderRead(n) if n == self.sender_reads) {
@@ -125,6 +135,9 @@ impl Database for RegistryBackend {
     }
 
     fn get_storage(&mut self, address: &Address, key: &Word) -> Result<Word, Self::Error> {
+        if !self.armed.get() {
+            return self.inner.get_storage(address, key);
+        }
         if matches!(self.fail, Fail::Storage) && *address == SEQUENCER_REGISTRY ||
             matches!(self.fail, Fail::L1Storage) && *address == L1_BLOCK_CONTRACT
         {
@@ -139,24 +152,42 @@ impl Database for RegistryBackend {
 }
 
 fn satin_evm(fail: Fail) -> Evm<'static, MegaTypes> {
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(RegistryBackend::new(fail)),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
-    evm
+    common::evm(block, Db::new(RegistryBackend::new(fail)))
+}
+
+/// Block 1 over a backend that fails the reads `fail` names: from the start when `armed`,
+/// otherwise once the returned switch is set.
+fn start_block(
+    fail: Fail,
+    armed: bool,
+) -> (Result<BlockSession<'static>, BlockError>, Rc<Cell<bool>>) {
+    start_block_over(RegistryBackend::new(fail), armed)
+}
+
+fn start_block_over(
+    backend: RegistryBackend,
+    armed: bool,
+) -> (Result<BlockSession<'static>, BlockError>, Rc<Cell<bool>>) {
+    let switch = backend.armed.clone();
+    switch.set(armed);
+    let input = common::block_input(1, 1_000, 30_000_000, Some(B256::repeat_byte(0x11)));
+    let block = common::factory().start_block(&input, Db::new(backend), BlockServices::default());
+    (block, switch)
+}
+
+/// The database error a block-level failure carries is the backend's own, its fatality kept.
+fn assert_unavailable_block(name: &str, error: &BlockError) {
+    let e =
+        error.database_error().unwrap_or_else(|| panic!("{name}: no database error: {error:?}"));
+    assert!(e.downcast_ref::<Unavailable>().is_some(), "{name}: {e:?}");
+    assert!(e.is_fatal(), "{name}");
+    assert!(error.to_string().contains("Unavailable"), "{name}: {error}");
 }
 
 /// One transaction of every envelope the engine handles, from [`SENDER`] to [`TARGET`].
@@ -274,15 +305,27 @@ fn test_unreadable_registry_account_fails_every_envelope() {
 }
 
 /// A block decides whether a transaction is a Mega System Transaction off the registry before it
-/// runs it: an unreadable registry fails the transaction, its envelope whatever it is.
+/// runs it: an unreadable registry fails the transaction, its envelope whatever it is. The
+/// pre-block due-change read has put the registry's account into the block's state, so the read
+/// that can still fail is its slot 0's, with no role change due (which would write it).
 #[test]
 fn test_block_fails_a_transaction_on_an_unreadable_registry() {
-    for fail in [Fail::Account, Fail::Storage] {
+    for fail in [Fail::Storage] {
         let (name, tx) = every_envelope().remove(0);
-        let mut block = BlockExecutor::new(satin_evm(fail), B256::ZERO, None);
-        let error = block.run_transaction(&tx, &[]).err();
+        let mut backend = RegistryBackend::new(fail);
+        backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::ZERO);
+        backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::ZERO);
+        let (block, armed) = start_block_over(backend, false);
+        let mut block = block.expect("the block starts");
+        armed.set(true);
+        let error = block.execute_candidate(&tx, &[]).err();
         let error = error.unwrap_or_else(|| panic!("{name} {fail:?}: executed"));
-        assert!(error.contains("Unavailable"), "{fail:?}: {error}");
+        let CandidateError::Block(fault) = &error else { panic!("{fail:?}: {error:?}") };
+        assert_eq!(fault.phase(), Phase::SystemAddressResolution, "{fail:?}");
+        assert_eq!(fault.disposition(), Disposition::Internal, "{fail:?}");
+        assert_eq!(fault.context().address, Some(SEQUENCER_REGISTRY), "{fail:?}");
+        assert_unavailable_block(name, fault);
+        assert_eq!(block.fault(), Some(fault), "the session keeps the failure");
     }
 }
 
@@ -291,12 +334,16 @@ fn test_block_fails_a_transaction_on_an_unreadable_registry() {
 #[test]
 fn test_pre_block_step_fails_on_an_unreadable_registry() {
     for fail in [Fail::Account, Fail::Storage] {
-        let mut block = BlockExecutor::new(satin_evm(fail), B256::ZERO, None);
-        let error = block.registry_due().expect_err("an unreadable registry is no answer");
-        assert!(error.contains("Unavailable"), "{fail:?}: {error}");
+        let error = start_block(fail, true).0.err().expect("an unreadable registry is no answer");
+        assert_eq!(error.phase(), Phase::DueChangeRead, "{fail:?}");
+        assert_eq!(error.disposition(), Disposition::Internal, "{fail:?}");
+        assert_eq!(error.context().address, Some(SEQUENCER_REGISTRY), "{fail:?}");
+        assert_unavailable_block("registry", &error);
     }
-    let mut block = BlockExecutor::new(satin_evm(Fail::Nothing), B256::ZERO, None);
-    assert_eq!(block.registry_due(), Ok(true), "the control: a change is due");
+    // The control: a change is due, so the sequence calls `applyPendingChanges()` between the
+    // registry's read-only state and the L1 block info's.
+    let block = start_block(Fail::Nothing, true).0.expect("the block starts");
+    assert_eq!(block.pre_block_states().len(), 5, "the control: a change is due");
 }
 
 /// A transaction other than a deposit reads the L1Block account, then its slots, before it is
@@ -323,10 +370,11 @@ fn test_unreadable_l1_block_fails_every_envelope_but_a_deposit() {
 fn test_pre_block_step_fails_on_an_unreadable_l1_block() {
     for fail in [Fail::L1Account, Fail::L1Storage] {
         // A parent beacon block root: a block without one is refused before the L1 read.
-        let root = Some(B256::repeat_byte(0x11));
-        let mut block = BlockExecutor::new(satin_evm(fail), B256::ZERO, root);
-        let error = block.apply_pre_execution_changes().expect_err("an unreadable L1 block info");
-        assert!(error.contains("Unavailable"), "{fail:?}: {error}");
+        let error = start_block(fail, true).0.err().expect("an unreadable L1 block info");
+        assert_eq!(error.phase(), Phase::L1BlockInfoRead, "{fail:?}");
+        assert_eq!(error.disposition(), Disposition::Internal, "{fail:?}");
+        assert_eq!(error.context().address, Some(L1_BLOCK_CONTRACT), "{fail:?}");
+        assert_unavailable_block("L1 block info", &error);
     }
 }
 
@@ -345,9 +393,13 @@ fn test_deposit_sender_read_error_is_internal() {
 fn test_block_deposit_sender_read_error_has_no_outcome() {
     let (_, tx) = every_envelope().pop().unwrap();
     // The accepted overlay caches a successful first read, so fail the block's sender read.
-    let mut block = BlockExecutor::new(satin_evm(Fail::SenderRead(1)), B256::ZERO, None);
-    let error = block.run_transaction(&tx, &[]).expect_err("no deposit outcome");
-    assert!(error.contains("Unavailable"), "{error}");
-    assert!(block.receipts.is_empty());
-    assert_eq!(block.limiter.block_gas_used, 0);
+    let mut block = start_block(Fail::SenderRead(1), true).0.expect("the block starts");
+    let error = block.execute_candidate(&tx, &[]).expect_err("no deposit outcome");
+    let CandidateError::Block(fault) = &error else { panic!("{error:?}") };
+    assert_eq!(fault.phase(), Phase::Bookkeeping);
+    assert_eq!(fault.disposition(), Disposition::Internal);
+    assert_eq!(fault.context().address, Some(SENDER));
+    assert_unavailable_block("deposit sender", fault);
+    assert!(block.receipts().is_empty());
+    assert_eq!(block.limiter().block_gas_used, 0);
 }

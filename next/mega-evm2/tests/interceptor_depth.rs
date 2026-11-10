@@ -4,17 +4,16 @@
 //! execution cap (a frame at depth 1,024 has less than one gas), so the hook is called directly,
 //! at the deepest depth a frame may have and one past it.
 
+mod common;
+
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use evm2::{
-    Evm, ExecutionConfig, MessageHooks,
+    Evm, MessageHooks,
     env::BlockEnv,
     evm::{Db, InMemoryDB},
     interpreter::{InstrStop, Message, MessageKind},
 };
-use mega_evm2::{
-    MegaSpec, MegaTypes, ORACLE, StartHooks, intercept::LIMIT_CONTROL, precompiles, satin_version,
-    tx::registry,
-};
+use mega_evm2::{MegaTypes, ORACLE, StartHooks, intercept::LIMIT_CONTROL};
 
 const SENDER: Address = Address::with_last_byte(0x50);
 const CALLER: Address = Address::with_last_byte(0xa0);
@@ -23,22 +22,13 @@ const ACCESS_CONTROL: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x04]);
 
 fn satin_evm() -> Evm<'static, MegaTypes> {
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(InMemoryDB::default()),
-        precompiles(),
-    );
+    let mut evm = common::evm(block, Db::new(InMemoryDB::default()));
     evm.ext_mut().begin_tx(SENDER, 310, true, false);
     evm
 }

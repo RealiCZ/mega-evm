@@ -1,18 +1,16 @@
 //! Each pre-block step returns its own whole state, including read-only witness entries.
+
+mod common;
+
 use alloy_primitives::{B256, Bytes, U256, hex};
 use evm2::{
-    Evm, ExecutionConfig,
     bytecode::Bytecode,
-    env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
 };
-use mega_evm2::{
-    MegaSpec, MegaTypes, SEQUENCER_REGISTRY, block::BlockExecutor, precompiles, satin_version,
-    tx::registry,
-};
+use mega_evm2::{SEQUENCER_REGISTRY, block::BlockSession};
 use op_evm2::constants::L1_BLOCK_CONTRACT;
 
-fn block(present: bool, due: bool) -> BlockExecutor<'static> {
+fn block(present: bool, due: bool) -> BlockSession<'static> {
     let mut db = InMemoryDB::default();
     if present {
         // applyPendingChanges clears slot 7; the preceding read-only state must still hold 77.
@@ -35,33 +33,16 @@ fn block(present: bool, due: bool) -> BlockExecutor<'static> {
             );
         }
     }
-    let config = ExecutionConfig::for_spec_and_version(MegaSpec::Satin, satin_version());
-    let env = BlockEnv::<MegaTypes> {
-        number: U256::from(1),
-        timestamp: U256::from(1000),
-        gas_limit: U256::from(30_000_000),
-        ..Default::default()
-    };
-    let evm = Evm::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        env,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    BlockExecutor::new(evm, B256::ZERO, Some(B256::ZERO))
+    let input = common::block_input(1, 1_000, 30_000_000, Some(B256::ZERO));
+    common::start_block(&input, Db::new(db))
 }
 
 #[test]
 fn test_read_only_pre_block_states_are_committed_in_order() {
     for due in [false, true] {
+        // The session runs the pre-block sequence before it is returned.
         let mut block = block(true, due);
-        // A cached due-check result still needs a complete read-only state during pre-block.
-        assert_eq!(block.registry_due().unwrap(), due);
-        assert!(block.pre_block_states.is_empty());
-        block.apply_pre_execution_changes().unwrap();
-        let states = &block.pre_block_states;
+        let states = block.pre_block_states().to_vec();
         assert_eq!(states.len(), if due { 5 } else { 4 }, "due={due}");
         assert!(states[0].account_changes_for(&mega_evm2::block::HISTORY_STORAGE).is_some());
         assert!(states[1].account_changes_for(&mega_evm2::block::BEACON_ROOTS).is_some());
@@ -83,18 +64,19 @@ fn test_read_only_pre_block_states_are_committed_in_order() {
             assert_eq!(value.current, U256::from(slot * 10));
             assert_eq!(value.original, value.current);
         }
-        assert_eq!(block.limiter.block_gas_used, 0);
-        assert_eq!(block.limiter.usage, [0; 3]);
+        assert_eq!(block.limiter().block_gas_used, 0);
+        assert_eq!(block.limiter().usage, [0; 3]);
+        // A due change was applied: none is due any more.
+        assert_eq!(block.registry_due(), Ok(false));
     }
 }
 
 #[test]
 fn test_absent_pre_block_accounts_are_recorded_without_slots() {
-    let mut block = block(false, false);
-    block.apply_pre_execution_changes().unwrap();
-    assert_eq!(block.pre_block_states.len(), 4);
+    let block = block(false, false);
+    assert_eq!(block.pre_block_states().len(), 4);
     for (index, address) in [(2, SEQUENCER_REGISTRY), (3, L1_BLOCK_CONTRACT)] {
-        let read = block.pre_block_states[index]
+        let read = block.pre_block_states()[index]
             .account_changes_for(&address)
             .expect("absent account recorded");
         assert!(read.original.is_none());

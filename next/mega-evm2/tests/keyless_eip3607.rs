@@ -8,17 +8,19 @@
 //! on and off. The expected outcomes are the Satin implementation's under review for the same
 //! input, the off case with `CfgEnv::disable_eip3607` set.
 
+mod common;
+
 use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256, address, hex, keccak256};
 use evm2::{
-    DatabaseError, Evm, EvmFeatures, ExecutionConfig,
+    DatabaseError, Evm,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Database, Db, InMemoryDB},
     interpreter::{InstrStop, Word},
     registry::HandlerError,
 };
-use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
+use mega_evm2::{MegaTypes, factory::Simulation};
 use op_evm2::OpTxEnvelope;
 
 /// The gate scenarios' sender.
@@ -120,11 +122,7 @@ impl Database for Backend {
 /// The gate's engine for the scenario: Satin's version, with EIP-3607 removed when `eip3607` is
 /// false, the default limits and caps.
 fn satin_evm(eip3607: bool, backend: Backend) -> Evm<'static, MegaTypes> {
-    let mut version = satin_version();
-    if !eip3607 {
-        version.features.remove(EvmFeatures::EIP3607);
-    }
-    let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, version);
+    let simulation = Simulation { skip_eip3607: !eip3607, ..Simulation::default() };
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
@@ -132,16 +130,7 @@ fn satin_evm(eip3607: bool, backend: Backend) -> Evm<'static, MegaTypes> {
         slot_num: U256::from(42),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(backend),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
-    evm
+    common::simulated_evm(block, Db::new(backend), &simulation)
 }
 
 fn keyless_tx() -> Recovered<OpTxEnvelope> {

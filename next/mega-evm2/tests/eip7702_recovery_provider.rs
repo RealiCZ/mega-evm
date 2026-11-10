@@ -3,11 +3,13 @@
 //!
 //! The provider is process-wide and set once, so this test lives in its own binary.
 
+mod common;
+
 use alloy_consensus::{TxEip7702, transaction::Recovered};
 use alloy_eips::eip7702::{Authorization, SignedAuthorization, constants::SECP256K1N_HALF};
 use alloy_primitives::{Address, Bytes, U256};
 use evm2::{
-    Crypto, Evm, ExecutionConfig, PrecompileHalt,
+    Crypto, PrecompileHalt,
     bytecode::Bytecode,
     env::BlockEnv,
     ethereum::LazyTxEip7702,
@@ -15,7 +17,7 @@ use evm2::{
     install_crypto,
     interpreter::InstrStop,
 };
-use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
+use mega_evm2::MegaTypes;
 use op_evm2::OpTxEnvelope;
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -58,23 +60,13 @@ fn test_authorities_are_recovered_by_the_installed_provider() {
         &DELEGATE,
         AccountInfo::default().with_code(Bytecode::new_legacy(Bytes::from_static(&[0x00]))),
     );
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
+    let mut evm = common::evm(block, Db::new(db));
     // The provider recovers AUTHORITY from all three entries. The first applies at nonce 0; the
     // second (an `s` above secp256k1n/2) and the third (a y-parity of 2) would apply at nonce 1,
     // but both are refused before the provider is asked.

@@ -1,17 +1,20 @@
 //! System-transaction sender validation follows the same configuration as user validation.
 //! The differential scenario format cannot disable nonce validation or EIP-3607.
+mod common;
+
 use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, Bytes, TxKind, U256, hex};
 use evm2::{
-    Evm, EvmFeatures, ExecutionConfig,
+    Evm, EvmFeatures,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     registry::HandlerError,
 };
 use mega_evm2::{
-    MegaSpec, MegaTypes, SEQUENCER_REGISTRY, precompiles, satin_version,
-    tx::{MEGA_SYSTEM_TRANSACTION_SOURCE_HASH, ORACLE, registry},
+    MegaTypes, SEQUENCER_REGISTRY,
+    factory::Simulation,
+    tx::{MEGA_SYSTEM_TRANSACTION_SOURCE_HASH, ORACLE},
 };
 use op_evm2::{OpTxEnvelope, TxDeposit};
 
@@ -38,18 +41,16 @@ fn evm(disabled: EvmFeatures, code: &[u8]) -> Evm<'static, MegaTypes> {
         &U256::ZERO,
         &U256::from_be_slice(SYSTEM.as_slice()),
     );
-    let mut version = satin_version();
-    version.features.remove(disabled);
-    let config = ExecutionConfig::for_spec_and_version(MegaSpec::Satin, version);
+    // The simulation's switches of a node's configuration: the nonce check and EIP-3607.
+    let switches = EvmFeatures::NONCE_CHECK | EvmFeatures::EIP3607;
+    assert!(switches.contains(disabled), "only the simulation's switches can be off");
+    let simulation = Simulation {
+        skip_nonce_check: disabled.contains(EvmFeatures::NONCE_CHECK),
+        skip_eip3607: disabled.contains(EvmFeatures::EIP3607),
+        ..Simulation::default()
+    };
     let block = BlockEnv::<MegaTypes> { gas_limit: U256::from(30_000_000), ..Default::default() };
-    Evm::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    )
+    common::simulated_evm(block, Db::new(db), &simulation)
 }
 
 fn tx(nonce: u64, chain_id: Option<u64>) -> Recovered<OpTxEnvelope> {

@@ -2,7 +2,7 @@
 
 use alloy_consensus::transaction::Recovered;
 use alloy_primitives::Bytes;
-use mega_evm2::block::BlockExecutor;
+use mega_evm2::factory::BlockServices;
 use mega_evm2_diff::replay::{self, Evm2Db, blockdb};
 use op_evm2::OpTxEnvelope;
 use std::{
@@ -21,20 +21,19 @@ fn run(
     txs: &[(Recovered<OpTxEnvelope>, Bytes)],
 ) -> (Duration, usize, usize, u64) {
     let db = Rc::new(RefCell::new(bench_blocks::fresh_db(block)));
-    let evm = replay::new_evm(
-        &block.header,
-        block.chain_id,
-        Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) },
-    );
-    let mut executor =
-        BlockExecutor::new(evm, block.header.parent_hash, block.header.parent_beacon_block_root);
+    let database =
+        evm2::evm::Db::new(Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) });
+    let factory = replay::factory(block.chain_id);
+    let input = replay::block_input(&block.header);
     let mut refused = 0;
+    // The session runs the pre-block sequence as it starts, so the timing starts before it.
     let start = Instant::now();
-    executor.apply_pre_execution_changes().expect("pre-block changes");
+    let mut executor =
+        factory.start_block(&input, database, BlockServices::default()).expect("pre-block changes");
     for (tx, raw) in txs {
-        match executor.run_transaction(tx, raw) {
+        match executor.execute_candidate(tx, raw) {
             Ok(outcome) => {
-                if executor.commit_transaction_outcome(outcome).is_err() {
+                if executor.commit_candidate(outcome).is_err() {
                     refused += 1;
                 }
             }
@@ -43,7 +42,7 @@ fn run(
     }
     black_box(&executor);
     let elapsed = start.elapsed();
-    (elapsed, executor.receipts.len(), refused, executor.limiter.block_gas_used)
+    (elapsed, executor.receipts().len(), refused, executor.limiter().block_gas_used)
 }
 
 fn main() {

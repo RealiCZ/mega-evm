@@ -3,18 +3,17 @@
 //! deposit nor a Mega System Transaction (`SATIN-ORCL-005`; a system call's reads are
 //! `system_call_oracle.rs`'s).
 
+mod common;
+
 use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256, hex};
 use evm2::{
-    Evm, ExecutionConfig,
+    Evm,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
 };
-use mega_evm2::{
-    MegaSpec, MegaTypes, SEQUENCER_REGISTRY, precompiles, satin_version,
-    tx::{ORACLE, registry},
-};
+use mega_evm2::{MegaTypes, SEQUENCER_REGISTRY, tx::ORACLE};
 use op_evm2::{OpTxEnvelope, TxDeposit};
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -28,23 +27,13 @@ fn code(c: &[u8]) -> AccountInfo {
 }
 
 fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
+    let mut evm = common::evm(block, Db::new(db));
     evm.ext_mut().cfg.oracle.insert(U256::from(5), U256::from(ANSWER));
     evm
 }

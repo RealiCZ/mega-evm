@@ -1,15 +1,16 @@
 //! `SLOTNUM` pushes zero in every block, whatever slot number the block environment carries:
 //! MegaETH has no slot.
 
+mod common;
+
 use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, Bytes, Signature, TxKind, U256};
 use evm2::{
-    Evm, ExecutionConfig,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
 };
-use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
+use mega_evm2::MegaTypes;
 use op_evm2::OpTxEnvelope;
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -28,8 +29,6 @@ fn test_slotnum_pushes_zero() {
         &CONTRACT,
         AccountInfo::default().with_code(Bytecode::new_legacy(Bytes::copy_from_slice(&code))),
     );
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
@@ -37,14 +36,7 @@ fn test_slotnum_pushes_zero() {
         slot_num: U256::from(42),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
+    let mut evm = common::evm(block, Db::new(db));
     let tx = TxLegacy {
         chain_id: Some(1),
         gas_limit: 1_000_000,

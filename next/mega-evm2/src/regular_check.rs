@@ -501,13 +501,14 @@ mod tests {
 #[cfg(test)]
 mod catches {
     use crate::{
-        MegaSpec, MegaTypes, ReferenceRule, precompiles, satin_version, satin_version_under,
-        tx::registry,
+        MegaTypes, ReferenceRule,
+        chain::{BootstrapInput, ChainConfig},
+        factory::{SatinFactory, Simulation},
     };
     use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
     use alloy_primitives::{Address, Bytes, Signature, TxKind, U256};
     use evm2::{
-        Evm, ExecutionConfig, Version,
+        Evm,
         bytecode::Bytecode,
         env::BlockEnv,
         evm::{AccountInfo, Db, InMemoryDB},
@@ -560,25 +561,43 @@ mod catches {
         }
     }
 
-    /// A Satin EVM over `db` running `version`.
+    /// The version a case runs: Satin's, or the one [`crate::satin_version_under`] builds for
+    /// rules of the reference.
+    #[derive(Clone, Copy)]
+    enum Version {
+        Satin,
+        Under(&'static [ReferenceRule]),
+    }
+
+    /// A Satin EVM over `db` running `version`. A version under rules of the reference is the
+    /// factory's simulation of them, with the engine's own record of the rules then cleared: the
+    /// version breaks Satin's give-back rule while the engine runs as if it did not, the defect
+    /// the check must catch.
     fn satin_evm(db: InMemoryDB, version: Version) -> Evm<'static, MegaTypes> {
-        let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, version);
+        let bootstrap = BootstrapInput {
+            initial_sequencer: Some(Address::repeat_byte(0x5e)),
+            initial_admin: Some(Address::repeat_byte(0xad)),
+            min_rotation_delay: Some(1),
+        };
+        let factory =
+            SatinFactory::new(ChainConfig::satin_from_genesis(1, bootstrap).expect("valid"));
         let block = BlockEnv::<MegaTypes> {
             number: U256::from(1),
             timestamp: U256::from(1_000),
             gas_limit: U256::from(10_000_000_000u64),
             ..BlockEnv::<MegaTypes>::default()
         };
-        let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-            config,
-            MegaSpec::Satin,
-            block,
-            registry(),
-            Db::new(db),
-            precompiles(),
-        );
-        evm.state_mut().set_read_absent_storage(true);
-        evm
+        match version {
+            Version::Satin => factory.evm(block, Db::new(db)).expect("a Satin block"),
+            Version::Under(rules) => {
+                let simulation =
+                    Simulation { reference_rules: rules.to_vec(), ..Simulation::default() };
+                let mut evm =
+                    factory.simulated_evm(block, Db::new(db), &simulation).expect("a Satin block");
+                evm.ext_mut().reference_rules.clear();
+                evm
+            }
+        }
     }
 
     /// Runs a call of TOP with a gas limit below the execution cap (no reservoir) under `version`,
@@ -632,15 +651,10 @@ mod catches {
         top.extend(call_c(true));
         top.push(STOP);
         let c = [PUSH0, PUSH0, SSTORE, STOP];
-        let clean = violations(&top, &c, satin_version(), false, None);
+        let clean = violations(&top, &c, Version::Satin, false, None);
         assert!(clean.is_empty(), "{clean:?}");
-        let found = violations(
-            &top,
-            &c,
-            satin_version_under(&[ReferenceRule::Eip8037GiveBack]),
-            true,
-            None,
-        );
+        let found =
+            violations(&top, &c, Version::Under(&[ReferenceRule::Eip8037GiveBack]), true, None);
         assert!(found.iter().any(|v| v.starts_with("child merge: regular")), "{found:?}");
     }
 
@@ -654,7 +668,7 @@ mod catches {
         top.extend(call_c(true));
         top.push(STOP);
         let c = [PUSH0, PUSH0, SSTORE, PUSH0, PUSH0, REVERT];
-        let found = violations(&top, &c, satin_version(), false, None);
+        let found = violations(&top, &c, Version::Satin, false, None);
         assert!(found.is_empty(), "{found:?}");
     }
 
@@ -667,15 +681,10 @@ mod catches {
         let mut top = call_c(false);
         top.push(STOP);
         let c = [PUSH1, 1, PUSH0, SSTORE, PUSH0, PUSH0, REVERT];
-        let clean = violations(&top, &c, satin_version(), false, None);
+        let clean = violations(&top, &c, Version::Satin, false, None);
         assert!(clean.is_empty(), "{clean:?}");
-        let found = violations(
-            &top,
-            &c,
-            satin_version_under(&[ReferenceRule::Eip8037GiveBack]),
-            true,
-            None,
-        );
+        let found =
+            violations(&top, &c, Version::Under(&[ReferenceRule::Eip8037GiveBack]), true, None);
         assert!(found.iter().any(|v| v.starts_with("frame end: regular")), "{found:?}");
     }
 
@@ -686,12 +695,12 @@ mod catches {
         let mut top = call_c(false);
         top.push(STOP);
         let c = [PUSH1, 1, POP, STOP];
-        let clean = violations(&top, &c, satin_version(), false, None);
+        let clean = violations(&top, &c, Version::Satin, false, None);
         assert!(clean.is_empty(), "{clean:?}");
         let found = violations(
             &top,
             &c,
-            satin_version(),
+            Version::Satin,
             false,
             Some(|r| r.gas.set_reservoir(r.gas.reservoir() + 200)),
         );
@@ -708,7 +717,7 @@ mod catches {
         let found = violations(
             &top,
             &c,
-            satin_version(),
+            Version::Satin,
             false,
             Some(|r| {
                 r.gas.set_reservoir(r.gas.reservoir() + 200);
@@ -733,7 +742,7 @@ mod catches {
     fn invariant_catches_answer_converts_reservoir() {
         let run = |regular: u64, reservoir: u64| {
             use crate::regular_check::{on_forward, on_frame_built, on_merged, on_message_end};
-            let mut evm = satin_evm(InMemoryDB::default(), satin_version());
+            let mut evm = satin_evm(InMemoryDB::default(), Version::Satin);
             let caller =
                 Message::<MegaTypes> { gas_limit: 1_000, reservoir: 1_000, ..Default::default() };
             let mut gas = GasTracker::new_with_execution_gas_and_reservoir(1_000, 1_000);
