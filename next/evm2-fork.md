@@ -4,7 +4,7 @@
 `evm2-fork.env` holds the pin (`EVM2_FORK_REPO`, `EVM2_FORK_REV`); it is the only place CI reads it from.
 The series sits on upstream `e0d398a6`, upstream `main` on 2026-11-10, which has merged two patches of the earlier series ([#1023](https://github.com/alloy-rs/evm2/pull/1023) and [#1025](https://github.com/alloy-rs/evm2/pull/1025), see [Merged upstream](#merged-upstream)) and recovers EIP-7702 authorities with the installed crypto provider ([#963](https://github.com/alloy-rs/evm2/pull/963)).
 The earlier series sat on `85395c54`, the evm2 revision reth's pull request #28276 moves reth to; until the node moves to `e0d398a6` or later, the node and the engine run different evm2 revisions.
-The earlier series, branches `cz/feat/thin-fork` at `91576d1e`, `cz/feat/thin-fork-v2` at `28e20011` and `cz/wip/thin-fork-up`, are left as they were, so earlier pins still resolve.
+The earlier series, branches `cz/feat/thin-fork` at `91576d1e` and `cz/feat/thin-fork-v2` at `28e20011`, are left as they were, so earlier pins still resolve.
 
 A patch exists only when the engine needs something evm2 cannot give it from outside: data from inside evm2's own flow, or a hook point.
 Every patch keeps stock behavior as its default, and each says what upstream change would let it go.
