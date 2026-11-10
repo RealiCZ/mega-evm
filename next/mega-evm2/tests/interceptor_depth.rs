@@ -57,7 +57,7 @@ fn call(target: Address, input: Vec<u8>, depth: u16) -> Message<MegaTypes> {
         call_target: target,
         code_address: target,
         caller: CALLER,
-        input: Bytes::from(input),
+        input: Bytes::from(input).into(),
         ..Default::default()
     }
 }

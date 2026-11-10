@@ -370,7 +370,7 @@ mod tests {
         );
         let precompile = op_precompile_map(spec).get(&address).expect("installed");
         let message = Message::<OpEvmTypes> {
-            input: input.to_vec().into(),
+            input: alloy_primitives::Bytes::copy_from_slice(input).into(),
             code_address: address,
             ..Default::default()
         };

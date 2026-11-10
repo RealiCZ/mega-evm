@@ -365,7 +365,7 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
     message.call_target = deploy;
     message.caller = signer;
     message.code = Bytecode::new_legacy(tx.input.clone());
-    message.input = tx.input.clone();
+    message.input = tx.input.clone().into();
     message.value = tx.value;
     message.code_address = signer;
     message.caller_is_static = false;
