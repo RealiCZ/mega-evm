@@ -311,6 +311,17 @@ fn hints() -> Vec<Scenario> {
             .build();
         v.push(par(name, rules, vec![funded(A, a, 10), acct(ORACLE, oracle)], BELOW_CAP));
     }
+    // A value `CALL` requesting no gas starts on the call's stipend: its hint is admitted.
+    let a = mem_call(Asm::new(), op::CALL, ORACLE, 1, 0, &send_hint(7, &[0xaa]))
+        .record_call(1)
+        .stop()
+        .build();
+    v.push(par(
+        "par_hint_with_value_no_gas",
+        rules,
+        vec![funded(A, a, 10), acct(ORACLE, vec![op::STOP])],
+        BELOW_CAP,
+    ));
     // A legacy transaction with the 164 bytes of `sendHint(7, 0xab × 64)` pays 67,740 before its
     // first frame: its intrinsic gas, its body's history and the transfer's record.
     let top = &["SATIN-ORCL-006", "SATIN-ORCL-007", "SATIN-ORCL-009", "SATIN-FWD-003"];

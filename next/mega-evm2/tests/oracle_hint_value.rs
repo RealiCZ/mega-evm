@@ -1,8 +1,8 @@
 //! A `sendHint` call is admitted whether it carries value or not (`SATIN-ORCL-006`): forwarded
 //! some gas from a frame whose volatile-data access is on, its hint is counted on the transaction
 //! and forwarded to the oracle service, a value-bearing call's included, though the Oracle's
-//! non-payable method then reverts it. A value call's stipend is not forwarded gas; a
-//! transaction's own `sendHint` has no stipend, and is forwarded its first frame's whole gas.
+//! non-payable method then reverts it. A value call's stipend counts as its gas; a
+//! transaction's own `sendHint` has no stipend, and is judged on its first frame's whole gas.
 
 mod common;
 
@@ -75,20 +75,28 @@ fn test_a_hint_with_value_is_admitted_forwarded_and_counted() {
     }
 }
 
-/// A call forwarded no gas is not admitted, with value or without: a value call's 2,300 stipend is
-/// not forwarded gas (`SATIN-DET-010`), so a `sendHint` sent with value and no gas runs the
-/// Oracle's code on its stipend alone and counts nothing.
+/// A call that requests no gas and carries no value starts on no gas and is not admitted. A value
+/// call that requests none starts on the call's stipend, as revm adds it to the message's gas
+/// limit, so its hint is admitted, counted and forwarded (`SATIN-ORCL-006`), as the same call
+/// requesting gas.
 #[test]
-fn test_a_hint_forwarded_no_gas_is_not_admitted_whatever_its_value() {
-    for value in [0u8, 1] {
-        let (db, _) = hint_call(value, 0);
-        let mut evm = satin_evm(db);
-        let r = run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000);
-        assert!(r.success, "{value}");
-        let m = &evm.ext().mechanisms;
-        assert_eq!(m.hint_bytes, 0, "no hint counted, value {value}");
-        assert!(m.hints.is_empty(), "no hint forwarded, value {value}");
-    }
+fn test_a_value_hint_requesting_no_gas_starts_on_the_stipend_and_is_admitted() {
+    let (db, len) = hint_call(0, 0);
+    let mut evm = satin_evm(db);
+    let r = run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000);
+    assert!(r.success);
+    let m = &evm.ext().mechanisms;
+    assert_eq!(m.hint_bytes, 0, "no hint counted without value");
+    assert!(m.hints.is_empty(), "no hint forwarded without value");
+
+    let (db, len_v) = hint_call(1, 0);
+    let mut evm = satin_evm(db);
+    let r = run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000);
+    assert!(r.success);
+    let m = &evm.ext().mechanisms;
+    assert_eq!(m.hint_bytes, len_v as u64, "the hint counted on the stipend alone");
+    assert_eq!(m.hints.len(), 1, "the hint forwarded");
+    assert_eq!(len, len_v);
 }
 
 /// The Oracle's deployed code, version 2.0.0, whose `sendHint` is not payable.

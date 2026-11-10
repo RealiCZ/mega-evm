@@ -177,7 +177,7 @@ signoff = "owner decision 2026-11-09 (SATIN-ICPT-006)"
 # A sendHint is admitted whether it carries value or not.
 [[class]]
 name = "hint_with_value"
-why = "SATIN-ORCL-006 and SATIN-ICPT-003: a sendHint call forwarded some gas from a frame whose access is on is admitted, forwarded and counted whether it carries value or not; a value CALL's stipend is not forwarded gas, and a transaction's own sendHint, which has none, is forwarded its first frame's whole gas. The other implementation still refuses a hint that carries value and has not made this change yet. A case is of this class only when the engine, run again with that condition, has no difference from the reference at all."
+why = "SATIN-ORCL-006 and SATIN-ICPT-003: a sendHint call forwarded some gas from a frame whose access is on is admitted, forwarded and counted whether it carries value or not; the gas is the message's gas limit as the frame starts, so a value CALL's stipend counts (a value CALL requesting no gas is admitted) and a transaction's own sendHint, which has none, is judged on its first frame's whole gas. The other implementation still refuses a hint that carries value and has not made this change yet. A case is of this class only when the engine, run again with that condition, has no difference from the reference at all."
 signoff = "owner decision 2026-11-09 (SATIN-ORCL-006)"
 
 # A Mega System Transaction is held to the block's packing budgets.
