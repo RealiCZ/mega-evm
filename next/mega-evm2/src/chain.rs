@@ -327,7 +327,7 @@ pub enum Engine {
 pub struct Activation {
     engine: Engine,
     satin_activates: bool,
-    only_deposits: bool,
+    deposits_only: bool,
     block_zero: bool,
 }
 
@@ -343,8 +343,8 @@ impl Activation {
 
     /// Whether the block admits only deposits: Satin, or an OP fork at or after Jovian, activates
     /// in it (`SATIN-BASE-006`).
-    pub const fn only_deposits(&self) -> bool {
-        self.only_deposits
+    pub const fn deposits_only(&self) -> bool {
+        self.deposits_only
     }
 
     /// Whether the block is block zero, which has no parent.
@@ -517,12 +517,12 @@ impl ChainConfig {
     pub fn activation(&self, timestamp: u64, parent: Option<u64>) -> Activation {
         let s = &self.schedule;
         let satin_activates = s.activates(Fork::Satin, timestamp, parent);
-        let only_deposits = satin_activates ||
+        let deposits_only = satin_activates ||
             Fork::DEPOSIT_ONLY_OP.into_iter().any(|fork| s.activates(fork, timestamp, parent));
         Activation {
             engine: self.engine_at(timestamp),
             satin_activates,
-            only_deposits,
+            deposits_only,
             block_zero: parent.is_none(),
         }
     }

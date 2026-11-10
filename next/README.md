@@ -38,15 +38,28 @@ cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads
 Every gate script refuses to run when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set, so an inherited selection cannot narrow an official run; a direct `cargo test -p mega-evm2-diff` with such a variable prints `PARTIAL GATE` lines and is for debugging.
 Each script extracts its inputs afresh into its own directory under `<target>/mega-evm2-diff/`, so different scripts can run at the same time; do not run one script twice at once on the same cargo target.
 
+## Chain configuration, factory and block session
+
+`mega_evm2::chain::ChainConfig` is the validated chain configuration every consumer builds the engine from: the chain id, the fork schedule, the genesis timestamp and the `SequencerRegistry`'s bootstrap values.
+`ChainConfig::from_genesis_json` and `from_config_json` read the genesis file's text; `ChainConfig::new` validates an in-memory configuration the same way.
+`satinTime` is read exactly from the JSON text (no floating-point step); a key starting with `satin` in any ASCII case that is not `satinTime` is refused; a repeated key is read as its last copy.
+A configuration that schedules Satin must schedule the Mega ladder below it in non-decreasing order, have every base fork active at `satinTime` and carry non-zero `rex5InitialSequencer`, `rex5InitialAdmin` and `rex6MinRotationDelay`.
+`ChainConfig::protocol` exports the protocol values every Satin block executes on, for readers that need them before execution.
+
+`mega_evm2::factory::SatinFactory` makes every EVM the engine runs, with Satin's version, the configured chain id, the transaction limits, the transaction registry and the precompiles installed.
+`SatinFactory::start_block` checks a block's input against its parent context and the schedule, derives whether the block is block zero, whether Satin activates in it and whether it admits only deposits, runs its pre-block sequence and returns a `BlockSession`; `SatinFactory::evm` makes a single transaction's EVM.
+Simulations use the separately named `start_simulated_block` and `simulated_evm` with the switches of a `Simulation`.
+Errors are typed (`mega_evm2::error`): each block-level error carries its phase, its context and what it decides about the block; a session that meets one that decides the block executes nothing after it and cannot finish.
+
 ## State and witness exports
 
-`BlockExecutor::pre_block_states` retains each complete pre-block state in commit order, including read-only and absent-account entries.
+`BlockSession::pre_block_states` retains each complete pre-block state in commit order, including read-only and absent-account entries.
 The registry due-change read is a separate state before its optional application call; the L1 block account and its five slots are the last state.
-A witness collector must consume these states and each transaction's `Executed::pending` before reducing them to changed entries.
+A witness collector must consume these states and each transaction's `Candidate::pending` before reducing them to changed entries.
 A failed deposit keeps its loaded accounts and slots in that returned state while undoing every write except its sender's nonce bump and mint.
 
-With feature `witness`, `BlockExecutor::bucket_reads` exports the union of valid SALT capacity lookups made by this block execution, including candidates that were dropped or aborted after an earlier successful lookup.
-The set starts empty for each executor; committing a transaction executed elsewhere adds no lookup to it.
+With feature `witness`, `BlockSession::bucket_reads` exports the union of valid SALT capacity lookups made by this block execution, including candidates that were dropped or aborted after an earlier successful lookup.
+The set starts empty for each session; committing a transaction executed by another session of the same block adds no lookup to it.
 The per-transaction `Lite::bucket_reads` remains available for integrations that collect their own union.
 
 ## Coverage and mutation testing in CI

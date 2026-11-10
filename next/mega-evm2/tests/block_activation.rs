@@ -126,12 +126,12 @@ fn input_error(result: Result<BlockSession<'static>, BlockError>) -> InputError 
 }
 
 #[test]
-fn chain_config_activation_block_admits_only_deposits() {
+fn chain_config_activation_block_admits_deposits_only() {
     let factory = factory(1, 0, 100, &[]);
     // Satin activates in the block at 100 whose parent is at 99: deposits only.
     let mut block = start(&factory, &child(5, 100, 99), db()).expect("the block starts");
     assert!(block.activation().satin_activates());
-    assert!(block.activation().only_deposits());
+    assert!(block.activation().deposits_only());
     let error = block.execute_candidate(&legacy(1), &[]).expect_err("a user transaction");
     assert_eq!(error, CandidateError::Refused(Refusal::OnlyDeposits));
     assert_eq!(error.disposition(), Disposition::Refused);
@@ -141,14 +141,14 @@ fn chain_config_activation_block_admits_only_deposits() {
     assert!(block.fault().is_none(), "a refusal decides nothing about the block by itself");
     // The next block admits every transaction.
     let mut next = start(&factory, &child(6, 101, 100), db()).expect("the block starts");
-    assert!(!next.activation().satin_activates() && !next.activation().only_deposits());
+    assert!(!next.activation().satin_activates() && !next.activation().deposits_only());
     let out = next.execute_candidate(&legacy(1), &[]).expect("a user transaction");
     assert!(out.result.status, "{:?}", out.result);
     // An OP fork at or after Jovian activating in a Satin block: deposits only, no Satin
     // activation (here a fork the engine has no rules for, which then fails the block itself).
     let factory = self::factory(1, 0, 0, &[(Fork::Lagoon, 200)]);
     let activation = factory.config().activation(200, Some(199));
-    assert!(activation.only_deposits() && !activation.satin_activates());
+    assert!(activation.deposits_only() && !activation.satin_activates());
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn chain_config_block_zero_skips_the_eip_calls() {
     let block =
         start(&factory, &zero(Some(B256::ZERO)), failing.clone()).expect("block zero starts");
     assert!(block.activation().block_zero());
-    assert!(!block.activation().satin_activates() && !block.activation().only_deposits());
+    assert!(!block.activation().satin_activates() && !block.activation().deposits_only());
     let states = block.pre_block_states();
     assert_eq!(states.len(), 2, "the registry's and the L1 block info's read-only states");
     for state in states {
@@ -205,7 +205,8 @@ fn chain_config_refuses_a_block_the_legacy_engine_executes() {
     assert_eq!(error, InputError::NotSatin { timestamp: 99, satin_time: Some(100) });
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(99), ..BlockEnv::<MegaTypes>::default() };
-    let error = factory.evm(env, Db::new(db())).err().expect("no Satin EVM before satinTime");
+    let error =
+        factory.evm(env, Db::new(db())).map(drop).expect_err("no Satin EVM before satinTime");
     assert_eq!(
         error.kind(),
         &BlockErrorKind::Input(InputError::NotSatin { timestamp: 99, satin_time: Some(100) })

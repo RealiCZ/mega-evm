@@ -452,10 +452,10 @@ fn chain_config_genesis_active_satin_has_no_activation_block() {
     assert_eq!(config.engine_at(100), Engine::Satin);
     // Block zero has no parent: no fork activates in it, and it admits every transaction.
     let zero = config.activation(100, None);
-    assert!(zero.block_zero() && !zero.satin_activates() && !zero.only_deposits());
+    assert!(zero.block_zero() && !zero.satin_activates() && !zero.deposits_only());
     // Block one, on a parent at the genesis timestamp, is no activation block either.
     let one = config.activation(101, Some(100));
-    assert!(!one.block_zero() && !one.satin_activates() && !one.only_deposits());
+    assert!(!one.block_zero() && !one.satin_activates() && !one.deposits_only());
     // Satin exactly at the genesis timestamp, and at zero, are genesis-active too.
     for (satin, genesis) in [(100, 100), (0, 0)] {
         let config = ChainConfig::from_config_json(&Members::satin(0, satin).json(), genesis);
@@ -483,7 +483,7 @@ fn chain_config_activation_follows_the_parent_timestamp_across_gaps() {
         let a = config.activation(timestamp, Some(parent));
         assert_eq!(a.engine(), Engine::Satin);
         assert_eq!(a.satin_activates(), activates, "{timestamp} on {parent}");
-        assert_eq!(a.only_deposits(), activates, "{timestamp} on {parent}");
+        assert_eq!(a.deposits_only(), activates, "{timestamp} on {parent}");
     }
     // Before satinTime the legacy engine runs, and Satin activates in no such block.
     let before = config.activation(99, Some(98));
@@ -492,23 +492,23 @@ fn chain_config_activation_follows_the_parent_timestamp_across_gaps() {
 }
 
 #[test]
-fn chain_config_op_fork_activation_admits_only_deposits() {
+fn chain_config_op_fork_activation_admits_deposits_only() {
     // Jovian and Karst activating with Satin: one deposit-only block.
     let config = Members::satin(0, 100).with("jovianTime", "100").with("karstTime", "100").read();
     let a = config.unwrap().activation(100, Some(99));
-    assert!(a.satin_activates() && a.only_deposits());
+    assert!(a.satin_activates() && a.deposits_only());
     // Karst activating at Satin's block on a chain where Satin activates in it, Jovian earlier.
     let config = Members::satin(0, 100).with("karstTime", "100").read().unwrap();
-    assert!(config.activation(100, Some(99)).only_deposits());
+    assert!(config.activation(100, Some(99)).deposits_only());
     // A later OP fork activating after Satin: deposit-only, though Satin does not activate.
     let config = Members::satin(0, 100).with("lagoonTime", "200").read().unwrap();
     let a = config.activation(200, Some(199));
-    assert!(!a.satin_activates() && a.only_deposits());
-    assert!(!config.activation(201, Some(200)).only_deposits());
+    assert!(!a.satin_activates() && a.deposits_only());
+    assert!(!config.activation(201, Some(200)).deposits_only());
     // An OP fork before Jovian activating admits every transaction (Holocene at a Satin block is
     // impossible: it is a base fork, active by satinTime); a fork not scheduled never activates.
     let config = Members::satin(0, 0).read().unwrap();
-    assert!(!config.activation(1, Some(0)).only_deposits());
+    assert!(!config.activation(1, Some(0)).deposits_only());
     let s = config.schedule();
     assert!(!s.activates(Fork::Lagoon, 1, Some(0)));
 }

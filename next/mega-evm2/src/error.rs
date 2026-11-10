@@ -29,7 +29,7 @@ use crate::{
 };
 use alloy_primitives::{Address, B256, U256};
 use evm2::{DatabaseError, interpreter::InstrStop, registry::HandlerError};
-use std::string::String;
+use std::{boxed::Box, string::String};
 
 /// What a failure decides about the block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -238,9 +238,13 @@ pub enum BlockErrorKind {
     Execution(HandlerError),
 }
 
-/// A failure of a block's execution, with its phase, context and disposition.
+/// A failure of a block's execution, with its phase, context and disposition (boxed: an error is
+/// rare, and a result that may hold one stays small).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BlockError {
+pub struct BlockError(Box<Failure>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Failure {
     kind: BlockErrorKind,
     phase: Phase,
     disposition: Disposition,
@@ -249,24 +253,24 @@ pub struct BlockError {
 
 impl BlockError {
     /// The block's input contradicts its context: no verdict on the block.
-    pub(crate) const fn input(error: InputError) -> Self {
-        Self {
+    pub(crate) fn input(error: InputError) -> Self {
+        Self(Box::new(Failure {
             kind: BlockErrorKind::Input(error),
             phase: Phase::BlockInput,
             disposition: Disposition::Internal,
             context: ErrorContext { address: None, slot: None, bucket: None, transaction: None },
-        }
+        }))
     }
 
     /// A read of the block's own in `phase`: always an internal error, whatever the database
     /// declares (`SATIN-PBLK-006`, `SATIN-REG-007`, `SATIN-VAL-010`).
     pub(crate) fn read(phase: Phase, error: DatabaseError, context: ErrorContext) -> Self {
-        Self {
+        Self(Box::new(Failure {
             kind: BlockErrorKind::Database(error),
             phase,
             disposition: Disposition::Internal,
             context,
-        }
+        }))
     }
 
     /// A pre-block call that failed in execution: a database error declared fatal is internal;
@@ -276,40 +280,40 @@ impl BlockError {
             Some(e) if e.is_fatal() => Disposition::Internal,
             _ => Disposition::InvalidBlock,
         };
-        Self {
+        Self(Box::new(Failure {
             kind: BlockErrorKind::SystemCall { target, error },
             phase: Phase::PreBlockCall,
             disposition,
             context: ErrorContext::account(target),
-        }
+        }))
     }
 
     /// A pre-block call that did not succeed (`SATIN-PBLK-006`).
-    pub(crate) const fn system_call_failed(target: Address, stop: InstrStop) -> Self {
-        Self {
+    pub(crate) fn system_call_failed(target: Address, stop: InstrStop) -> Self {
+        Self(Box::new(Failure {
             kind: BlockErrorKind::SystemCallFailed { target, stop },
             phase: Phase::PreBlockCall,
             disposition: Disposition::InvalidBlock,
             context: ErrorContext::account(target),
-        }
+        }))
     }
 
-    pub(crate) const fn missing_parent_beacon_root(target: Address) -> Self {
-        Self {
+    pub(crate) fn missing_parent_beacon_root(target: Address) -> Self {
+        Self(Box::new(Failure {
             kind: BlockErrorKind::MissingParentBeaconRoot,
             phase: Phase::PreBlockCall,
             disposition: Disposition::InvalidBlock,
             context: ErrorContext::account(target),
-        }
+        }))
     }
 
-    pub(crate) const fn genesis_parent_beacon_root(root: B256) -> Self {
-        Self {
+    pub(crate) fn genesis_parent_beacon_root(root: B256) -> Self {
+        Self(Box::new(Failure {
             kind: BlockErrorKind::GenesisParentBeaconRoot(root),
             phase: Phase::BlockInput,
             disposition: Disposition::InvalidBlock,
             context: ErrorContext { address: None, slot: None, bucket: None, transaction: None },
-        }
+        }))
     }
 
     /// A transaction's execution that failed for a reason that is not the transaction's
@@ -321,33 +325,33 @@ impl BlockError {
             _ => Disposition::Internal,
         };
         let bucket = salt_failure(&error).map(|s| s.bucket);
-        Self {
+        Self(Box::new(Failure {
             kind: BlockErrorKind::Execution(error),
             phase: Phase::Transaction,
             disposition,
             context: ErrorContext { bucket, transaction: Some(tx), ..ErrorContext::default() },
-        }
+        }))
     }
 
-    pub const fn kind(&self) -> &BlockErrorKind {
-        &self.kind
+    pub fn kind(&self) -> &BlockErrorKind {
+        &self.0.kind
     }
 
-    pub const fn phase(&self) -> Phase {
-        self.phase
+    pub fn phase(&self) -> Phase {
+        self.0.phase
     }
 
-    pub const fn disposition(&self) -> Disposition {
-        self.disposition
+    pub fn disposition(&self) -> Disposition {
+        self.0.disposition
     }
 
-    pub const fn context(&self) -> &ErrorContext {
-        &self.context
+    pub fn context(&self) -> &ErrorContext {
+        &self.0.context
     }
 
     /// The database error behind the failure, its type and fatality kept, when there is one.
     pub fn database_error(&self) -> Option<&DatabaseError> {
-        match &self.kind {
+        match &self.0.kind {
             BlockErrorKind::Database(e) => Some(e),
             BlockErrorKind::SystemCall { error, .. } | BlockErrorKind::Execution(error) => {
                 database_error(error)
@@ -356,20 +360,20 @@ impl BlockError {
         }
     }
 
-    pub const fn is_internal(&self) -> bool {
-        matches!(self.disposition, Disposition::Internal)
+    pub fn is_internal(&self) -> bool {
+        matches!(self.0.disposition, Disposition::Internal)
     }
 
-    pub const fn is_invalid_block(&self) -> bool {
-        matches!(self.disposition, Disposition::InvalidBlock)
+    pub fn is_invalid_block(&self) -> bool {
+        matches!(self.0.disposition, Disposition::InvalidBlock)
     }
 }
 
 impl core::fmt::Display for BlockError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match &self.kind {
+        match &self.0.kind {
             BlockErrorKind::Input(e) => write!(f, "{e}"),
-            BlockErrorKind::Database(e) => match self.phase {
+            BlockErrorKind::Database(e) => match self.0.phase {
                 Phase::DueChangeRead | Phase::SystemAddressResolution => {
                     write!(f, "registry read: {e:?}")
                 }
@@ -395,7 +399,7 @@ impl core::fmt::Display for BlockError {
 
 impl core::error::Error for BlockError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        match &self.kind {
+        match &self.0.kind {
             BlockErrorKind::Database(e) => Some(e),
             BlockErrorKind::SystemCall { error, .. } | BlockErrorKind::Execution(error) => {
                 Some(error)
@@ -502,7 +506,7 @@ impl CandidateError {
         }
     }
 
-    pub const fn disposition(&self) -> Disposition {
+    pub fn disposition(&self) -> Disposition {
         match self {
             Self::Refused(_) => Disposition::Refused,
             Self::Stale { .. } | Self::Foreign { .. } => Disposition::Retry,
@@ -604,5 +608,190 @@ fn salt_failure(error: &HandlerError) -> Option<&SaltBelowMinimum> {
     match error {
         HandlerError::Fatal(e) | HandlerError::External(e) => e.downcast_ref(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evm2::{AnyError, ExecutionError, HostError, LoadError};
+
+    #[derive(Debug)]
+    struct Unavailable;
+
+    impl core::fmt::Display for Unavailable {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("unavailable")
+        }
+    }
+
+    impl core::error::Error for Unavailable {}
+
+    fn db(fatal: bool) -> DatabaseError {
+        DatabaseError::new(Unavailable, fatal)
+    }
+
+    fn tx() -> TxContext {
+        TxContext { index: 3, sender: Address::with_last_byte(0x50), ty: 2 }
+    }
+
+    /// Every way evm2 can carry a database error, for a database error of `fatal`.
+    fn carriers(fatal: bool) -> [HandlerError; 7] {
+        [
+            HandlerError::Database(db(fatal)),
+            HandlerError::Fatal(AnyError::new(db(fatal))),
+            HandlerError::Fatal(AnyError::new(ExecutionError::Database(db(fatal)))),
+            HandlerError::Fatal(AnyError::new(ExecutionError::Fatal(AnyError::new(db(fatal))))),
+            HandlerError::External(AnyError::new(HostError::Execution(ExecutionError::Database(
+                db(fatal),
+            )))),
+            HandlerError::Fatal(AnyError::new(LoadError::Database(db(fatal)))),
+            HandlerError::External(AnyError::new(HandlerError::Database(db(fatal)))),
+        ]
+    }
+
+    #[test]
+    fn test_a_database_error_is_found_through_every_wrapper_with_its_fatality() {
+        for fatal in [true, false] {
+            for error in carriers(fatal) {
+                let found = database_error(&error).unwrap_or_else(|| panic!("{error:?}"));
+                assert!(found.downcast_ref::<Unavailable>().is_some(), "{error:?}");
+                assert_eq!(found.is_fatal(), fatal, "{error:?}");
+            }
+        }
+        for error in [
+            HandlerError::Fatal(AnyError::from("not a database error")),
+            HandlerError::External(AnyError::new(crate::satin_ext::Refusal("refused"))),
+            HandlerError::Fatal(AnyError::new(HostError::Halt(InstrStop::OutOfGas))),
+            HandlerError::Fatal(AnyError::new(LoadError::ColdLoadSkipped)),
+            HandlerError::MissingChainId,
+        ] {
+            assert!(database_error(&error).is_none(), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn test_a_pre_block_call_is_routed_by_the_databases_fatality_through_every_wrapper() {
+        let target = Address::with_last_byte(0x35);
+        for fatal in [true, false] {
+            for error in carriers(fatal) {
+                let routed = BlockError::system_call(target, error);
+                let expected =
+                    if fatal { Disposition::Internal } else { Disposition::InvalidBlock };
+                assert_eq!(routed.disposition(), expected, "{routed:?}");
+                assert_eq!(routed.phase(), Phase::PreBlockCall);
+                assert_eq!(routed.context().address, Some(target));
+                assert_eq!(routed.database_error().map(|e| e.is_fatal()), Some(fatal));
+            }
+        }
+        // Any other failure of the call, and a call that does not succeed, invalidate the block.
+        let other = BlockError::system_call(target, HandlerError::Fatal(AnyError::from("x")));
+        assert_eq!(other.disposition(), Disposition::InvalidBlock);
+        assert_eq!(
+            BlockError::system_call_failed(target, InstrStop::Revert).disposition(),
+            Disposition::InvalidBlock
+        );
+        assert_eq!(
+            BlockError::missing_parent_beacon_root(target).disposition(),
+            Disposition::InvalidBlock
+        );
+    }
+
+    #[test]
+    fn test_the_blocks_own_reads_are_internal_whatever_the_fatality() {
+        for phase in [
+            Phase::DueChangeRead,
+            Phase::L1BlockInfoRead,
+            Phase::SystemAddressResolution,
+            Phase::Bookkeeping,
+            Phase::Commit,
+        ] {
+            for fatal in [true, false] {
+                let routed = BlockError::read(phase, db(fatal), ErrorContext::default());
+                assert_eq!(routed.disposition(), Disposition::Internal, "{phase:?} {fatal}");
+                assert_eq!(routed.phase(), phase);
+                assert_eq!(routed.database_error().map(|e| e.is_fatal()), Some(fatal));
+            }
+        }
+    }
+
+    #[test]
+    fn test_a_transactions_failure_is_routed_by_its_cause() {
+        for fatal in [true, false] {
+            for error in carriers(fatal) {
+                let routed = CandidateError::from_execution(error.clone(), tx());
+                let CandidateError::Block(e) = &routed else { panic!("{error:?}: {routed:?}") };
+                let expected =
+                    if fatal { Disposition::Internal } else { Disposition::InvalidBlock };
+                assert_eq!(e.disposition(), expected, "{error:?}");
+                assert_eq!(e.phase(), Phase::Transaction);
+                assert_eq!(e.context().transaction, Some(tx()));
+                assert_eq!(routed.disposition(), expected);
+            }
+        }
+        // A bucket capacity below the minimum, another fatal error: internal.
+        let salt = SaltBelowMinimum { bucket: 9, capacity: 255 };
+        let routed = CandidateError::from_execution(HandlerError::Fatal(AnyError::new(salt)), tx());
+        let CandidateError::Block(e) = &routed else { panic!("{routed:?}") };
+        assert_eq!(e.disposition(), Disposition::Internal);
+        assert_eq!(e.context().bucket, Some(9));
+        assert!(e.database_error().is_none());
+        let fatal = CandidateError::from_execution(HandlerError::Fatal(AnyError::from("x")), tx());
+        assert_eq!(fatal.disposition(), Disposition::Internal);
+        // The transaction's own invalidity refuses it.
+        for error in [
+            HandlerError::InvalidNonce { expected: 1, got: 2 },
+            HandlerError::MissingChainId,
+            HandlerError::External(AnyError::new(crate::satin_ext::Refusal("refused"))),
+        ] {
+            let routed = CandidateError::from_execution(error.clone(), tx());
+            assert_eq!(routed, CandidateError::Refused(Refusal::Transaction(error)));
+            assert_eq!(routed.disposition(), Disposition::Refused);
+        }
+    }
+
+    /// The differential gates classify a refusal by its text: the texts stay the engine's.
+    #[test]
+    fn test_refusal_texts() {
+        let cases = [
+            (
+                Refusal::BlockGasLimit { gas_limit: 7, available: 5 },
+                "transaction gas limit 7 is more than blocks available gas 5",
+            ),
+            (
+                Refusal::Packing { budget: Budget::DataSize, used: 9, limit: 8 },
+                "Block transactions data limit reached: block_used=9 >= limit=8",
+            ),
+            (
+                Refusal::Packing { budget: Budget::KvUpdates, used: 9, limit: 8 },
+                "Block KV update limit reached: block_used=9 >= limit=8",
+            ),
+            (
+                Refusal::Packing { budget: Budget::StateGrowth, used: 9, limit: 8 },
+                "Block state growth limit reached: block_used=9 >= limit=8",
+            ),
+            (
+                Refusal::DaFootprint { footprint: 4, available: 3 },
+                "transaction DA footprint 4 above the block's available 3",
+            ),
+            (Refusal::OnlyDeposits, "unexpected non-deposit transaction in an activation block"),
+            (
+                Refusal::Transaction(HandlerError::InvalidNonce { expected: 1, got: 2 }),
+                "EVM reported invalid transaction: InvalidNonce { expected: 1, got: 2 }",
+            ),
+        ];
+        for (refusal, text) in cases {
+            assert_eq!(refusal.to_string(), text);
+            assert_eq!(CandidateError::Refused(refusal).to_string(), text);
+        }
+        let sender = Address::with_last_byte(0x50);
+        assert_eq!(
+            CandidateError::Stale { sender }.to_string(),
+            format!("stale outcome: sender {sender}")
+        );
+        let read = BlockError::read(Phase::DueChangeRead, db(true), ErrorContext::default());
+        assert!(read.to_string().starts_with("registry read: "), "{read}");
+        let read = BlockError::read(Phase::L1BlockInfoRead, db(true), ErrorContext::default());
+        assert!(read.to_string().starts_with("L1 block info read: "), "{read}");
     }
 }

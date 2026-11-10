@@ -310,23 +310,22 @@ fn test_unreadable_registry_account_fails_every_envelope() {
 /// that can still fail is its slot 0's, with no role change due (which would write it).
 #[test]
 fn test_block_fails_a_transaction_on_an_unreadable_registry() {
-    for fail in [Fail::Storage] {
-        let (name, tx) = every_envelope().remove(0);
-        let mut backend = RegistryBackend::new(fail);
-        backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::ZERO);
-        backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::ZERO);
-        let (block, armed) = start_block_over(backend, false);
-        let mut block = block.expect("the block starts");
-        armed.set(true);
-        let error = block.execute_candidate(&tx, &[]).err();
-        let error = error.unwrap_or_else(|| panic!("{name} {fail:?}: executed"));
-        let CandidateError::Block(fault) = &error else { panic!("{fail:?}: {error:?}") };
-        assert_eq!(fault.phase(), Phase::SystemAddressResolution, "{fail:?}");
-        assert_eq!(fault.disposition(), Disposition::Internal, "{fail:?}");
-        assert_eq!(fault.context().address, Some(SEQUENCER_REGISTRY), "{fail:?}");
-        assert_unavailable_block(name, fault);
-        assert_eq!(block.fault(), Some(fault), "the session keeps the failure");
-    }
+    let fail = Fail::Storage;
+    let (name, tx) = every_envelope().remove(0);
+    let mut backend = RegistryBackend::new(fail);
+    backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::ZERO);
+    backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::ZERO);
+    let (block, armed) = start_block_over(backend, false);
+    let mut block = block.expect("the block starts");
+    armed.set(true);
+    let error = block.execute_candidate(&tx, &[]).err();
+    let error = error.unwrap_or_else(|| panic!("{name} {fail:?}: executed"));
+    let CandidateError::Block(fault) = &error else { panic!("{fail:?}: {error:?}") };
+    assert_eq!(fault.phase(), Phase::SystemAddressResolution, "{fail:?}");
+    assert_eq!(fault.disposition(), Disposition::Internal, "{fail:?}");
+    assert_eq!(fault.context().address, Some(SEQUENCER_REGISTRY), "{fail:?}");
+    assert_unavailable_block(name, fault);
+    assert_eq!(block.fault(), Some(fault), "the session keeps the failure");
 }
 
 /// The pre-block step reads the registry's pending role changes: an unreadable registry fails the

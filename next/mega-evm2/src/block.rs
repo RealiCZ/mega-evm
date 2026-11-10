@@ -364,7 +364,7 @@ impl<'a> BlockSession<'a> {
             // A block without a parent beacon block root is invalid (EIP-4788).
             let root = self
                 .parent_beacon_block_root
-                .ok_or(BlockError::missing_parent_beacon_root(BEACON_ROOTS))?;
+                .ok_or_else(|| BlockError::missing_parent_beacon_root(BEACON_ROOTS))?;
             let state = self.system_call(BEACON_ROOTS, Bytes::from(root.0.to_vec()))?;
             self.commit_pre_block_state(state);
         }
@@ -469,7 +469,7 @@ impl<'a> BlockSession<'a> {
         let is_deposit = env.is_deposit();
         let sender = tx.signer();
         let context = TxContext { index: self.receipts.len(), sender, ty };
-        if self.activation.only_deposits() && !is_deposit {
+        if self.activation.deposits_only() && !is_deposit {
             return Err(Refusal::OnlyDeposits.into());
         }
         // Satin's limits (a simulation's when the session is one), whatever ran before.
