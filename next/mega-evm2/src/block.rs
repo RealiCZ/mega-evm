@@ -125,34 +125,90 @@ pub struct Receipt {
 }
 
 /// An executed, not yet committed transaction (Satin `MegaBlockTxResult`), bound to the block it
-/// ran for.
+/// ran for and to how it ran (under consensus rules or a simulation's). Read-only: a commit takes
+/// the candidate as its session made it.
 #[derive(Debug)]
 pub struct Candidate {
-    pub ty: u8,
-    pub gas_limit: u64,
-    pub tx_size: u64,
-    pub da_size: u64,
-    pub da_footprint: u64,
-    pub is_deposit: bool,
-    pub is_system_transaction: bool,
-    pub sender: Address,
-    pub sender_nonce: u64,
-    pub sender_balance: U256,
-    pub result: TxResult<MegaTypes>,
-    pub pending: PendingState,
-    /// The engine's usage (data size, KV, growth) and ledgers (execution, state, history gas,
-    /// history bytes), read when the transaction ended.
-    pub usage: [u64; 3],
-    pub gas: [u64; 4],
-    /// Receipt gas (`max(spent − refund, floor)`).
-    pub gas_used: u64,
+    ty: u8,
+    gas_limit: u64,
+    tx_size: u64,
+    da_size: u64,
+    da_footprint: u64,
+    is_deposit: bool,
+    is_system_transaction: bool,
+    sender: Address,
+    sender_nonce: u64,
+    sender_balance: U256,
+    result: TxResult<MegaTypes>,
+    pending: PendingState,
+    usage: [u64; 3],
+    gas: [u64; 4],
+    gas_used: u64,
     block: BlockIdentity,
+    simulated: bool,
 }
 
 impl Candidate {
+    /// The transaction's EIP-2718 type.
+    pub const fn ty(&self) -> u8 {
+        self.ty
+    }
+    pub const fn gas_limit(&self) -> u64 {
+        self.gas_limit
+    }
+    /// The transaction's encoded size and its estimated data-availability size, in bytes.
+    pub const fn tx_size(&self) -> u64 {
+        self.tx_size
+    }
+    pub const fn da_size(&self) -> u64 {
+        self.da_size
+    }
+    /// The data-availability footprint it counts against the block's gas limit.
+    pub const fn da_footprint(&self) -> u64 {
+        self.da_footprint
+    }
+    pub const fn is_deposit(&self) -> bool {
+        self.is_deposit
+    }
+    pub const fn is_system_transaction(&self) -> bool {
+        self.is_system_transaction
+    }
+    pub const fn sender(&self) -> Address {
+        self.sender
+    }
+    /// The sender's nonce and balance before it ran, which the commit checks again.
+    pub const fn sender_nonce(&self) -> u64 {
+        self.sender_nonce
+    }
+    pub const fn sender_balance(&self) -> U256 {
+        self.sender_balance
+    }
+    pub const fn result(&self) -> &TxResult<MegaTypes> {
+        &self.result
+    }
+    /// The state it leaves, its read-only entries included.
+    pub const fn pending(&self) -> &PendingState {
+        &self.pending
+    }
+    /// The engine's usage (data size, KV, growth), read when the transaction ended.
+    pub const fn usage(&self) -> [u64; 3] {
+        self.usage
+    }
+    /// The engine's ledgers (execution, state, history gas, history bytes).
+    pub const fn gas(&self) -> [u64; 4] {
+        self.gas
+    }
+    /// Receipt gas (`max(spent − refund, floor)`).
+    pub const fn gas_used(&self) -> u64 {
+        self.gas_used
+    }
     /// The block the candidate ran for.
     pub const fn block(&self) -> BlockIdentity {
         self.block
+    }
+    /// Whether it ran under a simulation's switches.
+    pub const fn is_simulated(&self) -> bool {
+        self.simulated
     }
 }
 
@@ -308,7 +364,14 @@ impl<'a> BlockSession<'a> {
     /// its activation block when one is pending. A read the database cannot serve is an internal
     /// error.
     pub fn registry_due(&mut self) -> Result<bool, BlockError> {
-        self.read_registry_due().map(|(due, _)| due)
+        match self.read_registry_due() {
+            Ok((due, _)) => Ok(due),
+            Err(e) => {
+                // A read that fails decides the block, as during the pre-block sequence.
+                self.fault.get_or_insert_with(|| e.clone());
+                Err(e)
+            }
+        }
     }
 
     fn read_registry_due(&mut self) -> Result<(bool, PendingState), BlockError> {
@@ -535,6 +598,7 @@ impl<'a> BlockSession<'a> {
             gas,
             gas_used,
             block: self.identity,
+            simulated: self.simulation,
         })
     }
 
@@ -548,6 +612,13 @@ impl<'a> BlockSession<'a> {
     fn commit(&mut self, out: Candidate) -> Result<u64, CandidateError> {
         if out.block != self.identity {
             return Err(CandidateError::Foreign { expected: self.identity, found: out.block });
+        }
+        if out.simulated != self.simulation {
+            return Err(CandidateError::OtherRules { simulated: out.simulated });
+        }
+        // The activation policy holds at the commit too, whichever session ran the candidate.
+        if self.activation.deposits_only() && !out.is_deposit {
+            return Err(Refusal::OnlyDeposits.into());
         }
         let exempt = self.packing_exempt(out.is_deposit, out.is_system_transaction);
         self.limiter.pre_execution_check(out.gas_limit, exempt)?;

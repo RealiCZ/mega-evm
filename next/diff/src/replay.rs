@@ -134,7 +134,8 @@ pub fn simulation_under(rules: &[ReferenceRule]) -> Option<Simulation> {
 
 /// The recorded block's input: its header and its parent. The recording does not carry the
 /// parent's timestamp; on [`gate_chain`], where every fork is active from genesis, no parent
-/// timestamp changes what the block's activation is, and the second before the block is used.
+/// timestamp changes what the block's activation is, and the second before the block is used (the
+/// genesis timestamp, zero, for block 1's parent; block zero has none).
 pub fn block_input(h: &Header) -> BlockInput {
     BlockInput {
         header: BlockHeader {
@@ -149,10 +150,14 @@ pub fn block_input(h: &Header) -> BlockInput {
             parent_hash: h.parent_hash,
             parent_beacon_block_root: h.parent_beacon_block_root,
         },
-        parent: ParentContext::Parent {
-            number: h.number - 1,
-            hash: h.parent_hash,
-            timestamp: h.timestamp.saturating_sub(1),
+        parent: match h.number {
+            0 => ParentContext::BlockZero,
+            1 => ParentContext::Parent { number: 0, hash: h.parent_hash, timestamp: 0 },
+            n => ParentContext::Parent {
+                number: n - 1,
+                hash: h.parent_hash,
+                timestamp: h.timestamp.saturating_sub(1),
+            },
         },
     }
 }
@@ -168,11 +173,15 @@ pub fn new_evm_under(
 ) -> Evm<'static, MegaTypes> {
     let factory = factory(chain_id);
     let db = evm2::evm::Db::new(db);
-    match simulation_under(rules) {
+    let mut evm = match simulation_under(rules) {
         None => factory.evm(block_env(h), db),
         Some(simulation) => factory.simulated_evm(block_env(h), db, &simulation),
     }
-    .expect("a Satin block")
+    .expect("a Satin block");
+    // The harness's fixture switch: off, evm2 skips the storage read of an account the database
+    // lacks (the factory has it read, as revm does).
+    evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
+    evm
 }
 
 /// The transaction the Satin side recorded: its 2718 bytes for every non-deposit (an Ethereum
@@ -379,4 +388,47 @@ pub fn registry_due(db: &mut BlockDb, number: u64, slots: [(U256, U256); 2]) -> 
         !db.storage(SEQUENCER_REGISTRY, *pending).is_zero() &&
             U256::from(number) >= db.storage(SEQUENCER_REGISTRY, *activation)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header(number: u64, timestamp: u64) -> Header {
+        Header {
+            number,
+            beneficiary: Address::ZERO,
+            timestamp,
+            gas_limit: 30_000_000,
+            base_fee: 0,
+            difficulty: U256::ZERO,
+            mix_hash: B256::ZERO,
+            excess_blob_gas: 0,
+            parent_hash: B256::repeat_byte(0x01),
+            parent_beacon_block_root: Some(B256::ZERO),
+        }
+    }
+
+    /// Every recorded block starts on the gate chain, block zero and block one included.
+    #[test]
+    fn test_every_recorded_block_has_an_input_the_gate_chain_accepts() {
+        assert_eq!(block_input(&header(0, 0)).parent, ParentContext::BlockZero);
+        assert_eq!(
+            block_input(&header(1, 7)).parent,
+            ParentContext::Parent { number: 0, hash: B256::repeat_byte(0x01), timestamp: 0 }
+        );
+        assert_eq!(
+            block_input(&header(10_108_963, 1_000)).parent,
+            ParentContext::Parent {
+                number: 10_108_962,
+                hash: B256::repeat_byte(0x01),
+                timestamp: 999
+            }
+        );
+        for h in [header(0, 0), header(1, 7), header(10_108_963, 1_000)] {
+            let db = evm2::evm::Db::new(evm2::evm::InMemoryDB::default());
+            let started = factory(1).start_block(&block_input(&h), db, Default::default());
+            assert!(started.is_ok(), "block {}: {:?}", h.number, started.err());
+        }
+    }
 }

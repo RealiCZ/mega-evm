@@ -123,19 +123,19 @@ fn run_block(
                 row["reason"] = json!(e.to_string());
             }
             Ok(out) => {
-                let r = &out.result;
+                let r = out.result();
                 let (status, halt) = driver::status_halt(r);
                 row["status"] = status;
                 row["halt"] = halt;
                 row["output"] = json!(blockdb::hex(&r.output));
                 row["gas_used"] = json!(r.tx_gas_used());
-                row["receipt_gas"] = json!(out.gas_used);
-                row["usage"] = json!(out.usage);
-                row["gas_split"] = json!(out.gas);
-                row["system_tx"] = json!(out.is_system_transaction);
-                row["da_size"] = json!(out.da_size);
-                row["tx_size"] = json!(out.tx_size);
-                row["diff"] = pending_diff(&out.pending);
+                row["receipt_gas"] = json!(out.gas_used());
+                row["usage"] = json!(out.usage());
+                row["gas_split"] = json!(out.gas());
+                row["system_tx"] = json!(out.is_system_transaction());
+                row["da_size"] = json!(out.da_size());
+                row["tx_size"] = json!(out.tx_size());
+                row["diff"] = pending_diff(out.pending());
                 match ex.commit_candidate(out) {
                     Err(e) => {
                         row["status"] = json!("refused_at_commit");

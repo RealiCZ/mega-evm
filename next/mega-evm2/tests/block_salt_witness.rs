@@ -70,7 +70,7 @@ fn test_block_keeps_buckets_from_committed_and_discarded_candidates() {
     for commit in [true, false] {
         let mut block = block(1, false);
         let out = block.execute_candidate(&deposit(WRITER), &[]).unwrap();
-        assert!(out.result.status);
+        assert!(out.result().status);
         if commit {
             block.commit_candidate(out).unwrap();
         } else {

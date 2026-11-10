@@ -174,7 +174,9 @@ impl SatinFactory {
         block: BlockEnv<MegaTypes>,
         database: impl DynDatabase + 'a,
     ) -> Result<Evm<'a, MegaTypes>, BlockError> {
-        self.check_timestamp(block.timestamp.saturating_to())?;
+        let timestamp = u64::try_from(block.timestamp)
+            .map_err(|_| BlockError::input(InputError::TimestampTooLarge))?;
+        self.check_timestamp(timestamp)?;
         Ok(self.build(block, database, None))
     }
 
@@ -185,7 +187,9 @@ impl SatinFactory {
         database: impl DynDatabase + 'a,
         simulation: &Simulation,
     ) -> Result<Evm<'a, MegaTypes>, BlockError> {
-        self.check_timestamp(block.timestamp.saturating_to())?;
+        let timestamp = u64::try_from(block.timestamp)
+            .map_err(|_| BlockError::input(InputError::TimestampTooLarge))?;
+        self.check_timestamp(timestamp)?;
         Ok(self.build(block, database, Some(simulation)))
     }
 
@@ -285,7 +289,7 @@ impl SatinFactory {
             crate::precompiles(),
         );
         // Read storage of an account the database lacks, as revm does: the read set holds it.
-        evm.state_mut().set_read_absent_storage(!crate::off("absent_storage_read"));
+        evm.state_mut().set_read_absent_storage(true);
         let ext = evm.ext_mut();
         ext.limits = simulation.and_then(|s| s.limits).unwrap_or(TxLimits::SATIN);
         #[cfg(feature = "compare")]

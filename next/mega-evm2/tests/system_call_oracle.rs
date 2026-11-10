@@ -74,7 +74,7 @@ fn test_a_transaction_reads_the_oracle_from_the_service() {
     };
     let tx = Recovered::new_unchecked(OpTxEnvelope::new(tx, Some(Bytes::new())), sender);
     let executed = block.execute_candidate(&tx, &[]).expect("the call runs");
-    assert!(executed.result.status, "the call succeeds: {:?}", executed.result.stop);
+    assert!(executed.result().status, "the call succeeds: {:?}", executed.result().stop);
     assert_eq!(block.evm().ext().oracle_reads, 1);
     block.commit_candidate(executed).expect("committed");
     let stored = common::committed_slot(&block, BEACON_ROOTS, U256::ZERO);

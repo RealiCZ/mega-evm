@@ -348,6 +348,9 @@ fn evm_under(
     let mut evm = crate::replay::factory(mega_evm2::satin_version().chain_id)
         .simulated_evm(block, database, &simulation)
         .expect("a Satin block");
+    // The harness's fixture switch: off, evm2 skips the storage read of an account the database
+    // lacks (the factory has it read, as revm does).
+    evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
     let ext = evm.ext_mut();
     for (k, v) in &s.oracle {
         ext.cfg.oracle.insert(U256::from(*k), U256::from(*v));

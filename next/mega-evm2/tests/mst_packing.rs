@@ -123,8 +123,8 @@ fn test_each_reached_budget_refuses_a_transaction_held_to_it() {
 fn test_a_mega_system_transaction_is_held_to_the_packing_budgets() {
     let mut ex = executor();
     let fill = ex.execute_candidate(&deposit(FILLER, 1_000_000_000), &[]).expect("the filler");
-    assert!(fill.result.status, "{:?}", fill.result);
-    assert_eq!(fill.usage[2], BLOCK_BUDGETS[2]);
+    assert!(fill.result().status, "{:?}", fill.result());
+    assert_eq!(fill.usage()[2], BLOCK_BUDGETS[2]);
     ex.commit_candidate(fill).expect("committed");
     let full = Refusal::Packing {
         budget: Budget::StateGrowth,
@@ -143,7 +143,7 @@ fn test_a_mega_system_transaction_is_held_to_the_packing_budgets() {
     let mut ex = executor();
     let tx = legacy(SYSTEM, ORACLE);
     let out = ex.execute_candidate(&tx, &[0u8; 110]).expect("below the budgets");
-    assert!(out.is_system_transaction);
+    assert!(out.is_system_transaction());
     ex.commit_candidate(out).expect("committed");
     assert_eq!(ex.limiter().usage[0], 310);
 }

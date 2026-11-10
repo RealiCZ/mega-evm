@@ -281,7 +281,7 @@ fn test_block_includes_gas_limit_equal_to_block_gas_limit_above_total_cap() {
     let mut block = block(ABOVE_TOTAL_CAP);
     let tx = legacy(ABOVE_TOTAL_CAP);
     let executed = block.execute_candidate(&tx, &encoded(&tx)).unwrap();
-    assert!(executed.result.status, "{:?}", executed.result);
+    assert!(executed.result().status, "{:?}", executed.result());
     block.commit_candidate(executed).unwrap();
     assert_eq!(block.receipts().len(), 1);
     assert!(block.receipts()[0].status);

@@ -274,6 +274,17 @@ fn assert_unavailable(name: &str, error: &HandlerError) {
     }
 }
 
+/// A failed read of the live system address a transaction is classified against: the database's
+/// own error, carried so that no path takes it for a refusal and the block routes it as an internal
+/// error (`SATIN-REG-007`).
+fn assert_registry_unavailable(name: &str, error: &HandlerError) {
+    let failed = mega_evm2::error::system_address_read_failure(error)
+        .unwrap_or_else(|| panic!("{name}: not the classification read: {error:?}"));
+    assert!(failed.0.downcast_ref::<Unavailable>().is_some(), "{name}: {failed:?}");
+    let db = mega_evm2::error::database_error(error).expect("the database error");
+    assert!(db.downcast_ref::<Unavailable>().is_some() && db.is_fatal(), "{name}");
+}
+
 /// The control: with the registry readable, every envelope executes.
 #[test]
 fn test_every_envelope_executes_when_the_registry_is_readable() {
@@ -291,7 +302,7 @@ fn test_unreadable_registry_slot_fails_every_envelope() {
     for (name, tx) in every_envelope() {
         let mut evm = satin_evm(Fail::Storage);
         let error = evm.transact(&tx).err().unwrap_or_else(|| panic!("{name}: executed"));
-        assert_unavailable(name, &error);
+        assert_registry_unavailable(name, &error);
     }
 }
 
@@ -300,7 +311,7 @@ fn test_unreadable_registry_account_fails_every_envelope() {
     for (name, tx) in every_envelope() {
         let mut evm = satin_evm(Fail::Account);
         let error = evm.transact(&tx).err().unwrap_or_else(|| panic!("{name}: executed"));
-        assert_unavailable(name, &error);
+        assert_registry_unavailable(name, &error);
     }
 }
 

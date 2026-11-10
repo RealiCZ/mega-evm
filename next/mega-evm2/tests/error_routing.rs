@@ -288,6 +288,23 @@ fn test_routing_the_live_system_address_read_as_internal_whatever_the_fatality()
     }
 }
 
+/// A deposit is classified inside its validation (the block reads the live system address only
+/// for a non-deposit): its read of the registry's slot 0 is still the resolution's, internal
+/// whatever the database declares, and never a failed deposit.
+#[test]
+fn test_routing_a_deposits_classification_read_as_internal_whatever_the_fatality() {
+    for fatal in [true, false] {
+        let (mut block, plan) = started(true, Read::Storage(SEQUENCER_REGISTRY, 0), fatal);
+        let error = block.execute_candidate(&deposit(TARGET), &[]).expect_err("the read fails");
+        assert_eq!(plan.borrow().served, 1);
+        let fault = assert_decides(block, error);
+        assert_routed(&fault, Phase::SystemAddressResolution, Disposition::Internal, fatal);
+        assert_eq!(fault.context().address, Some(SEQUENCER_REGISTRY));
+        let BlockErrorKind::Execution(cause) = fault.kind() else { panic!("{fault:?}") };
+        assert!(mega_evm2::error::system_address_read_failure(cause).is_some(), "{cause:?}");
+    }
+}
+
 #[test]
 fn test_routing_the_blocks_own_reads_for_a_transaction_as_internal_whatever_the_fatality() {
     for fatal in [true, false] {
@@ -382,12 +399,12 @@ fn test_routing_refusals_and_stale_candidates_decide_nothing() {
 fn test_routing_reverts_halts_and_failed_deposits_are_outcomes() {
     let (mut block, _) = started(true, Read::Account(NOBODY), true);
     let reverted = block.execute_candidate(&legacy(REVERTER), &[]).expect("an outcome");
-    assert!(!reverted.result.status);
+    assert!(!reverted.result().status);
     block.commit_candidate(reverted).expect("committed");
     // A deposit whose gas limit cannot pay its intrinsic gas fails, and is included as failed.
     let tx = deposit_with_gas(TARGET, 1);
     let failed = block.execute_candidate(&tx, &[]).expect("a failed deposit is an outcome");
-    assert!(failed.result.ext.failed_deposit, "{:?}", failed.result);
+    assert!(failed.result().ext.failed_deposit, "{:?}", failed.result());
     block.commit_candidate(failed).expect("committed");
     assert_eq!(block.receipts().len(), 2);
     assert!(block.receipts().iter().all(|r| !r.status));

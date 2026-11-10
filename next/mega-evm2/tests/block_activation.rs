@@ -143,7 +143,7 @@ fn chain_config_activation_block_admits_deposits_only() {
     let mut next = start(&factory, &child(6, 101, 100), db()).expect("the block starts");
     assert!(!next.activation().satin_activates() && !next.activation().deposits_only());
     let out = next.execute_candidate(&legacy(1), &[]).expect("a user transaction");
-    assert!(out.result.status, "{:?}", out.result);
+    assert!(out.result().status, "{:?}", out.result());
     // An OP fork at or after Jovian activating in a Satin block: deposits only, no Satin
     // activation (here a fork the engine has no rules for, which then fails the block itself).
     let factory = self::factory(1, 0, 0, &[(Fork::Lagoon, 200)]);
@@ -290,6 +290,38 @@ fn chain_config_fails_explicitly_under_a_fork_without_rules() {
     assert!(factory.evm(env, Db::new(db())).is_err(), "no single-transaction EVM either");
 }
 
+/// A candidate is committed only by a session of its own block that runs under the same rules,
+/// and the deposit-only rule holds at the commit as at the execution.
+#[test]
+fn chain_config_a_commit_holds_the_candidate_to_the_sessions_rules() {
+    use mega_evm2::factory::Simulation;
+    let factory = factory(1, 0, 0, &[]);
+    let input = child(5, 100, 99);
+    let simulation = Simulation { skip_nonce_check: true, ..Simulation::default() };
+    let mut simulated = factory
+        .start_simulated_block(&input, Db::new(db()), BlockServices::default(), &simulation)
+        .expect("the simulated block starts");
+    let out = simulated.execute_candidate(&legacy(1), &[]).expect("runs");
+    assert!(out.is_simulated());
+    let mut consensus = start(&factory, &input, db()).expect("the block starts");
+    let error = consensus.commit_candidate(out).expect_err("a simulation's outcome");
+    assert_eq!(error, CandidateError::OtherRules { simulated: true });
+    assert_eq!(error.disposition(), Disposition::Retry);
+    let out = consensus.execute_candidate(&legacy(1), &[]).expect("runs");
+    let error = simulated.commit_candidate(out).expect_err("a consensus outcome");
+    assert_eq!(error, CandidateError::OtherRules { simulated: false });
+    assert!(consensus.receipts().is_empty() && simulated.receipts().is_empty());
+    // The same block under a configuration in which Satin activates in it admits only deposits:
+    // a user transaction another session ran is refused at the commit.
+    let crossing = self::factory(1, 0, 100, &[]);
+    let mut activation = start(&crossing, &input, db()).expect("the activation block starts");
+    assert!(activation.activation().deposits_only());
+    let out = consensus.execute_candidate(&legacy(1), &[]).expect("runs where no fork activates");
+    let error = activation.commit_candidate(out).expect_err("a user transaction");
+    assert_eq!(error, CandidateError::Refused(Refusal::OnlyDeposits));
+    assert!(activation.fault().is_none());
+}
+
 #[test]
 fn chain_config_factory_installs_the_configured_chain_id() {
     let factory = factory(4326, 0, 0, &[]);
@@ -304,7 +336,7 @@ fn chain_config_factory_installs_the_configured_chain_id() {
         "{cause:?}"
     );
     let out = block.execute_candidate(&legacy(4326), &[]).expect("signed for the chain");
-    assert!(out.result.status, "{:?}", out.result);
+    assert!(out.result().status, "{:?}", out.result());
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(10), ..BlockEnv::<MegaTypes>::default() };
     assert_eq!(factory.evm(env, Db::new(db())).unwrap().version().chain_id, 4326);

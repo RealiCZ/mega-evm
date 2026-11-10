@@ -169,6 +169,8 @@ impl core::error::Error for ConfigError {}
 /// configuration, or names a fork or header field the engine has no rules for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputError {
+    /// The block's timestamp does not fit 64 bits.
+    TimestampTooLarge,
     /// The block's timestamp is not a Satin timestamp: the legacy engine executes it.
     NotSatin { timestamp: u64, satin_time: Option<u64> },
     /// A scheduled fork the engine has no rules for is active at the block.
@@ -190,6 +192,7 @@ pub enum InputError {
 impl core::fmt::Display for InputError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::TimestampTooLarge => f.write_str("block timestamp does not fit 64 bits"),
             Self::NotSatin { timestamp, satin_time } => match satin_time {
                 Some(s) => write!(f, "block at {timestamp} is before satinTime {s}"),
                 None => write!(f, "block at {timestamp}: Satin is not scheduled"),
@@ -320,6 +323,17 @@ impl BlockError {
     /// ([`CandidateError::from_execution`] decides which those are): a database error by its
     /// fatality, everything else internal (`SATIN-VAL-010`, `SATIN-STATE-007`).
     pub(crate) fn execution(error: HandlerError, tx: TxContext) -> Self {
+        // The read of the live system address the transaction is classified against: internal,
+        // whatever the database declares (`SATIN-REG-007`).
+        if system_address_read_failure(&error).is_some() {
+            let context = ErrorContext::account(crate::SEQUENCER_REGISTRY).with_transaction(tx);
+            return Self(Box::new(Failure {
+                kind: BlockErrorKind::Execution(error),
+                phase: Phase::SystemAddressResolution,
+                disposition: Disposition::Internal,
+                context,
+            }));
+        }
         let disposition = match database_error(&error) {
             Some(e) if !e.is_fatal() => Disposition::InvalidBlock,
             _ => Disposition::Internal,
@@ -484,6 +498,9 @@ pub enum CandidateError {
     Stale { sender: Address },
     /// It ran for another block ([`Disposition::Retry`]).
     Foreign { expected: BlockIdentity, found: BlockIdentity },
+    /// It ran under other rules than the session's: a simulation's in a consensus session, or
+    /// consensus rules in a simulation ([`Disposition::Retry`]).
+    OtherRules { simulated: bool },
     /// The block cannot be executed past it: an internal error or an invalid block. The session
     /// keeps the error and refuses everything after it.
     Block(BlockError),
@@ -496,7 +513,9 @@ impl CandidateError {
     pub(crate) fn from_execution(error: HandlerError, tx: TxContext) -> Self {
         let block_level = match &error {
             HandlerError::Database(_) | HandlerError::Fatal(_) => true,
-            HandlerError::External(_) => database_error(&error).is_some(),
+            HandlerError::External(_) => {
+                database_error(&error).is_some() || salt_failure(&error).is_some()
+            }
             _ => false,
         };
         if block_level {
@@ -509,7 +528,9 @@ impl CandidateError {
     pub fn disposition(&self) -> Disposition {
         match self {
             Self::Refused(_) => Disposition::Refused,
-            Self::Stale { .. } | Self::Foreign { .. } => Disposition::Retry,
+            Self::Stale { .. } | Self::Foreign { .. } | Self::OtherRules { .. } => {
+                Disposition::Retry
+            }
             Self::Block(e) => e.disposition(),
         }
     }
@@ -525,6 +546,12 @@ impl core::fmt::Display for CandidateError {
                 "outcome of block {} on {} committed to block {} on {}",
                 found.number, found.parent_hash, expected.number, expected.parent_hash
             ),
+            Self::OtherRules { simulated: true } => {
+                f.write_str("outcome of a simulation committed to a consensus block")
+            }
+            Self::OtherRules { simulated: false } => {
+                f.write_str("outcome under consensus rules committed to a simulated block")
+            }
             Self::Block(e) => write!(f, "{e}"),
         }
     }
@@ -601,6 +628,16 @@ fn erased_database_error<'e>(
         }
     }
     None
+}
+
+/// The failed read of the live system address behind a handler error, when there is one.
+pub fn system_address_read_failure(
+    error: &HandlerError,
+) -> Option<&crate::tx::SystemAddressReadFailed> {
+    match error {
+        HandlerError::Fatal(e) => e.downcast_ref(),
+        _ => None,
+    }
 }
 
 /// The bucket-capacity failure behind a handler error, when there is one.
@@ -738,6 +775,23 @@ mod tests {
         assert!(e.database_error().is_none());
         let fatal = CandidateError::from_execution(HandlerError::Fatal(AnyError::from("x")), tx());
         assert_eq!(fatal.disposition(), Disposition::Internal);
+        // Carried as an external error, a bucket capacity failure is still the node's.
+        let external = HandlerError::External(AnyError::new(salt));
+        let routed = CandidateError::from_execution(external, tx());
+        let CandidateError::Block(e) = &routed else { panic!("{routed:?}") };
+        assert_eq!(e.disposition(), Disposition::Internal);
+        assert_eq!(e.context().bucket, Some(9));
+        // The classification read of the live system address: internal whatever the database
+        // declares, in the resolution's phase.
+        for fatal in [true, false] {
+            let read = crate::tx::SystemAddressReadFailed(db(fatal));
+            let routed =
+                CandidateError::from_execution(HandlerError::Fatal(AnyError::new(read)), tx());
+            let CandidateError::Block(e) = &routed else { panic!("{routed:?}") };
+            assert_eq!(e.disposition(), Disposition::Internal);
+            assert_eq!(e.phase(), Phase::SystemAddressResolution);
+            assert_eq!(e.database_error().map(|d| d.is_fatal()), Some(fatal));
+        }
         // The transaction's own invalidity refuses it.
         for error in [
             HandlerError::InvalidNonce { expected: 1, got: 2 },

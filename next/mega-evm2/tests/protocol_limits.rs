@@ -116,7 +116,7 @@ fn test_a_block_session_runs_every_transaction_under_satins_limits() {
     let mut block = common::start_block(&input, Db::new(db(&[0x00])));
     assert!(!block.is_simulation());
     let executed = block.execute_candidate(&tx, &encoded).expect("under Satin's limits");
-    assert!(executed.result.status, "{:?}", executed.result);
+    assert!(executed.result().status, "{:?}", executed.result());
     assert_eq!(block.evm().ext().limits, TxLimits::SATIN);
 
     let simulation = Simulation { limits: Some(nothing), ..Simulation::default() };
