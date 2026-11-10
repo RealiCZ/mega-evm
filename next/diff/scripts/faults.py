@@ -365,6 +365,7 @@ ORACLE_MARK = "par_orcl_read_short_of_cold_access"
 REFUSAL = "par_refused_extcodecopy_1mib"
 KEYLESS_DECODE = "par_keyless_undecodable_arguments"
 HINT_VALUE = "par_hint_with_value"
+HINT_VALUE_NO_GAS = "par_hint_with_value_no_gas"
 ORACLE_DEPOSIT = "par_orcl_dep_read_on_chain"
 # The Oracle read whose frame pays the warm base but not the rest of the cold access: the
 # reference, charging the warm base first, runs out of gas before it loads the slot.
@@ -502,6 +503,7 @@ FAULTS = [
     ("keyless-decode-class-not-enabled", "main", r'^DIFFER %s \[.*"output"' % KEYLESS_DECODE, known_toml(lambda t: drop_class(t, "keyless_decoded_dispatch"))),
     ("hint-value-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % HINT_VALUE, scen_edit(M, named(HINT_VALUE, bumped("gas_used")))),
     ("hint-value-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_VALUE, known_toml(lambda t: drop_class(t, "hint_with_value"))),
+    ("hint-value-no-gas-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_VALUE_NO_GAS, known_toml(lambda t: drop_class(t, "hint_with_value"))),
     ("hint-value-top-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_TOP, known_toml(lambda t: drop_class(t, "hint_with_value"))),
     ("hint-value-top-deposit-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_TOP_DEPOSIT, known_toml(lambda t: drop_class(t, "hint_with_value"))),
     ("hint-value-top-stop-class-not-enabled", "main", r'^DIFFER %s \[.*"limit_exceeded"' % HINT_TOP_STOP, known_toml(lambda t: drop_class(t, "hint_with_value"))),

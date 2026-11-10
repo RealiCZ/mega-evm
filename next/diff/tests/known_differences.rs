@@ -621,6 +621,7 @@ fn test_a_rerun_class_takes_a_case_whose_only_difference_is_its_rule() {
             KEYLESS_DECODED_DISPATCH,
         ),
         ("par_hint_with_value", ReferenceRule::HintValueRefused, HINT_WITH_VALUE),
+        ("par_hint_with_value_no_gas", ReferenceRule::HintValueRefused, HINT_WITH_VALUE),
     ] {
         let s = scenario(name);
         // The reference runs under its own rule: the engine's run under that rule.
