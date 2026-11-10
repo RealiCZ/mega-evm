@@ -1,27 +1,30 @@
 //! The per-transaction limits and gas detention's caps are Satin's protocol values, not
 //! configuration: an engine nobody configured holds every transaction to 13,107,200 bytes of data
 //! size, 500,000 write records and 1,000 new accounts and slots, and caps its compute at 20,000,000
-//! past a volatile read; the block executor installs those values whatever an embedder set.
+//! past a volatile read; a block session runs under those values, and only a simulation, named as
+//! one, runs under others.
+
+mod common;
 
 use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, Signature, TxKind, U256, keccak256};
 use evm2::{
-    Evm, ExecutionConfig, TxResult,
+    Evm, TxResult,
     bytecode::Bytecode,
-    env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     interpreter::InstrStop,
 };
 use mega_evm2::{
-    MegaSpec, MegaTypes, TxLimits, block::BlockExecutor, precompiles, satin_version, tx::registry,
+    MegaTypes, TxLimits,
+    error::{CandidateError, Refusal},
+    factory::{BlockServices, Simulation},
 };
 use op_evm2::OpTxEnvelope;
 
 const SENDER: Address = Address::with_last_byte(0x50);
 const CONTRACT: Address = Address::with_last_byte(0xc0);
 
-/// An engine as an embedder builds it, its limits left alone.
-fn satin_evm(code: &[u8]) -> Evm<'static, MegaTypes> {
+fn db(code: &[u8]) -> InMemoryDB {
     let mut db = InMemoryDB::default();
     db.insert_account_info(
         &SENDER,
@@ -31,24 +34,12 @@ fn satin_evm(code: &[u8]) -> Evm<'static, MegaTypes> {
         &CONTRACT,
         AccountInfo::default().with_code(Bytecode::new_legacy(Bytes::copy_from_slice(code))),
     );
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
-    let block = BlockEnv::<MegaTypes> {
-        number: U256::from(1),
-        timestamp: U256::from(1_000),
-        gas_limit: U256::from(10_000_000_000u64),
-        ..BlockEnv::<MegaTypes>::default()
-    };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
-    evm
+    db
+}
+
+/// An engine as the factory builds it, no simulation switch given.
+fn satin_evm(code: &[u8]) -> Evm<'static, MegaTypes> {
+    common::evm(common::block(), Db::new(db(code)))
 }
 
 fn call(gas_limit: u64) -> Recovered<OpTxEnvelope> {
@@ -113,24 +104,28 @@ fn test_an_unconfigured_engine_detains_at_satins_cap() {
     assert_eq!(U256::from_be_slice(&out[36..68]), U256::from(20_000_002u64));
 }
 
-/// A transaction of a block runs under Satin's limits whatever the EVM was set to, before or after
-/// the executor was built: with limits of nothing, its 310 body bytes would be refused.
+/// A block session runs every transaction under Satin's limits: the factory's consensus entry
+/// point takes no limit at all. A simulation that names limits of nothing runs under them, so its
+/// 310 body bytes are refused, and it says it is a simulation.
 #[test]
-fn test_the_block_executor_runs_every_transaction_under_satins_limits() {
+fn test_a_block_session_runs_every_transaction_under_satins_limits() {
     let nothing = TxLimits { tx: [0; 3], cap: 0, oracle_cap: 0 };
-    for after in [false, true] {
-        let mut evm = satin_evm(&[0x00]);
-        if !after {
-            evm.ext_mut().limits = nothing;
-        }
-        let mut executor = BlockExecutor::new(evm, B256::ZERO, Some(B256::repeat_byte(0x11)));
-        if after {
-            executor.evm.ext_mut().limits = nothing;
-        }
-        let tx = call(100_000);
-        let executed = executor.run_transaction(&tx, &tx.inner().enveloped_tx().cloned().unwrap());
-        let executed = executed.unwrap_or_else(|e| panic!("refused (after: {after}): {e}"));
-        assert!(executed.result.status, "after: {after}: {:?}", executed.result);
-        assert_eq!(executor.evm.ext().limits, TxLimits::SATIN);
-    }
+    let input = common::block_input(1, 1_000, 10_000_000_000, Some(B256::repeat_byte(0x11)));
+    let tx = call(100_000);
+    let encoded = tx.inner().enveloped_tx().cloned().unwrap();
+    let mut block = common::start_block(&input, Db::new(db(&[0x00])));
+    assert!(!block.is_simulation());
+    let executed = block.execute_candidate(&tx, &encoded).expect("under Satin's limits");
+    assert!(executed.result().status, "{:?}", executed.result());
+    assert_eq!(block.evm().ext().limits, TxLimits::SATIN);
+
+    let simulation = Simulation { limits: Some(nothing), ..Simulation::default() };
+    let mut simulated = common::factory()
+        .start_simulated_block(&input, Db::new(db(&[0x00])), BlockServices::default(), &simulation)
+        .expect("the simulated block starts");
+    assert!(simulated.is_simulation());
+    let refused = simulated.execute_candidate(&tx, &encoded).expect_err("under no room");
+    assert!(matches!(refused, CandidateError::Refused(Refusal::Transaction(_))), "{refused:?}");
+    assert!(refused.to_string().contains("data-size limit"), "{refused}");
+    assert_eq!(simulated.evm().ext().limits, nothing);
 }

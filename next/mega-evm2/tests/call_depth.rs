@@ -3,15 +3,16 @@
 //! transaction reaches the call-stack limit under the execution cap (a frame at depth 1,024 has
 //! less than one gas), so the frame at the deepest depth is run directly.
 
+mod common;
+
 use alloy_primitives::{Address, Bytes, U256};
 use evm2::{
-    Evm, ExecutionConfig,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     interpreter::{Host, InstrStop, Message, MessageKind},
 };
-use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
+use mega_evm2::MegaTypes;
 
 const SENDER: Address = Address::with_last_byte(0x50);
 const CALLER: Address = Address::with_last_byte(0xa0);
@@ -35,22 +36,13 @@ fn test_a_value_call_refused_for_its_depth_is_charged_no_start_records() {
             .with_nonce(1)
             .with_code(Bytecode::new_legacy(Bytes::from_static(&[0x00]))),
     );
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
+    let mut evm = common::evm(block, Db::new(db));
     evm.ext_mut().begin_tx(SENDER, 310, true, false);
     let deepest = evm.version().max_call_depth();
     let mut message = Message::<MegaTypes> {

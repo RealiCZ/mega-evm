@@ -195,6 +195,35 @@ fn read_registry(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<Option<Address>
         .then(|| Address::from_word(current.into())))
 }
 
+/// A read of the live system address a transaction is classified against that the database could
+/// not serve: an internal error of the node whatever the database declares (`SATIN-REG-007`),
+/// never the transaction's outcome. It travels as a fatal handler error, so that no path takes it
+/// for a refusal (a deposit's would be included as failed); the database error stays its source.
+#[derive(Clone, Debug)]
+pub struct SystemAddressReadFailed(pub evm2::DatabaseError);
+
+impl core::fmt::Display for SystemAddressReadFailed {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "live system address read: {}", self.0)
+    }
+}
+
+impl core::error::Error for SystemAddressReadFailed {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// The classification read's database error as a [`SystemAddressReadFailed`].
+fn system_address_read_failed(error: evm2::registry::HandlerError) -> evm2::registry::HandlerError {
+    match error {
+        evm2::registry::HandlerError::Database(e) => {
+            evm2::registry::HandlerError::Fatal(evm2::AnyError::new(SystemAddressReadFailed(e)))
+        }
+        other => other,
+    }
+}
+
 /// Satin `SYSTEM_ADDRESS_WITHOUT_SYSTEM_SHAPE`: the refusal of a transaction from the live system
 /// address that is not a legacy call to a whitelisted contract.
 pub const SYSTEM_ADDRESS_WITHOUT_SYSTEM_SHAPE: &str =
@@ -211,7 +240,7 @@ pub(crate) fn classify(
     ty: u8,
     to: TxKind,
 ) -> HandlerResult<bool> {
-    if read_registry(host)? != Some(caller) {
+    if read_registry(host).map_err(system_address_read_failed)? != Some(caller) {
         return Ok(false);
     }
     if ty == 0 && to == TxKind::Call(ORACLE) {

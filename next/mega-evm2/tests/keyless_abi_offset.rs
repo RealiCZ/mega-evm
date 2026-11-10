@@ -8,16 +8,17 @@
 //! The differential gate runs the same input (`edge_keyless_offset_u64_max`) in release builds,
 //! where an unchecked addition would wrap rather than panic.
 
+mod common;
+
 use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, Bytes, TxKind, U256, keccak256};
 use evm2::{
-    Evm, ExecutionConfig,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     interpreter::InstrStop,
 };
-use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
+use mega_evm2::MegaTypes;
 use op_evm2::OpTxEnvelope;
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -50,23 +51,13 @@ fn run(input: Bytes) -> evm2::TxResult<MegaTypes> {
             .with_nonce(1)
             .with_code(Bytecode::new_legacy(Bytes::from_static(&[0x5f, 0x5f, 0xfd]))),
     );
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
+    let mut evm = common::evm(block, Db::new(db));
     let tx = TxLegacy {
         chain_id: None,
         nonce: 0,

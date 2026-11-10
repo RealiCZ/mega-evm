@@ -1,18 +1,19 @@
 //! Protocol origin is determined from the caller and the deposit source hash in simulations too.
 //! Such a transaction is held to no limit and not detained, and pays history gas.
+mod common;
+
 use alloy_consensus::{TxEip1559, TxEip2930, TxEip7702, TxLegacy, transaction::Recovered};
 use alloy_eips::eip7702::{Authorization, SignedAuthorization};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256, hex};
 use evm2::{
-    Evm, ExecutionConfig,
+    Evm,
     bytecode::Bytecode,
     env::BlockEnv,
     ethereum::LazyTxEip7702,
     evm::{AccountInfo, Db, InMemoryDB, SYSTEM_ADDRESS},
 };
 use mega_evm2::{
-    MegaSpec, MegaTypes, TxLimits, precompiles, satin_version,
-    tx::{MEGA_SYSTEM_TRANSACTION_SOURCE_HASH, registry},
+    MegaTypes, TxLimits, factory::Simulation, tx::MEGA_SYSTEM_TRANSACTION_SOURCE_HASH,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit};
 
@@ -27,19 +28,11 @@ fn evm(sender: Address) -> Evm<'static, MegaTypes> {
         &TARGET,
         AccountInfo::default().with_code(Bytecode::new_legacy(Bytes::from(hex!("425060015f5500")))),
     );
-    let config = ExecutionConfig::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> { gas_limit: U256::from(30_000_000), ..Default::default() };
-    let mut evm = Evm::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
     // Deliberately no room: only a protocol-origin execution may write or continue after TIMESTAMP.
-    evm.ext_mut().limits = TxLimits { tx: [0; 3], cap: 0, oracle_cap: 0 };
-    evm
+    let limits = TxLimits { tx: [0; 3], cap: 0, oracle_cap: 0 };
+    let simulation = Simulation { limits: Some(limits), ..Simulation::default() };
+    common::simulated_evm(block, Db::new(db), &simulation)
 }
 
 fn envelope(ty: u8, sender: Address, source_hash: B256) -> Recovered<OpTxEnvelope> {

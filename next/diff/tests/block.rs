@@ -1,4 +1,4 @@
-//! Block executor gate: every recorded block through the Satin engine's `BlockExecutor`, plain and
+//! Block executor gate: every recorded block through the Satin engine's block session, plain and
 //! inspected, against the reference's block-level output. Each side commits its own state.
 //! All deliberate normalizations/exclusions are in `src/gate.rs`.
 //!
@@ -17,10 +17,7 @@
 //! digests=<b> differ=0`.
 use alloy_primitives::B256;
 use evm2::evm::AccountInfo;
-use mega_evm2::{
-    ReferenceRule,
-    block::{BlockExecutor, encode_receipt},
-};
+use mega_evm2::{MegaTypes, ReferenceRule, block::encode_receipt, factory::BlockServices};
 use mega_evm2_diff::{
     driver::{self, Frames},
     gate, invariant,
@@ -99,17 +96,18 @@ fn run_block(
     let txlines: Vec<_> = st.iter().filter(|l| l["kind"] == "tx").collect();
     assert_eq!(txlines.len(), b.txs.len(), "engine oracle count {set}:{n}");
     let db = Rc::new(RefCell::new(b.db));
-    let mut evm = replay::new_evm_under(
-        &b.header,
-        b.chain_id,
-        Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) },
-        rules,
-    );
-    if inspected {
-        evm.set_inspector(Frames::default());
+    let database =
+        evm2::evm::Db::new(Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) });
+    let inspector =
+        inspected.then(|| Box::new(Frames::default()) as Box<dyn evm2::Inspector<MegaTypes>>);
+    let services = BlockServices { inspector, ..BlockServices::default() };
+    let factory = replay::factory(b.chain_id);
+    let input = replay::block_input(&b.header);
+    let mut ex = match replay::simulation_under(rules) {
+        None => factory.start_block(&input, database, services),
+        Some(simulation) => factory.start_simulated_block(&input, database, services, &simulation),
     }
-    let mut ex = BlockExecutor::new(evm, b.header.parent_hash, b.header.parent_beacon_block_root);
-    ex.apply_pre_execution_changes().expect("pre-block");
+    .expect("pre-block");
     let mut rows = Vec::new();
     for (i, t) in b.txs.iter().enumerate() {
         let l = txlines[i];
@@ -119,32 +117,32 @@ fn run_block(
         let raw = blockdb::bytes(&l["raw"]);
         let tx = replay::decode(&raw, t).expect("decode");
         let mut row = json!({"kind":"tx","block":n,"index":i,"hash":t["hash"],"type":t["type"]});
-        match ex.run_transaction(&tx, &raw) {
+        match ex.execute_candidate(&tx, &raw) {
             Err(e) => {
                 row["status"] = json!("refused");
-                row["reason"] = json!(e);
+                row["reason"] = json!(e.to_string());
             }
             Ok(out) => {
-                let r = &out.result;
+                let r = out.result();
                 let (status, halt) = driver::status_halt(r);
                 row["status"] = status;
                 row["halt"] = halt;
                 row["output"] = json!(blockdb::hex(&r.output));
                 row["gas_used"] = json!(r.tx_gas_used());
-                row["receipt_gas"] = json!(out.gas_used);
-                row["usage"] = json!(out.usage);
-                row["gas_split"] = json!(out.gas);
-                row["system_tx"] = json!(out.is_system_transaction);
-                row["da_size"] = json!(out.da_size);
-                row["tx_size"] = json!(out.tx_size);
-                row["diff"] = pending_diff(&out.pending);
-                match ex.commit_transaction_outcome(out) {
+                row["receipt_gas"] = json!(out.gas_used());
+                row["usage"] = json!(out.usage());
+                row["gas_split"] = json!(out.gas());
+                row["system_tx"] = json!(out.is_system_transaction());
+                row["da_size"] = json!(out.da_size());
+                row["tx_size"] = json!(out.tx_size());
+                row["diff"] = pending_diff(out.pending());
+                match ex.commit_candidate(out) {
                     Err(e) => {
                         row["status"] = json!("refused_at_commit");
-                        row["reason"] = json!(e);
+                        row["reason"] = json!(e.to_string());
                     }
                     Ok(_) => {
-                        let r = ex.receipts.last().unwrap();
+                        let r = ex.receipts().last().unwrap();
                         row["receipt"] = json!(blockdb::hex(&encode_receipt(r)));
                         row["receipt_status"] = json!(r.status);
                         row["cumulative_gas_used"] = json!(r.cumulative_gas_used);
@@ -157,14 +155,14 @@ fn run_block(
         // the block; a run under a reference's rule is not (`invariant`).
         if rules.is_empty() {
             invariant::ran();
-            invariant::note(row.as_object_mut().unwrap(), invariant::violations(ex.evm.ext()));
+            invariant::note(row.as_object_mut().unwrap(), invariant::violations(ex.evm().ext()));
         }
         rows.push(row);
     }
-    let l = &ex.limiter;
+    let l = ex.limiter();
     rows.push(json!({"kind":"block_counters","block":n,"gas_used":l.block_gas_used,"da_footprint_used":l.block_da_footprint_used,"da_size_used":l.block_da_size_used,"tx_size_used":l.block_tx_size_used,"usage":l.usage,"gas":l.gas}));
     let accounts: Map<String, Value> = ex
-        .changes
+        .changes()
         .accounts()
         .filter_map(|(a, t)| {
             let (o, c) = (render_info(t.original.as_ref()), render_info(t.current.as_ref()));
@@ -172,7 +170,7 @@ fn run_block(
         })
         .collect();
     let storage: Map<String, Value> = ex
-        .changes
+        .changes()
         .storage()
         .filter(|(_, t)| t.original != t.current)
         .map(|(k, t)| {

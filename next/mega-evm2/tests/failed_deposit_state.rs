@@ -1,16 +1,16 @@
 //! Failed deposits undo writes while retaining every account and slot loaded in returned state.
 //! Database-read instrumentation in the differential gates cannot observe discarded loaded entries.
+mod common;
+
 use alloy_consensus::transaction::Recovered;
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256, hex};
 use evm2::{
-    Evm, ExecutionConfig,
+    Evm,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
 };
-use mega_evm2::{
-    MegaSpec, MegaTypes, SEQUENCER_REGISTRY, precompiles, satin_version, tx::registry,
-};
+use mega_evm2::{MegaTypes, SEQUENCER_REGISTRY};
 use op_evm2::{OpTxEnvelope, TxDeposit};
 
 const SENDER: Address = Address::with_last_byte(0x50);
@@ -33,16 +33,8 @@ fn evm() -> Evm<'static, MegaTypes> {
         db.insert_account_storage(&TARGET, &U256::from(slot), &U256::from(slot + 10));
     }
     db.insert_account_info(&SEQUENCER_REGISTRY, AccountInfo::default().with_nonce(1));
-    let config = ExecutionConfig::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> { gas_limit: U256::from(30_000_000), ..Default::default() };
-    Evm::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    )
+    common::evm(block, Db::new(db))
 }
 
 fn deposit(gas_limit: u64) -> Recovered<OpTxEnvelope> {

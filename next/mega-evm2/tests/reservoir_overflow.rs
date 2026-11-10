@@ -6,17 +6,19 @@
 //! `u64::MAX` and records, for the first frame below the transaction's, the reservoir its caller
 //! kept and the reservoir it started with.
 
+mod common;
+
 use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, Bytes, Signature, TxKind, U256, hex, keccak256};
 use evm2::{
-    Evm, ExecutionConfig,
+    Evm,
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     inspector::Inspector,
     interpreter::{Interpreter, Message, MessageResult},
 };
-use mega_evm2::{MegaSpec, MegaTypes, precompiles, satin_version, tx::registry};
+use mega_evm2::MegaTypes;
 use op_evm2::OpTxEnvelope;
 
 /// 2^63 + 10^9: the reservoir is above 2^63 once the 200M execution gas is taken out.
@@ -94,24 +96,13 @@ fn contract(code: &[u8]) -> AccountInfo {
 
 /// A Satin EVM over `db` in a block whose gas limit is `u64::MAX`.
 fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(u64::MAX),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
-    evm
+    common::evm(block, Db::new(db))
 }
 
 /// A legacy transaction from [`SENDER`] to `to` with gas limit [`GAS_LIMIT`] and gas price 0.

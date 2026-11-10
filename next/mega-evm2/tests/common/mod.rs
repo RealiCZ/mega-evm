@@ -3,16 +3,22 @@
 #![allow(dead_code)]
 
 use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
-use alloy_primitives::{Address, Bytes, Signature, TxKind, U256, keccak256};
+use alloy_primitives::{Address, B256, Bytes, Signature, TxKind, U256, keccak256};
 use evm2::{
-    Evm, ExecutionConfig,
+    Evm,
     bytecode::Bytecode,
     env::BlockEnv,
-    evm::{AccountInfo, Db, InMemoryDB},
+    evm::{AccountInfo, Db, DynDatabase, InMemoryDB},
     inspector::Inspector,
     interpreter::{InstrStop, Interpreter, Message, MessageResult},
 };
-use mega_evm2::{MegaSpec, MegaTypes, TxLimits, keyless, precompiles, satin_version, tx::registry};
+use mega_evm2::{
+    MegaTypes, TxLimits,
+    block::BlockSession,
+    chain::{BootstrapInput, ChainConfig},
+    factory::{BlockHeader, BlockInput, BlockServices, ParentContext, SatinFactory, Simulation},
+    keyless,
+};
 use op_evm2::OpTxEnvelope;
 
 pub const SENDER: Address = Address::with_last_byte(0x50);
@@ -197,31 +203,94 @@ pub fn run_limited(
     gas_limit: u64,
     limits: impl FnOnce(&mut TxLimits),
 ) -> Run {
-    let mut evm = satin_evm(db);
-    limits(&mut evm.ext_mut().limits);
+    let mut tx_limits = TxLimits::SATIN;
+    limits(&mut tx_limits);
+    let simulation = Simulation { limits: Some(tx_limits), ..Simulation::default() };
+    let mut evm = simulated_evm(block(), Db::new(db), &simulation);
     run_on(&mut evm, to, value, input, gas_limit)
 }
 
-/// A Satin EVM over `db` in a block at `m = 1` everywhere.
-pub fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
-    let config =
-        ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, satin_version());
-    let block = BlockEnv::<MegaTypes> {
+/// The chain id of the tests' chain.
+pub const CHAIN_ID: u64 = 1;
+
+/// The tests' chain: Satin and every fork below it active from genesis, at timestamp zero, chain
+/// id [`CHAIN_ID`], the registry's bootstrap values non-zero.
+pub fn chain_config() -> ChainConfig {
+    let bootstrap = BootstrapInput {
+        initial_sequencer: Some(Address::repeat_byte(0x5e)),
+        initial_admin: Some(Address::repeat_byte(0xad)),
+        min_rotation_delay: Some(1),
+    };
+    ChainConfig::satin_from_genesis(CHAIN_ID, bootstrap).expect("a valid configuration")
+}
+
+/// The engine's factory on the tests' chain ([`chain_config`]).
+pub fn factory() -> SatinFactory {
+    SatinFactory::new(chain_config())
+}
+
+/// The block environment of block 1 at timestamp 1,000 with a gas limit of 10,000,000,000.
+pub fn block() -> BlockEnv<MegaTypes> {
+    BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(10_000_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
-    };
-    let mut evm = Evm::<MegaTypes>::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        block,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.state_mut().set_read_absent_storage(true);
-    evm
+    }
+}
+
+/// A single transaction's Satin EVM over `database` in `block`, from the factory.
+pub fn evm<'a>(block: BlockEnv<MegaTypes>, database: impl DynDatabase + 'a) -> Evm<'a, MegaTypes> {
+    factory().evm(block, database).expect("a Satin timestamp")
+}
+
+/// [`evm`] under a simulation's switches.
+pub fn simulated_evm<'a>(
+    block: BlockEnv<MegaTypes>,
+    database: impl DynDatabase + 'a,
+    simulation: &Simulation,
+) -> Evm<'a, MegaTypes> {
+    factory().simulated_evm(block, database, simulation).expect("a Satin timestamp")
+}
+
+/// Block `number` (at least 1) at `timestamp` with gas limit `gas_limit`, on a parent one block
+/// and one second before it, with a zero parent hash (the parent's hash) and `root` as its parent
+/// beacon block root.
+pub fn block_input(number: u64, timestamp: u64, gas_limit: u64, root: Option<B256>) -> BlockInput {
+    BlockInput {
+        header: BlockHeader {
+            number,
+            timestamp,
+            gas_limit,
+            parent_beacon_block_root: root,
+            ..BlockHeader::default()
+        },
+        parent: ParentContext::Parent {
+            number: number - 1,
+            hash: B256::ZERO,
+            timestamp: if number == 1 { 0 } else { timestamp - 1 },
+        },
+    }
+}
+
+/// The value the block's change set holds for `address`'s slot `key`, when a committed
+/// transaction or pre-block step changed it.
+pub fn committed_slot(block: &BlockSession<'_>, address: Address, key: U256) -> Option<U256> {
+    block
+        .changes()
+        .storage()
+        .find(|(k, _)| k.address() == address && k.key() == key)
+        .map(|(_, t)| t.current)
+}
+
+/// A consensus block session for `input` over `database`, its pre-block sequence run.
+pub fn start_block<'a>(input: &BlockInput, database: impl DynDatabase + 'a) -> BlockSession<'a> {
+    factory().start_block(input, database, BlockServices::default()).expect("the block starts")
+}
+
+/// A Satin EVM over `db` in a block at `m = 1` everywhere.
+pub fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
+    evm(block(), Db::new(db))
 }
 
 /// Runs a legacy transaction from [`SENDER`] of kind `to` moving `value` with `input` and gas

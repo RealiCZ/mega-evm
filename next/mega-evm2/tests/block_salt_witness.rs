@@ -1,16 +1,21 @@
 //! SALT witness exports belong to the block execution, including dropped candidates.
 #![cfg(feature = "witness")]
+
+mod common;
+
 use alloy_consensus::transaction::Recovered;
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256, hex};
 use evm2::{
-    Evm, ExecutionConfig,
     bytecode::Bytecode,
-    env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
     version::StateGasSite,
 };
 use mega_evm2::{
-    MegaSpec, MegaTypes, block::BlockExecutor, bucket_for, precompiles, satin_version, tx::registry,
+    Cfg, SaltBelowMinimum,
+    block::BlockSession,
+    bucket_for,
+    error::{BlockErrorKind, CandidateError, Disposition, Phase},
+    factory::BlockServices,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit};
 
@@ -22,7 +27,7 @@ fn bucket(slot: u64) -> u64 {
     bucket_for(StateGasSite::Storage(WRITER, U256::from(slot)))
 }
 
-fn block(fail_second: bool) -> BlockExecutor<'static> {
+fn db() -> InMemoryDB {
     let mut db = InMemoryDB::default();
     db.insert_account_info(&SENDER, AccountInfo::default().with_nonce(1));
     db.insert_account_info(&NOOP, AccountInfo::default().with_nonce(1));
@@ -31,19 +36,17 @@ fn block(fail_second: bool) -> BlockExecutor<'static> {
         AccountInfo::default()
             .with_code(Bytecode::new_legacy(Bytes::from(hex!("6001600155600160025500")))),
     );
-    let config = ExecutionConfig::for_spec_and_version(MegaSpec::Satin, satin_version());
-    let env = BlockEnv::<MegaTypes> { gas_limit: U256::from(30_000_000), ..Default::default() };
-    let mut evm = Evm::new_with_execution_config(
-        config,
-        MegaSpec::Satin,
-        env,
-        registry(),
-        Db::new(db),
-        precompiles(),
-    );
-    evm.ext_mut().cfg.buckets.insert(bucket(1), 512);
-    evm.ext_mut().cfg.buckets.insert(bucket(2), if fail_second { 0 } else { 768 });
-    BlockExecutor::new(evm, B256::ZERO, Some(B256::ZERO))
+    db
+}
+
+/// Block `number` over [`db`], the second slot's bucket of capacity zero when `fail_second`.
+fn block(number: u64, fail_second: bool) -> BlockSession<'static> {
+    let mut environment = Cfg::default();
+    environment.buckets.insert(bucket(1), 512);
+    environment.buckets.insert(bucket(2), if fail_second { 0 } else { 768 });
+    let input = common::block_input(number, 1_000 + number, 30_000_000, Some(B256::ZERO));
+    let services = BlockServices { environment, ..BlockServices::default() };
+    common::factory().start_block(&input, Db::new(db()), services).expect("the block starts")
 }
 
 fn deposit(to: Address) -> Recovered<OpTxEnvelope> {
@@ -65,42 +68,74 @@ fn deposit(to: Address) -> Recovered<OpTxEnvelope> {
 #[test]
 fn test_block_keeps_buckets_from_committed_and_discarded_candidates() {
     for commit in [true, false] {
-        let mut block = block(false);
-        let out = block.run_transaction(&deposit(WRITER), &[]).unwrap();
-        assert!(out.result.status);
+        let mut block = block(1, false);
+        let out = block.execute_candidate(&deposit(WRITER), &[]).unwrap();
+        assert!(out.result().status);
         if commit {
-            block.commit_transaction_outcome(out).unwrap();
+            block.commit_candidate(out).unwrap();
         } else {
             drop(out);
         }
-        let out = block.run_transaction(&deposit(NOOP), &[]).unwrap();
-        block.commit_transaction_outcome(out).unwrap();
-        assert_eq!(block.bucket_reads, [bucket(1), bucket(2)].into_iter().collect());
-        let mut next = BlockExecutor::new(block.evm, B256::ZERO, Some(B256::ZERO));
-        assert!(next.bucket_reads.is_empty());
-        let out = next.run_transaction(&deposit(NOOP), &[]).unwrap();
-        next.commit_transaction_outcome(out).unwrap();
-        assert!(next.bucket_reads.is_empty());
+        let out = block.execute_candidate(&deposit(NOOP), &[]).unwrap();
+        block.commit_candidate(out).unwrap();
+        assert_eq!(*block.bucket_reads(), [bucket(1), bucket(2)].into_iter().collect());
+        let output = block.finish().expect("the block finishes");
+        assert_eq!(output.bucket_reads, [bucket(1), bucket(2)].into_iter().collect());
+        // The next block's union starts empty.
+        let mut next = self::block(2, false);
+        assert!(next.bucket_reads().is_empty());
+        let out = next.execute_candidate(&deposit(NOOP), &[]).unwrap();
+        next.commit_candidate(out).unwrap();
+        assert!(next.bucket_reads().is_empty());
     }
 }
 
+/// A capacity below the minimum is an internal error of the node: the candidate has no outcome,
+/// the block keeps the lookups that succeeded before it, and the session runs nothing after it.
 #[test]
 fn test_failed_candidate_keeps_only_successful_bucket_answers() {
-    let mut block = block(true);
+    let mut block = block(1, true);
     let error = block
-        .run_transaction(&deposit(WRITER), &[])
+        .execute_candidate(&deposit(WRITER), &[])
         .expect_err("invalid capacity aborts execution");
-    assert!(error.contains("below the minimum bucket"), "{error}");
-    let out = block.run_transaction(&deposit(NOOP), &[]).unwrap();
-    block.commit_transaction_outcome(out).unwrap();
-    assert_eq!(block.bucket_reads, [bucket(1)].into_iter().collect());
+    let CandidateError::Block(fault) = &error else { panic!("not the block's: {error:?}") };
+    assert_eq!(fault.disposition(), Disposition::Internal);
+    assert_eq!(fault.phase(), Phase::Transaction);
+    assert_eq!(fault.context().bucket, Some(bucket(2)));
+    assert!(fault.database_error().is_none());
+    let BlockErrorKind::Execution(cause) = fault.kind() else { panic!("{fault:?}") };
+    let evm2::registry::HandlerError::Fatal(any) = cause else { panic!("{cause:?}") };
+    assert_eq!(
+        any.downcast_ref::<SaltBelowMinimum>(),
+        Some(&SaltBelowMinimum { bucket: bucket(2), capacity: 0 })
+    );
+    assert!(error.to_string().contains("below the minimum bucket"), "{error}");
+    assert_eq!(*block.bucket_reads(), [bucket(1)].into_iter().collect());
+    assert_eq!(block.fault(), Some(fault));
+    let after = block.execute_candidate(&deposit(NOOP), &[]).expect_err("nothing runs after");
+    assert_eq!(&after, &error);
+    assert!(block.receipts().is_empty());
+    assert_eq!(block.finish().expect_err("the block cannot finish"), *fault);
 }
 
 #[test]
 fn test_committing_a_foreign_outcome_adds_no_bucket_reads() {
-    let mut source = block(false);
-    let out = source.run_transaction(&deposit(WRITER), &[]).unwrap();
-    let mut target = block(false);
-    target.commit_transaction_outcome(out).unwrap();
-    assert!(target.bucket_reads.is_empty());
+    let mut source = block(1, false);
+    let out = source.execute_candidate(&deposit(WRITER), &[]).unwrap();
+    let mut target = block(1, false);
+    target.commit_candidate(out).unwrap();
+    assert!(target.bucket_reads().is_empty());
+}
+
+/// An outcome executed for another block is not committed: the builder executes it again.
+#[test]
+fn test_an_outcome_of_another_block_is_not_committed() {
+    let mut source = block(1, false);
+    let out = source.execute_candidate(&deposit(WRITER), &[]).unwrap();
+    let mut target = block(2, false);
+    let error = target.commit_candidate(out).expect_err("another block's outcome");
+    assert!(matches!(error, CandidateError::Foreign { .. }), "{error:?}");
+    assert_eq!(error.disposition(), Disposition::Retry);
+    assert!(target.receipts().is_empty());
+    assert!(target.fault().is_none());
 }

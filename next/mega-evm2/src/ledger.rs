@@ -22,6 +22,9 @@ pub const TX_BODY_SIZE: u64 = 310;
 pub const TRANSFER_LOG_SIZE: u64 = 160;
 pub const HISTORY_ALLOWANCE_BYTES: u64 = 160;
 pub const EXECUTION_CAP: u64 = 200_000_000;
+/// The share of its remaining data-size, KV-update and state-growth budgets a frame passes to a
+/// child frame: 98/100.
+pub const FRAME_SHARE: (u64, u64) = (98, 100);
 /// The pre-Satin price of a fresh slot's `SSTORE`, the legacy share's base for a slot.
 pub const PRE_FORK_SSTORE_SET_COST: u64 = 20_000;
 /// The pre-Satin price of a new account, the legacy share's base for an account.
@@ -499,7 +502,10 @@ impl Lite {
         allowance: u64,
     ) {
         let parent = self.frames.last().expect("a caller");
-        let budget = core::array::from_fn(|i| (u128::from(parent.remaining(i)) * 98 / 100) as u64);
+        let (share, of) = FRAME_SHARE;
+        let budget = core::array::from_fn(|i| {
+            (u128::from(parent.remaining(i)) * u128::from(share) / u128::from(of)) as u64
+        });
         let depth = self.frames.len();
         let (slot_mark, destroyed_mark) = (self.slot_undo.len(), self.destroyed.len());
         self.frames.push(Entry {

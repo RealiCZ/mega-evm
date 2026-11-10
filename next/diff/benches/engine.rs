@@ -35,7 +35,7 @@
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use evm2::Evm;
-use mega_evm2::{MegaTypes, block::BlockExecutor};
+use mega_evm2::{MegaTypes, factory::BlockServices};
 use mega_evm2_diff::{
     driver::{
         self, Frames,
@@ -99,23 +99,21 @@ fn bench_scenario(c: &mut Criterion, name: &str, s: Scenario, expected_status: &
 /// Runs every transaction of the block through the executor and commits it.
 fn run_block(b: blockdb::Block, raws: &[alloy_primitives::Bytes], inspected: bool) -> usize {
     let db = Rc::new(RefCell::new(b.db));
-    let mut evm = replay::new_evm(
-        &b.header,
-        b.chain_id,
-        Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) },
-    );
-    if inspected {
-        evm.set_inspector(Frames::default());
-    }
-    let mut ex = BlockExecutor::new(evm, b.header.parent_hash, b.header.parent_beacon_block_root);
-    ex.apply_pre_execution_changes().expect("pre-block");
+    let database =
+        evm2::evm::Db::new(Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) });
+    let inspector =
+        inspected.then(|| Box::new(Frames::default()) as Box<dyn evm2::Inspector<MegaTypes>>);
+    let services = BlockServices { inspector, ..BlockServices::default() };
+    let mut ex = replay::factory(b.chain_id)
+        .start_block(&replay::block_input(&b.header), database, services)
+        .expect("pre-block");
     assert_eq!(b.txs.len(), raws.len());
     for (t, raw) in b.txs.iter().zip(raws) {
         let tx = replay::decode(raw, t).expect("decode");
-        let out = ex.run_transaction(&tx, raw).expect("run transaction");
-        ex.commit_transaction_outcome(out).expect("commit");
+        let out = ex.execute_candidate(&tx, raw).expect("run transaction");
+        ex.commit_candidate(out).expect("commit");
     }
-    ex.receipts.len()
+    ex.receipts().len()
 }
 
 fn bench_block(c: &mut Criterion) {
