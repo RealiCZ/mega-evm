@@ -33,7 +33,7 @@ SAMPLE_FUZZ_BATCHES=(
 # (`known-differences.toml`). This is the one place that states them. Adding a scenario or a known
 # difference means changing it here (and the data under `next/diff/data`, see `data/README.md`);
 # `gate-lib.sh`, `check-reference.sh` and `regen-reference.sh` read it.
-MAIN_EXPECT="total=4248 match=1909 known=10 class=2329"
+MAIN_EXPECT="total=4256 match=1907 known=10 class=2339"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (mode 11's first-frame window, mode 14's pairs and mode 15's blocks, `halted_first_frame`;
 # mode 14's pairs, `modexp_formula_price`; mode 14's pairs and mode 4's seeds,
@@ -41,8 +41,8 @@ MAIN_EXPECT="total=4248 match=1909 known=10 class=2329"
 # `reservoir_give_back`; every mode's deposits, `deposit_history`; the Oracle reads, refused reads,
 # keyless calls and hints of the generators, the classes of those decisions); every other seed must
 # match.
-SAMPLE_FUZZ_CLASS=2191
-FULL_FUZZ_CLASS=24857
+SAMPLE_FUZZ_CLASS=2201
+FULL_FUZZ_CLASS=24930
 # The replay transactions the classes the replay gate runs again for take (`gate::REPLAY_RERUN_CLASSES`:
 # `reservoir_give_back`, and `deposit_history` for every recorded deposit), in the sample and in the
 # full gate. `count_expected.py` counts them among the applied transactions (`match`), as it counts

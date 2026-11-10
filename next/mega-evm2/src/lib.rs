@@ -521,13 +521,23 @@ pub fn mega_sload(cx: _) -> Result {
             &crate::satin_ext::disabled_revert(crate::satin_ext::access::ORACLE),
         );
     }
-    cx.gas.spend(const { static_gas(op::SLOAD) })?;
     if destination != ORACLE {
+        cx.gas.spend(const { static_gas(op::SLOAD) })?;
         return ins::sload::<MegaTypes>::execute(cx.pc, stack, cx.state);
     }
+    // The reference's orders (comparison only), each its own decision's old rule. Its refusal
+    // comes after the opcode's static gas (the warm base) and the key, so a refused read pays the
+    // warm base first (`RefusalAfterStaticGas`); a read that is not refused takes nothing from
+    // that rule. Its read charges the warm base first, before the key and the read
+    // (`OracleColdSkip`).
+    let cold_skip = under_reference_rule(cx.state.host().ext(), ReferenceRule::OracleColdSkip);
+    let refused_late = reference && crate::satin_ext::refused_here(cx.state);
+    let warm_first = refused_late || cold_skip;
+    if warm_first {
+        cx.gas.spend(const { static_gas(op::SLOAD) })?;
+    }
     let key = stack.pop()?;
-    // The reference's order (comparison only): the static gas, the key, then the refusal.
-    if reference && crate::satin_ext::refused_here(cx.state) {
+    if refused_late {
         return revert_with(
             cx.gas,
             cx.state,
@@ -537,13 +547,15 @@ pub fn mega_sload(cx: _) -> Result {
     let (gas, state) = unsafe { evm2::interpreter::private::split_gas_state(cx.state) };
     // Satin `oracle_sload`: the slot is loaded through the journal, the service asked and the read
     // marked as a volatile read under the Oracle's cap, at the compute before the cold access,
-    // and only then is the read priced cold whatever its warmth (`SATIN-ORCL-004`,
-    // `SATIN-DET-003`): a frame whose gas cannot pay the cold access still loads, asks and marks,
-    // then runs out of gas, the mark standing (or is stopped, when the charge is detention's
-    // crossing). No read of a system call, a deposit or a Mega System Transaction asks the
-    // service (`SATIN-ORCL-005`): it pushes the slot's value on the chain.
+    // and only then is the read priced cold whatever its warmth, `COLD_SLOAD_COST` with its warm
+    // base in one charge (`SATIN-ORCL-004`, `SATIN-DET-003`): a frame whose gas cannot pay it,
+    // even one short of the warm base, still loads, asks and marks, then runs out of gas, the
+    // mark standing (or is stopped, when the charge is detention's crossing). No read of a system
+    // call, a deposit or a Mega System Transaction asks the service (`SATIN-ORCL-005`): it pushes
+    // the slot's value on the chain. Under the reference's order (comparison only) a frame that
+    // cannot pay the cold access once the warm base is paid runs out of gas before the read, and
+    // a read is marked once its charges are paid.
     let additional_cold_cost = state.gas_params().get(GasId::ColdStorageAdditionalCost);
-    let cold_skip = under_reference_rule(state.host().ext(), ReferenceRule::OracleColdSkip);
     if cold_skip && state.feature(EvmFeatures::EIP2929) {
         let budget = ins::gas_budget(gas, state, BudgetUse::ColdStorage);
         if budget < additional_cold_cost {
@@ -565,7 +577,7 @@ pub fn mega_sload(cx: _) -> Result {
         detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
     } else {
         detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
-        gas.spend(additional_cold_cost)?;
+        gas.spend(const { static_gas(op::SLOAD) } + additional_cold_cost)?;
     }
     stack.push(answer.unwrap_or(load.value))
 }
@@ -1390,7 +1402,7 @@ pub fn count_start(evm: &mut Evm<'_, MegaTypes>) -> Option<(u8, u64)> {
 #[derive(Debug, Default)]
 pub struct StartHooks;
 
-fn is_precompile(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
+pub(crate) fn is_precompile(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
     evm.precompiles().contains(&msg.call_target)
 }
 

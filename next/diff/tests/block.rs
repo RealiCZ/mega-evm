@@ -8,6 +8,13 @@
 //! comparison.
 //! `RUST_MIN_STACK=8388608` is required. Output: the `GATE` summary line and the regular-gas
 //! invariant's `INVARIANT` line (`mega_evm2_diff::invariant`).
+//!
+//! The engine's own run of a block under Satin's rules is also held to figures of its own, which
+//! no rerun under a reference's rule stands in for: per block, the transactions it included and
+//! refused and a digest of the run (each transaction's status and gas used, the block counters
+//! and the post-state), pinned in `data/block-satin.txt` (`MEGA_EVM2_BLOCK_SATIN` names another
+//! file), on the line `GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b>
+//! digests=<b> differ=0`.
 use alloy_primitives::B256;
 use evm2::evm::AccountInfo;
 use mega_evm2::{
@@ -175,6 +182,155 @@ fn run_block(
     rows.push(json!({"kind":"post_state","block":n,"accounts":accounts,"storage":storage}));
     rows
 }
+/// The Satin-rule run's figures of the recorded blocks: per block, the transactions its own run
+/// included and refused, and a digest of the run ([`run_digest`]), held to the pinned figures
+/// (`<set>:<n> included=<i> refused=<r> digest=<keccak>` per line, `#` starting a comment).
+#[derive(Default)]
+struct SatinFigures {
+    pins: BTreeMap<String, Pin>,
+    blocks: u64,
+    included: u64,
+    refused: u64,
+    /// The blocks whose run has a pinned line, those whose line has a digest, and those whose run
+    /// differs from its line or has no line or no digest.
+    pinned: u64,
+    digests: u64,
+    differ: u64,
+}
+
+/// One block's pinned figures.
+struct Pin {
+    included: u64,
+    refused: u64,
+    digest: Option<String>,
+}
+
+/// The digest of a block's run: the keccak of its transactions' `status` and `gas_used`, its
+/// block counters row and its post-state row, rendered as JSON with every object's keys sorted.
+fn run_digest(rows: &[Value], txcount: usize) -> String {
+    fn canonical(v: &Value, out: &mut String) {
+        match v {
+            Value::Object(m) => {
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, k) in keys.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(k).unwrap());
+                    out.push(':');
+                    canonical(&m[k], out);
+                }
+                out.push('}');
+            }
+            Value::Array(a) => {
+                out.push('[');
+                for (i, x) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    canonical(x, out);
+                }
+                out.push(']');
+            }
+            _ => out.push_str(&serde_json::to_string(v).unwrap()),
+        }
+    }
+    let mut parts: Vec<Value> = rows[..txcount]
+        .iter()
+        .map(|r| json!({"status": r["status"], "gas_used": r["gas_used"]}))
+        .collect();
+    parts.extend(rows[txcount..].iter().cloned());
+    let mut text = String::new();
+    canonical(&Value::Array(parts), &mut text);
+    format!("{}", alloy_primitives::keccak256(text.as_bytes()))
+}
+
+impl SatinFigures {
+    fn load() -> Self {
+        let path = std::env::var("MEGA_EVM2_BLOCK_SATIN").unwrap_or_else(|_| {
+            concat!(env!("CARGO_MANIFEST_DIR"), "/data/block-satin.txt").into()
+        });
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let mut pins = BTreeMap::new();
+        for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let field = |i: usize, key: &str| -> &str {
+                words
+                    .get(i)
+                    .and_then(|w| w.strip_prefix(key))
+                    .unwrap_or_else(|| panic!("{path}: malformed line {line:?}"))
+            };
+            let count = |i: usize, key: &str| -> u64 {
+                field(i, key).parse().unwrap_or_else(|_| panic!("{path}: malformed line {line:?}"))
+            };
+            assert!(matches!(words.len(), 3 | 4), "{path}: malformed line {line:?}");
+            let pin = Pin {
+                included: count(1, "included="),
+                refused: count(2, "refused="),
+                digest: (words.len() == 4).then(|| field(3, "digest=").to_string()),
+            };
+            let old = pins.insert(words[0].to_string(), pin);
+            assert!(old.is_none(), "{path}: block {} pinned twice", words[0]);
+        }
+        Self { pins, ..Self::default() }
+    }
+
+    /// The block `block`'s rows of its run under Satin's rules, its first `txcount` its
+    /// transactions'.
+    fn check(&mut self, block: &str, rows: &[Value], txcount: usize) {
+        let refused = rows[..txcount]
+            .iter()
+            .filter(|r| r["status"].as_str().is_some_and(|s| s.starts_with("refused")))
+            .count() as u64;
+        let included = txcount as u64 - refused;
+        let digest = run_digest(rows, txcount);
+        self.blocks += 1;
+        self.included += included;
+        self.refused += refused;
+        let Some(pin) = self.pins.get(block) else {
+            self.differ += 1;
+            println!(
+                "BLOCK-SATIN UNPINNED {block} included={included} refused={refused} digest={digest}"
+            );
+            return;
+        };
+        self.pinned += 1;
+        let mut differs = false;
+        if (pin.included, pin.refused) != (included, refused) {
+            differs = true;
+            println!(
+                "BLOCK-SATIN DIFFER {block} pinned included={} refused={} run included={included} refused={refused}",
+                pin.included, pin.refused
+            );
+        }
+        match &pin.digest {
+            Some(d) => {
+                self.digests += 1;
+                if *d != digest {
+                    differs = true;
+                    println!("BLOCK-SATIN DIGEST {block} pinned {d} run {digest}");
+                }
+            }
+            None => {
+                differs = true;
+                println!(
+                    "BLOCK-SATIN UNPINNED {block} included={included} refused={refused} digest={digest}"
+                );
+            }
+        }
+        self.differ += u64::from(differs);
+    }
+
+    fn line(&self) -> String {
+        format!(
+            "GATE block-satin blocks={} included={} refused={} pinned={} digests={} differ={}",
+            self.blocks, self.included, self.refused, self.pinned, self.digests, self.differ
+        )
+    }
+}
+
 /// The fields of a block row as [`run_block`] renders it: a transaction's (by how far it got:
 /// refused, refused at its commit, or committed), the block counters' and the post-state's.
 fn row_fields(row: &Value) -> Vec<&'static str> {
@@ -255,6 +411,7 @@ fn test_blocks_match_reference_plain_and_inspected() {
     let outdir = std::env::var("MEGA_EVM2_OUT").ok();
     let classes = gate::known_classes();
     let mut reruns: Vec<(String, &str)> = Vec::new();
+    let mut satin = SatinFigures::load();
     let mut invariant = invariant::Tally::default();
     let mut totals = BTreeMap::<String, u64>::new();
     let mut fields = BTreeMap::<String, u64>::new();
@@ -273,6 +430,9 @@ fn test_blocks_match_reference_plain_and_inspected() {
         assert_eq!(p.len(), sb.len());
         assert_eq!(q.len(), sb.len());
         let both_runs = invariant::take_runs() == 2 * txcount as u64;
+        // The block's own run under Satin's rules, before a rerun under a reference's rule takes
+        // its place in the comparison: what it included and refused, held to the pinned figures.
+        satin.check(&format!("{set}:{n}"), &p, txcount);
         for (i, (p, q)) in p.iter_mut().zip(q.iter_mut()).enumerate() {
             if i < txcount {
                 invariant.case(&format!("{set}:{n}:{i}"), both_runs, [p, q]);
@@ -366,6 +526,8 @@ fn test_blocks_match_reference_plain_and_inspected() {
     let complete = blockdb::check_processed_identities(&processed);
     println!("{}", invariant.line("block"));
     println!("{}{}", if complete { "" } else { "PARTIAL " }, gate::block_line(&totals));
+    println!("{}{}", if complete { "" } else { "PARTIAL " }, satin.line());
     gate::expected("MEGA_EVM2_EXPECT_RERUN", reruns.len() as u64);
     gate::finish(&totals);
+    assert_eq!(satin.differ, 0, "the Satin-rule run's figures differ from the pinned ones");
 }

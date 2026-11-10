@@ -130,7 +130,9 @@ pub fn hint_before(
 ) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
     use crate::satin_ext::*;
     // The gas the call forwards: a value call's stipend is not forwarded gas (`SATIN-DET-010`).
-    let forwarded = if m.kind == MessageKind::Call && !m.value.is_zero() {
+    // Only a message a value-transferring `CALL` opcode built (below the first frame) holds one: a
+    // transaction's own call is forwarded its first frame's whole regular gas (`SATIN-FWD-003`).
+    let forwarded = if m.depth > 0 && m.kind == MessageKind::Call && !m.value.is_zero() {
         m.gas_limit.saturating_sub(evm.version().gas_params.get(evm2::version::GasId::CallStipend))
     } else {
         m.gas_limit

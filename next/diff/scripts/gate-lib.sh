@@ -147,8 +147,9 @@ gate_test() {
 }
 
 # gate_summary <log> <test target> [VAR=value...]: runs the test and prints its single `GATE`
-# line. A failing test or a log without exactly one `GATE` line returns 1, after the tail of the
-# log on stderr.
+# line (the block gate's `GATE block-satin` line, the engine's own figures, is not its summary). A
+# failing test or a log without exactly one `GATE` line returns 1, after the tail of the log on
+# stderr.
 gate_summary() {
   local log=$1 line
   if ! gate_test "$@"; then
@@ -156,7 +157,7 @@ gate_summary() {
     tail -n 25 "$log" >&2
     return 1
   fi
-  line=$(grep '^GATE ' "$log" || true)
+  line=$(grep '^GATE ' "$log" | grep -v '^GATE block-satin ' || true)
   if [ "$(echo "$line" | grep -c '^GATE ')" != 1 ]; then
     echo "gate $(basename "$log" .log) printed no single GATE line (see $log)" >&2
     return 1
@@ -166,8 +167,11 @@ gate_summary() {
 
 # gate_run <work> <logs> <gate> [VAR=value...]: runs <gate> (main, fuzz, replay or block) on the
 # inputs under <work> and prints its summary line (nothing when its test failed); returns 0 only
-# when the summary is the one <work>/expect.env expects. The assignments are added to the
-# environment of every test of the gate.
+# when the summary is the one <work>/expect.env expects. The block gate also prints the line of
+# the Satin-rule run's figures, `GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b>
+# digests=<b> differ=0`, which must be there once, with every block pinned, digest included, and
+# none differing. The assignments are
+# added to the environment of every test of the gate.
 gate_run() {
   local work=$1 logs=$2 gate=$3 line
   shift 3
@@ -216,6 +220,14 @@ gate_run() {
       gate_env "$work" "$gate"
       line=$(gate_summary "$logs/$gate.log" "$gate" "${GATE_ENV[@]}" ${extra[@]+"${extra[@]}"} "$@") || return 1
       echo "$line"
+      if [ "$gate" = block ]; then
+        local satin blocks=${expect#blocks=}
+        satin=$(grep '^GATE block-satin ' "$logs/$gate.log" || true)
+        echo "${satin:-GATE block-satin MISSING}"
+        [ "$(grep -c '^GATE block-satin ' <<< "$satin")" = 1 ] &&
+          grep -Eq "^GATE block-satin blocks=${blocks%% *} included=[0-9]+ refused=[0-9]+ pinned=${blocks%% *} digests=${blocks%% *} differ=0\$" <<< "$satin" ||
+          return 1
+      fi
       [ "$line" = "GATE $gate $expect differ=0" ]
       ;;
     *) echo "gate_run: unknown gate $gate" >&2; return 2 ;;

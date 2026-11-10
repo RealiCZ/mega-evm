@@ -19,7 +19,12 @@
 //! deployment has taken its forward and the child's reservoir share, once a returning child's gas
 //! has merged back into its caller, when a code deposit is admitted, and when the frame's message
 //! ends, after its settlement (the `after` message hook: a halt consumes the regular gas). Every
-//! message's end is held to what it received, whether a frame ran for it or it was answered.
+//! message's end is held to what it received, whether a frame ran for it or it was answered; a
+//! message no frame ran for is held to its regular gas apart as well, as no observation of a frame
+//! holds it: it hands back no more regular gas than it was forwarded (a precompile or a keyless
+//! deployment spends some), and a call answered without running anything — an interceptor's
+//! answer, a call of an account with no code, a start evm2 refused — exactly that regular gas
+//! (`SATIN-ICPT-004`); and no more reservoir than its share.
 //! Between two of those points only evm2's stock instructions run, none of which gives gas back;
 //! their net effect is still seen at the next point. A run under EIP-8037's rule (a comparison's
 //! rerun, [`crate::ReferenceRule::Eip8037GiveBack`]) gives state gas back into regular gas by
@@ -30,7 +35,7 @@
 use crate::{MegaTypes, detention};
 use core::marker::PhantomData;
 use evm2::interpreter::{
-    GasTracker, InterpreterState, Message, MessageResult, Pc, Result, StackMut,
+    GasTracker, InterpreterState, Message, MessageKind, MessageResult, Pc, Result, StackMut,
     private::{Instruction, InstructionFlags, split_gas_state},
 };
 
@@ -152,13 +157,15 @@ impl RegularGasCheck {
     /// The message `message`, which received `forward` and the reservoir share `share`, ended
     /// after its settlement with `pools`, `halted` or not, `success` or not: it hands back at most
     /// what it received (a halt at most the share), and a followed frame that did not halt is
-    /// observed one last time; then it is no longer followed.
+    /// observed one last time; then it is no longer followed. A message no followed frame ran for
+    /// that did not halt hands back at most the regular gas it was forwarded, exactly that when it
+    /// was `answered` (it ran nothing that spends), and at most its reservoir share: nothing a
+    /// precompile or a keyless deployment does refills a reservoir.
     fn end(
         &mut self,
         message: usize,
         (forward, share): (u64, u64),
-        halted: bool,
-        success: bool,
+        (halted, success, answered): (bool, bool, bool),
         pools: Pools,
     ) {
         // A failed message's charges are settled (given back or consumed); a successful one's go
@@ -178,6 +185,19 @@ impl RegularGasCheck {
         }
         self.ended = Some((message, handed));
         if self.frames.last().is_none_or(|f| f.message != message) {
+            let what = if answered { "answer" } else { "message without a frame" };
+            if !halted && (pools.regular > forward || answered && pools.regular != forward) {
+                self.violations.push(format!(
+                    "message end: {what} returned {} regular of {forward} forwarded",
+                    pools.regular
+                ));
+            }
+            if !halted && pools.reservoir > share {
+                self.violations.push(format!(
+                    "message end: {what} returned {} reservoir of a {share} share",
+                    pools.reservoir
+                ));
+            }
             return;
         }
         if !halted {
@@ -303,11 +323,19 @@ pub fn on_message_end(
         return;
     }
     let pools = Pools::of(result.gas.remaining(), &result.gas);
+    // A call that ran neither a precompile nor a keyless deployment and no frame was answered.
+    let answered = matches!(
+        msg.kind,
+        MessageKind::Call |
+            MessageKind::CallCode |
+            MessageKind::StaticCall |
+            MessageKind::DelegateCall
+    ) && !crate::is_precompile(evm, msg) &&
+        !crate::keyless::is_dispatched(evm, msg);
     evm.ext_mut().regular_check.end(
         message_id(msg),
         (msg.gas_limit, msg.reservoir),
-        result.stop.is_halt(),
-        result.stop.is_success(),
+        (result.stop.is_halt(), result.stop.is_success(), answered),
         pools,
     );
 }
@@ -359,7 +387,7 @@ mod tests {
         c.enter(FRAME, regular(1_000), 0);
         c.observe(regular(400), "forward");
         c.enter(CHILD, regular(600), 0);
-        c.end(CHILD, (600, 0), false, true, regular(500));
+        c.end(CHILD, (600, 0), (false, true, false), regular(500));
         c.merged(CHILD, Handed::default(), regular(900));
         assert!(c.violations.is_empty(), "{:?}", c.violations);
         c.observe(regular(901), "next");
@@ -373,10 +401,10 @@ mod tests {
         c.observe(regular(400), "a");
         c.enter(CHILD, regular(300), 0);
         // A halt consumes the frame's regular gas: it hands back none.
-        c.end(CHILD, (300, 0), true, false, regular(0));
+        c.end(CHILD, (300, 0), (true, false, false), regular(0));
         assert!(c.violations.is_empty());
         // A revert that hands back more than the frame had is a violation, and the frame is left.
-        c.end(FRAME, (1_000, 0), false, false, regular(401));
+        c.end(FRAME, (1_000, 0), (false, false, false), regular(401));
         assert_eq!(
             c.violations,
             [
@@ -393,19 +421,57 @@ mod tests {
         let mut c = RegularGasCheck::default();
         c.enter(FRAME, regular(1_000), 0);
         // An answered message at the next depth: the running frame stays followed.
-        c.end(CHILD, (50_000, 0), false, true, regular(50_000));
+        c.end(CHILD, (50_000, 0), (false, true, false), regular(50_000));
         assert!(c.violations.is_empty());
         c.observe(regular(1_001), "still the frame");
         assert_eq!(c.violations[0], "still the frame: regular 1001 after 1000 + 0 returned");
         c.reset();
-        c.end(CHILD, (50_000, 7), false, true, Pools { regular: 50_000, reservoir: 8, charged: 0 });
+        c.end(
+            CHILD,
+            (50_000, 7),
+            (false, true, false),
+            Pools { regular: 50_000, reservoir: 8, charged: 0 },
+        );
         assert_eq!(
             c.violations,
-            ["message end: handed back 50008 (50000 regular) of 50007 received"]
+            [
+                "message end: handed back 50008 (50000 regular) of 50007 received",
+                "message end: message without a frame returned 8 reservoir of a 7 share",
+            ]
         );
         c.reset();
         c.observe(regular(5), "after reset");
         assert!(c.violations.is_empty());
+    }
+
+    /// A message no frame ran for hands back at most the regular gas it was forwarded (a
+    /// precompile spends some), and an answer exactly that, and at most its reservoir share: the
+    /// sum alone would take 100 of reservoir handed back as regular gas, or 50 of spent regular gas
+    /// handed back as reservoir.
+    #[test]
+    fn test_a_message_without_a_frame_is_held_to_its_forwarded_regular_gas() {
+        let mut c = RegularGasCheck::default();
+        c.enter(FRAME, regular(1_000), 0);
+        let pools = |regular, reservoir| Pools { regular, reservoir, charged: 0 };
+        c.end(CHILD, (200, 980), (false, true, true), pools(200, 980));
+        c.end(CHILD, (200, 980), (false, true, false), pools(150, 980));
+        assert!(c.violations.is_empty(), "{:?}", c.violations);
+        c.end(CHILD, (200, 980), (false, true, true), pools(300, 880));
+        c.end(CHILD, (200, 980), (false, false, true), pools(100, 1_080));
+        c.end(CHILD, (200, 980), (false, true, false), pools(300, 880));
+        // A precompile that spent 50 and handed it back as reservoir: the sum and the regular
+        // bound pass, the reservoir is over its share.
+        c.end(CHILD, (200, 980), (false, true, false), pools(150, 1_030));
+        assert_eq!(
+            c.violations,
+            [
+                "message end: answer returned 300 regular of 200 forwarded",
+                "message end: answer returned 100 regular of 200 forwarded",
+                "message end: answer returned 1080 reservoir of a 980 share",
+                "message end: message without a frame returned 300 regular of 200 forwarded",
+                "message end: message without a frame returned 1030 reservoir of a 980 share",
+            ]
+        );
     }
 
     /// A give-back is a transfer: the reservoir rises with the charges falling, and a child that
@@ -419,7 +485,12 @@ mod tests {
         c.observe(Pools { regular: 400, reservoir: 300, charged: 200 }, "forward");
         c.enter(CHILD, Pools { regular: 600, reservoir: 0, charged: 0 }, 0);
         c.observe(Pools { regular: 590, reservoir: 200, charged: -200 }, "give-back");
-        c.end(CHILD, (600, 0), false, true, Pools { regular: 590, reservoir: 200, charged: -200 });
+        c.end(
+            CHILD,
+            (600, 0),
+            (false, true, false),
+            Pools { regular: 590, reservoir: 200, charged: -200 },
+        );
         c.merged(CHILD, Handed::default(), Pools { regular: 990, reservoir: 500, charged: 0 });
         assert!(c.violations.is_empty(), "{:?}", c.violations);
     }
@@ -441,7 +512,7 @@ mod catches {
         env::BlockEnv,
         evm::{AccountInfo, Db, InMemoryDB},
         inspector::Inspector,
-        interpreter::{Interpreter, Message, MessageResult},
+        interpreter::{GasTracker, InstrStop, Interpreter, Message, MessageResult},
     };
     use op_evm2::OpTxEnvelope;
 
@@ -489,15 +560,8 @@ mod catches {
         }
     }
 
-    /// Runs a call of TOP with a gas limit below the execution cap (no reservoir) under `version`,
-    /// with the check forced on when `force`, and returns the check's violations.
-    fn violations(
-        top: &[u8],
-        c: &[u8],
-        version: Version,
-        force: bool,
-        alter: Option<fn(&mut MessageResult<MegaTypes>)>,
-    ) -> Vec<String> {
+    /// A Satin EVM over `db` running `version`.
+    fn satin_evm(db: InMemoryDB, version: Version) -> Evm<'static, MegaTypes> {
         let config = ExecutionConfig::<MegaTypes>::for_spec_and_version(MegaSpec::Satin, version);
         let block = BlockEnv::<MegaTypes> {
             number: U256::from(1),
@@ -505,14 +569,6 @@ mod catches {
             gas_limit: U256::from(10_000_000_000u64),
             ..BlockEnv::<MegaTypes>::default()
         };
-        let mut db = InMemoryDB::default();
-        let code = |c: &[u8]| {
-            AccountInfo::default()
-                .with_nonce(1)
-                .with_code(Bytecode::new_legacy(Bytes::copy_from_slice(c)))
-        };
-        db.insert_account_info(&TOP, code(top));
-        db.insert_account_info(&C, code(c));
         let mut evm = Evm::<MegaTypes>::new_with_execution_config(
             config,
             MegaSpec::Satin,
@@ -522,6 +578,27 @@ mod catches {
             precompiles(),
         );
         evm.state_mut().set_read_absent_storage(true);
+        evm
+    }
+
+    /// Runs a call of TOP with a gas limit below the execution cap (no reservoir) under `version`,
+    /// with the check forced on when `force`, and returns the check's violations.
+    fn violations(
+        top: &[u8],
+        c: &[u8],
+        version: Version,
+        force: bool,
+        alter: Option<fn(&mut MessageResult<MegaTypes>)>,
+    ) -> Vec<String> {
+        let mut db = InMemoryDB::default();
+        let code = |c: &[u8]| {
+            AccountInfo::default()
+                .with_nonce(1)
+                .with_code(Bytecode::new_legacy(Bytes::copy_from_slice(c)))
+        };
+        db.insert_account_info(&TOP, code(top));
+        db.insert_account_info(&C, code(c));
+        let mut evm = satin_evm(db, version);
         evm.ext_mut().regular_check.force = force;
         if let Some(alter) = alter {
             evm.set_inspector(AlterChild(alter));
@@ -642,5 +719,57 @@ mod catches {
             found.iter().any(|v| v == "child merge: give-backs exceed the charges made by 200"),
             "{found:?}"
         );
+    }
+
+    /// A pool conversion by an answer: a call answered without a frame returns the regular gas
+    /// it was forwarded untouched, its reservoir share by the child-merge rule (`SATIN-ICPT-004`).
+    /// A followed caller with 1,000 of regular gas and 1,000 of reservoir pays 100, then forwards
+    /// 200 and the reservoir share 980, keeping 700 and 20; the answer returns 300 of regular gas
+    /// and 880 of reservoir, 100 of its reservoir converted into regular gas, the same 1,180 in all
+    /// that it received, so the caller ends with 1,000 and 900 instead of 900 and 1,000. Fed
+    /// through the hooks a run calls (a frame built, a forward, the answer's end, its merge, the
+    /// caller's end), with the valid answer as the control.
+    #[test]
+    fn invariant_catches_answer_converts_reservoir() {
+        let run = |regular: u64, reservoir: u64| {
+            use crate::regular_check::{on_forward, on_frame_built, on_merged, on_message_end};
+            let mut evm = satin_evm(InMemoryDB::default(), satin_version());
+            let caller =
+                Message::<MegaTypes> { gas_limit: 1_000, reservoir: 1_000, ..Default::default() };
+            let mut gas = GasTracker::new_with_execution_gas_and_reservoir(1_000, 1_000);
+            on_frame_built(&mut evm, &caller, &gas);
+            gas.set_remaining(700);
+            gas.set_reservoir(20);
+            on_forward(&mut evm, &gas);
+            let call = Message::<MegaTypes> {
+                gas_limit: 200,
+                reservoir: 980,
+                depth: 1,
+                ..Default::default()
+            };
+            let mut answer = GasTracker::new_with_execution_gas_and_reservoir(200, 980);
+            answer.set_remaining(regular);
+            answer.set_reservoir(reservoir);
+            let result = MessageResult::<MegaTypes> {
+                stop: InstrStop::Return,
+                gas: answer,
+                ..Default::default()
+            };
+            on_message_end(&mut evm, &call, &result);
+            // The merge: the answer's gas into the caller, the caller's kept reservoir restored.
+            gas.merge_child_gas_into_reservoir(result.gas, result.stop);
+            gas.set_reservoir(gas.reservoir() + 20);
+            on_merged(&mut evm, &call, &result, &gas);
+            let end =
+                MessageResult::<MegaTypes> { stop: InstrStop::Return, gas, ..Default::default() };
+            on_message_end(&mut evm, &caller, &end);
+            ((gas.remaining(), gas.reservoir()), evm.ext().regular_check.violations.clone())
+        };
+        let (pools, clean) = run(200, 980);
+        assert_eq!(pools, (900, 1_000));
+        assert!(clean.is_empty(), "{clean:?}");
+        let (pools, found) = run(300, 880);
+        assert_eq!(pools, (1_000, 900));
+        assert!(found.iter().any(|v| v.starts_with("message end: answer")), "{found:?}");
     }
 }
