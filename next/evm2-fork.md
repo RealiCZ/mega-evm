@@ -1,6 +1,6 @@
 # The thin evm2 fork
 
-`next/` builds against a thin fork of [alloy-rs/evm2](https://github.com/alloy-rs/evm2): [`RealiCZ/evm2`](https://github.com/RealiCZ/evm2), branch `cz/feat/thin-fork-v3` (`1a70ed94`).
+`next/` builds against a thin fork of [alloy-rs/evm2](https://github.com/alloy-rs/evm2): [`RealiCZ/evm2`](https://github.com/RealiCZ/evm2), branch `cz/feat/thin-fork-v3` (`1a70ed94`), and one commit past it that makes the message hooks' copy-skipping constant the no-op hooks' own (`c58811c2`).
 `evm2-fork.env` holds the pin (`EVM2_FORK_REPO`, `EVM2_FORK_REV`); it is the only place CI reads it from.
 The series sits on upstream `e0d398a6`, upstream `main` on 2026-11-10, which has merged two patches of the earlier series ([#1023](https://github.com/alloy-rs/evm2/pull/1023) and [#1025](https://github.com/alloy-rs/evm2/pull/1025), see [Merged upstream](#merged-upstream)) and recovers EIP-7702 authorities with the installed crypto provider ([#963](https://github.com/alloy-rs/evm2/pull/963)).
 The earlier series sat on `85395c54`, the evm2 revision reth's pull request #28276 moves reth to; until the node moves to `e0d398a6` or later, the node and the engine run different evm2 revisions.
@@ -27,9 +27,10 @@ The engine also uses upstream changes that are already in the base: `call_with` 
 | `736f76b2` let a version credit state-gas give-backs to the reservoir only                                   | `EvmFeatures::EIP8037_RESERVOIR_REFILLS`, `give_back_state_gas`, `merge_returned_gas` | +603/−16 | the rule is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2      | has the reservoir-only give-back rule as a version option                                  |
 | `a3b2779f` let a version take a legacy share of a state charge from execution gas                            | the four `GasId::*LegacyShare` parameters, `spend_state_with_share_reserve_first`     | +232/−8  | the share is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2     | has a legacy share of the new-state charges as gas parameters                              |
 | `1a70ed94` pin the tracker's accessors and equality, and the handler's bounds and first-frame paths          | tests only                                                                            | +586     | none (tests of the series and of upstream paths)                                                         | tests                                                                                      |
+| `c58811c2` make the message hooks' copy-skipping constant the no-op hooks' own                               | none (`MessageHooks::RUNS_BEFORE` hidden; documentation and tests)                    | +165/−8  | none (goes with `8d137704`)                                                                              | goes with `8d137704`                                                                       |
 
-Size is the commit's own stat against its parent; most of the insertions of `8d137704`, `d01b0e32`, `1de8b147`, `f4749e70`, `b9117de6`, `cf70453a`, `736f76b2` and `a3b2779f` are tests, and all of `1a70ed94`'s.
-Upstream order, smallest and least contested first: `b90eac57`, `b9117de6`, `cf70453a`, `0d9f096e`, `1baf47da`, `eb469387` with the halt record of `d01b0e32`, `1de8b147`, the rest of `d01b0e32`, `f4749e70`, and `8d137704` last, because it runs on every message.
+Size is the commit's own stat against its parent; most of the insertions of `8d137704`, `d01b0e32`, `1de8b147`, `f4749e70`, `b9117de6`, `cf70453a`, `736f76b2`, `a3b2779f` and `c58811c2` are tests, and all of `1a70ed94`'s.
+Upstream order, smallest and least contested first: `b90eac57`, `b9117de6`, `cf70453a`, `0d9f096e`, `1baf47da`, `eb469387` with the halt record of `d01b0e32`, `1de8b147`, the rest of `d01b0e32`, `f4749e70`, and `8d137704` last (with `c58811c2`), because it runs on every message.
 `736f76b2` and `a3b2779f` follow ethereum/EIPs #12581: offered with it if Ethereum takes that rule into EIP-8037, kept as Satin's own departure if it does not.
 
 ## The patches
@@ -51,7 +52,9 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   The `MessageHooks` trait runs on every message, on the plain and the inspected path: consensus methods `before` (may answer the message), `started` (after the checkpoint, value transfer and creation setup), `frame_built`, `before_commit` (may rewrite the stop before commit or rollback) and `after`; observers `enter`, `unsettled` and `exit`.
   Every built-in result decided after the message's checkpoint reaches `before_commit`: a frame's, a precompile's, an account without code's, a call's out-of-funds answer and a creation's failure to create its account (a collision, an endowment the creator cannot pay); a result decided before the checkpoint (a call or creation too deep, a creation's balance or nonce check) does not (`out_of_funds_call_reaches_before_commit_on_both_paths`, `create_collision_reaches_before_commit_on_both_paths`).
   A message that halts without executing (`Evm::execute_halted_message`) reaches none of them, on either path (`halted_messages_run_no_hooks_on_either_path`).
-  `before` gets the message by `&mut` and may keep its input, so the message path first copies a call input that borrows the caller's memory (upstream [#1030](https://github.com/alloy-rs/evm2/pull/1030) lends it to the child); `MessageHooks::RUNS_BEFORE = false`, which `()` sets, skips both, so a family without a `before` keeps the borrow (`kept_input::before_keeps_an_input_the_caller_overwrites_after_the_call`).
+  `before` gets the message by `&mut` and may keep its input, so the message path first copies a call input that borrows the caller's memory (upstream [#1030](https://github.com/alloy-rs/evm2/pull/1030) lends it to the child; `kept_input::before_keeps_an_input_the_caller_overwrites_after_the_call`).
+  The no-op `()`, which runs no `before`, skips both through `MessageHooks::RUNS_BEFORE = false`, so the stock families keep the borrow (`input_copy::the_no_op_hooks_leave_a_call_input_in_the_callers_memory`).
+  The constant is `#[doc(hidden)]` and `()`'s alone (`c58811c2`): a family that overrides `before` leaves it at `true`, because with `false` its `before` would never be called and nothing would catch it.
   The other hooks get the message by shared reference, which cannot move the input out.
   With an inspector installed, `Host::execute_message` copies the input before `enter` too: a message `enter` runs gets the inspector's hooks, which get the suspended caller and can change or grow its memory (`nested_enter::entered_input_survives_a_nested_inspector_that_moves_the_caller_memory`, which also runs under Miri).
 - **Why.** Satin's frame-start rules stop a frame before its code runs, take back a success answer, and answer the system contracts before evm2 moves value.
@@ -207,6 +210,17 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** Those of upstream paths can be offered as they are.
 - **Drop** with the patches they test, or once upstream has them.
 
+### `c58811c2` the copy-skipping constant is the no-op hooks' own
+
+- **API.** `MessageHooks::RUNS_BEFORE` is `#[doc(hidden)]`, documented as set by `()` alone (to `false`), and `before`'s documentation says that a family overriding `before` leaves the constant at `true`.
+  The message path is as `8d137704` has it; nothing behaves differently.
+- **Why.** With `false`, an overridden `before` is never called and nothing catches it, so a rule written there would be silently off.
+  The engine's `StartHooks` overrides `before` and keeps the default.
+- **Tests.** `input_copy::the_no_op_hooks_leave_a_call_input_in_the_callers_memory` (under `()` the callee's input is the caller's memory) and `input_copy::a_family_that_keeps_the_defaults_has_a_call_input_copied`; `hooks_run_for_every_message_on_both_paths` already pins that a family with the default runs `before`.
+  The `nested_enter` test's family no longer sets the constant: it overrides no `before`, and its result does not depend on it.
+- **Upstream.** Goes with `8d137704`'s proposal.
+- **Drop** with `8d137704`, or when `before` gets the message by shared reference and the constant goes.
+
 ## Merged upstream
 
 Upstream merged two patches of the earlier series on 2026-11-09; the base carries them, the series does not, and the engine uses upstream's API.
@@ -281,6 +295,7 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
 - **A hook that gets a message by `&mut` sees an owned input.**
   A call's input may borrow the caller's memory (#1030), and `&mut` lets the hook move it out and keep it past the call.
   Every hook the series adds that gets a `Message` by `&mut`, and every path that reaches one, must copy the input first, as `execute_message_impl` does before `MessageHooks::before` and upstream does before its inspector and `call_with` hooks; keep `kept_input::before_keeps_an_input_the_caller_overwrites_after_the_call` passing.
+  `RUNS_BEFORE` stays `()`'s alone; keep both `input_copy` tests passing.
   Every hook gets the host and can run a message of its own while the caller is suspended, and that message's inspector hooks get the caller's frame: with an inspector installed, a hook that runs before the inspected path's own copy must see a copied input, as `Host::execute_message` gives `enter`; keep `nested_enter::entered_input_survives_a_nested_inspector_that_moves_the_caller_memory` passing.
 - **Compiled code's fixed offsets keep their fields.**
   The JIT addresses `EvmContext` fields by `offset_of!` and reads the remaining gas as the first word of its `gas` field; `GasTracker` and `Gas` are `#[repr(C)]` with `remaining` first.
