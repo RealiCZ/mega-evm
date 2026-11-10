@@ -115,7 +115,7 @@ fn deposit() -> Recovered<OpTxEnvelope> {
 }
 
 /// The input error of a block that does not start.
-fn input_error(result: Result<BlockSession<'static>, BlockError>) -> InputError {
+fn input_error<T>(result: Result<T, BlockError>) -> InputError {
     let error = result.err().expect("the block does not start");
     assert_eq!(error.phase(), Phase::BlockInput, "{error:?}");
     assert_eq!(error.disposition(), Disposition::Internal, "no verdict on the block: {error:?}");
@@ -288,6 +288,21 @@ fn chain_config_fails_explicitly_under_a_fork_without_rules() {
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(250), ..BlockEnv::<MegaTypes>::default() };
     assert!(factory.evm(env, Db::new(db())).is_err(), "no single-transaction EVM either");
+    // A timestamp past the largest `u64` is refused, not saturated into a Satin timestamp; the
+    // largest `u64` itself is one.
+    let satin = self::factory(1, 0, 0, &[]);
+    let largest = BlockEnv::<MegaTypes> {
+        timestamp: U256::from(u64::MAX),
+        ..BlockEnv::<MegaTypes>::default()
+    };
+    satin.evm(largest, Db::new(db())).map(drop).expect("the largest timestamp");
+    let past = BlockEnv::<MegaTypes> { timestamp: largest.timestamp + U256::from(1), ..largest };
+    assert_eq!(input_error(satin.evm(past, Db::new(db()))), InputError::TimestampTooLarge);
+    let simulation = mega_evm2::factory::Simulation::default();
+    assert_eq!(
+        input_error(satin.simulated_evm(past, Db::new(db()), &simulation)),
+        InputError::TimestampTooLarge
+    );
 }
 
 /// A candidate is committed only by a session of its own block that runs under the same rules,
