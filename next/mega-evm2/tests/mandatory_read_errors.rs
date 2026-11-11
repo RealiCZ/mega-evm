@@ -153,13 +153,28 @@ impl Database for RegistryBackend {
 }
 
 fn satin_evm(fail: Fail) -> Evm<'static, MegaTypes> {
-    let block = BlockEnv::<MegaTypes> {
+    try_satin_evm(fail, true).0.expect("the EVM is made")
+}
+
+fn block_env() -> BlockEnv<MegaTypes> {
+    BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000),
         ..BlockEnv::<MegaTypes>::default()
-    };
-    common::evm(block, Db::new(RegistryBackend::new(fail)))
+    }
+}
+
+/// A single transaction's EVM over a backend that fails the reads `fail` names: from the start
+/// when `armed`, otherwise once the returned switch is set.
+fn try_satin_evm(
+    fail: Fail,
+    armed: bool,
+) -> (Result<Evm<'static, MegaTypes>, BlockError>, Rc<Cell<bool>>) {
+    let backend = RegistryBackend::new(fail);
+    let switch = backend.armed.clone();
+    switch.set(armed);
+    (common::factory().evm(block_env(), Db::new(backend)), switch)
 }
 
 /// Block 1 over a backend that fails the reads `fail` names: from the start when `armed`,
@@ -278,14 +293,6 @@ fn assert_unavailable(name: &str, error: &HandlerError) {
 /// A failed read of the live system address a transaction is classified against: the database's
 /// own error, carried so that no path takes it for a refusal and the block routes it as an internal
 /// error (`SATIN-REG-007`).
-fn assert_registry_unavailable(name: &str, error: &HandlerError) {
-    let failed = mega_evm2::error::system_address_read_failure(error)
-        .unwrap_or_else(|| panic!("{name}: not the classification read: {error:?}"));
-    assert!(failed.0.downcast_ref::<Unavailable>().is_some(), "{name}: {failed:?}");
-    let db = mega_evm2::error::database_error(error).expect("the database error");
-    assert!(db.downcast_ref::<Unavailable>().is_some() && db.is_fatal(), "{name}");
-}
-
 /// The control: with the registry readable, every envelope executes.
 #[test]
 fn test_every_envelope_executes_when_the_registry_is_readable() {
@@ -298,21 +305,36 @@ fn test_every_envelope_executes_when_the_registry_is_readable() {
     }
 }
 
+/// A single transaction's EVM resolves the live system address once, when it is made, by a direct
+/// read of the registry's account and slot 0 (`SATIN-REG-002`): a read the database cannot serve
+/// there is an internal error, never an absent registry.
 #[test]
-fn test_unreadable_registry_slot_fails_every_envelope() {
-    for (name, tx) in every_envelope() {
-        let mut evm = satin_evm(Fail::Storage);
-        let error = evm.transact(&tx).err().unwrap_or_else(|| panic!("{name}: executed"));
-        assert_registry_unavailable(name, &error);
+fn test_unreadable_registry_fails_the_evm_when_it_is_made() {
+    for (fail, slot) in [(Fail::Account, None), (Fail::Storage, Some(U256::ZERO))] {
+        let Err(error) = try_satin_evm(fail, true).0 else {
+            panic!("{fail:?}: an unreadable registry is no answer");
+        };
+        assert_eq!(error.phase(), Phase::SystemAddressResolution, "{fail:?}");
+        assert_eq!(error.disposition(), Disposition::Internal, "{fail:?}");
+        assert_eq!(error.context().address, Some(SEQUENCER_REGISTRY), "{fail:?}");
+        assert_eq!(error.context().slot, slot, "{fail:?}");
+        assert_unavailable_block("registry", &error);
     }
 }
 
+/// Once made, the EVM classifies every envelope against the address it resolved: an unreadable
+/// registry then fails none, since none reads it for its classification.
 #[test]
-fn test_unreadable_registry_account_fails_every_envelope() {
-    for (name, tx) in every_envelope() {
-        let mut evm = satin_evm(Fail::Account);
-        let error = evm.transact(&tx).err().unwrap_or_else(|| panic!("{name}: executed"));
-        assert_registry_unavailable(name, &error);
+fn test_a_made_evm_classifies_every_envelope_without_reading_the_registry() {
+    for fail in [Fail::Account, Fail::Storage] {
+        for (name, tx) in every_envelope() {
+            let (evm, armed) = try_satin_evm(fail, false);
+            let mut evm = evm.expect("the EVM is made");
+            assert_eq!(evm.ext().system_address, Some(SYSTEM));
+            armed.set(true);
+            let executed = evm.transact(&tx).unwrap_or_else(|e| panic!("{name} {fail:?}: {e:?}"));
+            assert!(executed.commit().status, "{name} {fail:?}");
+        }
     }
 }
 

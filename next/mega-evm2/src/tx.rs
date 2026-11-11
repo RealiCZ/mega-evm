@@ -1,7 +1,7 @@
 //! Transaction handlers: op-evm2's OP layer (L1 data fee, operator fee, vaults, deposits) with
 //! Satin's transaction rules on top: the classification of every envelope against the live system
-//! address (the block's, resolved once by its pre-block sequence; outside a block session, read off
-//! the registry by the transaction), the body's history as intrinsic state gas, the first frame's
+//! address resolved once (by the block's pre-block sequence, or by a single transaction's EVM when
+//! it is made), which reads nothing, the body's history as intrinsic state gas, the first frame's
 //! start records and their charge after validation (an out-of-gas there runs no frame and reads
 //! nothing of its target), the first-frame settlement,
 //! and deposits, which pay history gas as any transaction does — their body's in their
@@ -176,29 +176,21 @@ fn host_error(error: evm2::HostError) -> evm2::registry::HandlerError {
     }
 }
 
-/// The live system address a transaction is classified against. In a block session, the block's,
-/// resolved once by its pre-block sequence: nothing is read (`SATIN-REG-002`). Outside one, the
-/// transaction reads it first ([`read_registry`]).
+/// The live system address a transaction is classified against: the one its block, or its EVM's
+/// construction, resolved (`Lite::system_address`); nothing is read (`SATIN-REG-002`). Under the
+/// reference's rule (comparison only) the transaction reads it first ([`read_registry`]).
 fn system_address(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<Option<Address>> {
-    match host.ext().system_address {
-        SystemAddress::Resolved(_)
-            if crate::under_reference_rule(
-                host.ext(),
-                crate::ReferenceRule::RegistryReadPerTransaction,
-            ) =>
-        {
-            read_registry(host)
-        }
-        SystemAddress::Resolved(address) => Ok(Some(address)),
-        SystemAddress::PerTransaction => read_registry(host),
+    if crate::under_reference_rule(host.ext(), crate::ReferenceRule::RegistryReadPerTransaction) {
+        return read_registry(host);
     }
+    Ok(host.ext().system_address)
 }
 
-/// A transaction executed outside a block session reads the live system address first (Satin
-/// `load_system_address`, the first thing its `validate_env` does): the registry's account and
-/// slot 0, warm for the rest of the transaction, both read whatever the account holds. A read the
-/// database cannot serve fails the transaction. The address is the slot's only under the trusted
-/// code and when it is non-zero.
+/// The reference's classification read (Satin `load_system_address`, the first thing its
+/// `validate_env` does), made under [`crate::ReferenceRule::RegistryReadPerTransaction`] only: the
+/// registry's account and slot 0, warm for the rest of the transaction, both read whatever the
+/// account holds. A read the database cannot serve fails the transaction. The address is the
+/// slot's only under the trusted code and when it is non-zero.
 fn read_registry(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<Option<Address>> {
     if crate::off("registry_read") {
         return Ok(None);

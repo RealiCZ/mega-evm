@@ -647,8 +647,8 @@ fn probe() -> Bytecode {
 /// No transaction of a block reads the registry, or finds its account or slot 0 warm, for its
 /// classification (`SATIN-REG-002`): the block resolved the address once. A deposit's, a Mega
 /// System Transaction's and a user transaction's read sets hold no registry state of their
-/// classification, and a transaction's first access to the registry's account is cold, where a
-/// single transaction outside a block, which reads the registry itself, finds it warm.
+/// classification, and a transaction's first access to the registry's account is cold, as in a
+/// single transaction's EVM, which resolved its address once when it was made.
 #[test]
 fn lifecycle_classification_reads_no_registry_state_once_per_block() {
     const PROBE: Address = Address::with_last_byte(0xb0);
@@ -685,13 +685,58 @@ fn lifecycle_classification_reads_no_registry_state_once_per_block() {
         block.commit_candidate(out).unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
     let in_block = common::committed_slot(&block, PROBE, U256::ZERO).expect("the probe stored");
-    // Outside a block the transaction reads the registry first: its account is then warm.
+    // EIP-8038's cold account access, 3,000, and the probe's own 3 + 2 (`PUSH20`, `POP`).
+    assert_eq!(in_block, U256::from(3_000 + 5 + 2), "the registry's account is cold");
     let mut evm = common::evm(common::block(), Db::new(db));
     let tx = legacy(SENDER, 0, PROBE, Bytes::new());
     assert!(evm.transact(&tx).expect("runs").commit().status);
     let outside = evm.state_mut().storage_slot_untracked(&PROBE, &U256::ZERO).unwrap();
-    // Satin's additional cold account access, 2,900 (EIP-8038's 3,000 less the warm 100).
-    assert_eq!(in_block - outside, U256::from(2_900), "a cold account access against a warm one");
+    assert_eq!(outside, in_block, "a single transaction's EVM prices it as a block does");
+}
+
+/// A single transaction's EVM resolves the live system address once, when it is made, off the
+/// state it runs on, by a direct read with no warming and no charge (`SATIN-REG-002`): it
+/// classifies against that address, reads nothing of the registry for it, and prices a
+/// transaction that reads the registry as a block does. Outside a block a registry that is absent,
+/// holds other code or names no address leaves no system address, and nothing is invalidated.
+#[test]
+fn lifecycle_a_single_transaction_evm_resolves_once_and_prices_as_a_block_does() {
+    let mut db = with_registry(world(), registry_v2());
+    db.insert_account_info(&LIVE, AccountInfo::default().with_balance(U256::from(1) << 64));
+    db.insert_account_info(
+        &ORACLE,
+        AccountInfo::default()
+            .with_code(Bytecode::new_legacy(FLAT_SYSTEM_CONTRACTS[0].code.clone())),
+    );
+    let mut set_slot_data = keccak256("setSlot(uint256,bytes32)")[..4].to_vec();
+    set_slot_data.extend_from_slice(&U256::from(3).to_be_bytes::<32>());
+    set_slot_data.extend_from_slice(&U256::from(4).to_be_bytes::<32>());
+    // The Oracle's `setSlot` checks its caller against the registry's live system address.
+    let mst = legacy(LIVE, 0, ORACLE, set_slot_data.into());
+    let mut block = start(&genesis_chain(), &block_input(), db.clone()).expect("the block starts");
+    let in_block = block.execute_candidate(&mst, &[]).expect("runs");
+    assert!(
+        in_block.is_system_transaction() && in_block.result().status,
+        "{:?}",
+        in_block.result()
+    );
+    let mut evm = common::evm(common::block(), Db::new(db.clone()));
+    assert_eq!(evm.ext().system_address, Some(LIVE), "resolved when the EVM was made");
+    let outside = evm.transact(&mst).expect("runs").detach();
+    assert!(outside.result.status && evm.ext().is_system, "{:?}", outside.result);
+    assert_eq!(outside.result.tx_gas_used(), in_block.result().tx_gas_used(), "the same gas");
+    let registry = outside.pending_state.account_changes_for(&SEQUENCER_REGISTRY).expect("read");
+    assert!(!registry.is_changed(), "the Oracle's own read of the registry, nothing more");
+    // Outside a block, no address is the system address where a block would be invalid.
+    let mut zero = db.clone();
+    set_slot(&mut zero, 0, U256::ZERO);
+    let mut foreign = db.clone();
+    foreign
+        .insert_account_info(&SEQUENCER_REGISTRY, AccountInfo::default().with_code(code(&[0x00])));
+    for state in [world(), zero, foreign] {
+        let evm = common::evm(common::block(), Db::new(state));
+        assert_eq!(evm.ext().system_address, None);
+    }
 }
 
 /// The block in which Satin activates, and no other, checks the EIP-7997 factory, third, after the

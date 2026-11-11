@@ -34,8 +34,8 @@ pub const PRE_FORK_CREATE_COST: u64 = 32_000;
 pub const MIN_BUCKET_SIZE: u64 = 256;
 /// Limit kinds by pool index: data size, KV updates, state growth.
 pub const KIND: [u8; 3] = [0, 1, 3];
-/// The Oracle, and the `SequencerRegistry` with its `_currentSystemAddress` slot, which a block
-/// reads once to resolve its live system address (and a transaction outside a block itself).
+/// The Oracle, and the `SequencerRegistry` with its `_currentSystemAddress` slot, which a block,
+/// or a single transaction's EVM, reads once to resolve its live system address.
 pub const ORACLE: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01]);
 pub const SEQUENCER_REGISTRY: Address =
@@ -51,21 +51,6 @@ pub struct Cfg {
     pub buckets: HashMap<u64, u64>,
     /// The oracle service's answers by slot (Satin `OracleEnv::get_oracle_storage`).
     pub oracle: HashMap<U256, U256>,
-}
-
-/// The live system address transactions are classified against (`SATIN-REG-002`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SystemAddress {
-    /// Not resolved by a block: each transaction reads the registry's account and slot 0 as it is
-    /// classified, both warm for the rest of the transaction. The case of a transaction executed
-    /// outside a block session (a call, an estimate, a single transaction of a test), which has
-    /// no pre-block sequence to resolve the address.
-    #[default]
-    PerTransaction,
-    /// Resolved once by the block's pre-block sequence, after its other steps: every transaction
-    /// of the block is classified against it, and none reads the registry, or finds its account
-    /// or slot warm, for its classification.
-    Resolved(Address),
 }
 
 /// The per-transaction limits and gas detention's caps a transaction runs under (Satin
@@ -172,9 +157,11 @@ pub struct Settlement {
 #[derive(Clone, Debug, Default)]
 pub struct Lite {
     pub cfg: Cfg,
-    /// The live system address: the block's, once its pre-block sequence resolved it; kept across
-    /// transactions.
-    pub system_address: SystemAddress,
+    /// The live system address every transaction is classified against, resolved once and kept
+    /// across transactions (`SATIN-REG-002`): by a block's pre-block sequence, after its other
+    /// steps; by the factory for a single transaction's EVM, off the state it runs on. `None`: no
+    /// address is the system address. No transaction reads the registry for its classification.
+    pub system_address: Option<Address>,
     /// The limits every transaction runs under: Satin's ([`TxLimits::SATIN`]), which the block
     /// executor installs. A tool or a test that runs under other values sets them here; what it
     /// computes is then a counterfactual, not the chain's result.
@@ -295,7 +282,7 @@ pub enum ReferenceRule {
     /// SequencerRegistry are installed, replaced or migrated, whatever their addresses hold.
     NoPreBlockDeployment,
     /// Every transaction reads the registry's account and slot 0 as it is classified, both warm
-    /// for the rest of the transaction, in a block as outside one.
+    /// for the rest of the transaction, and is classified against what it read.
     RegistryReadPerTransaction,
 }
 

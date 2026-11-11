@@ -288,12 +288,12 @@ pub const ORACLE_NO_SERVICE: &str = "oracle_no_service";
 /// ([`ReferenceRule::NoPreBlockDeployment`]).
 pub const SYSTEM_CONTRACT_DEPLOYMENT: &str = "system_contract_deployment";
 
-/// A block resolves its live system address once, after its other pre-block steps, and no
-/// transaction reads the registry, or finds its account or slot warm, for its classification
-/// (`SATIN-REG-002`); the reference reads both for every transaction, warm for the rest of it. A
-/// transaction that then reads the registry, as every Mega System Transaction does through the
-/// Oracle's check of its caller, pays their cold access. Only a block reaches it (a single
-/// transaction outside a block still reads them); checked by running the block again with that read
+/// The live system address is resolved once, by a block after its other pre-block steps and by a
+/// single transaction's EVM when it is made, and no transaction reads the registry, or finds its
+/// account or slot warm, for its classification (`SATIN-REG-002`); the reference reads both for
+/// every transaction, warm for the rest of it. A transaction that then reads the registry, as every
+/// Mega System Transaction does through the Oracle's check of its caller, pays their cold access.
+/// Checked by running the case or the block again with that read
 /// ([`ReferenceRule::RegistryReadPerTransaction`]).
 pub const ONCE_PER_BLOCK_RESOLUTION: &str = "once_per_block_resolution";
 
@@ -581,7 +581,7 @@ pub fn candidate_fault(case: &str, plain: &mut Value, inspected: &mut Value) {
 /// The classes checked by running the case again on the engine under the reference's rule, each
 /// with that rule. The give-back rule comes last: a case that meets it and another class's change
 /// is that other class's ([`rerun_class`]).
-pub const RERUN_CLASSES: [(&str, ReferenceRule); 10] = [
+pub const RERUN_CLASSES: [(&str, ReferenceRule); 11] = [
     (SLOTNUM_ZERO, ReferenceRule::SlotNumber),
     (AUTH_PREFLIGHT_READS, ReferenceRule::ShortListUnsimulated),
     (MODEXP_FORMULA_PRICE, ReferenceRule::ModexpBoundFirst),
@@ -591,6 +591,7 @@ pub const RERUN_CLASSES: [(&str, ReferenceRule); 10] = [
     (KEYLESS_DECODED_DISPATCH, ReferenceRule::KeylessSelectorOnly),
     (HINT_WITH_VALUE, ReferenceRule::HintValueRefused),
     (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
+    (ONCE_PER_BLOCK_RESOLUTION, ReferenceRule::RegistryReadPerTransaction),
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
 
@@ -598,10 +599,11 @@ pub const RERUN_CLASSES: [(&str, ReferenceRule); 10] = [
 /// rule, and the block executor gate by running a block again, each with that rule: those recorded
 /// blocks reach, and, for blocks, the packing budgets of a Mega System Transaction, which only a
 /// block has.
-pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 4] = [
+pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 5] = [
     (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
     (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
     (MST_PACKING_BUDGETS, ReferenceRule::MstPackingExempt),
+    (ONCE_PER_BLOCK_RESOLUTION, ReferenceRule::RegistryReadPerTransaction),
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
 
@@ -612,8 +614,8 @@ pub const BLOCK_RERUN_CLASSES: [(&str, ReferenceRule); 6] = [
     (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
     (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
     (MST_PACKING_BUDGETS, ReferenceRule::MstPackingExempt),
-    (SYSTEM_CONTRACT_DEPLOYMENT, ReferenceRule::NoPreBlockDeployment),
     (ONCE_PER_BLOCK_RESOLUTION, ReferenceRule::RegistryReadPerTransaction),
+    (SYSTEM_CONTRACT_DEPLOYMENT, ReferenceRule::NoPreBlockDeployment),
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
 

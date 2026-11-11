@@ -25,12 +25,12 @@
 
 use super::{BEACON_ROOTS, BlockSession, HISTORY_STORAGE};
 use crate::{
-    SEQUENCER_REGISTRY, SystemAddress,
-    error::{BlockError, ErrorContext, Phase, SystemAddressFault},
+    SEQUENCER_REGISTRY,
+    error::{BlockError, ErrorContext, Phase},
     system_contracts::{
         CREATE2_FACTORY, CREATE2_FACTORY_CODE_HASH, FLAT_SYSTEM_CONTRACTS, MEGA_SYSTEM_ADDRESS,
-        SEQUENCER_REGISTRY_CONTRACT, SEQUENCER_REGISTRY_V1_CODE_HASH, SystemContract, address_word,
-        registry_slot,
+        RegistryRead, SEQUENCER_REGISTRY_CONTRACT, SEQUENCER_REGISTRY_V1_CODE_HASH, SystemContract,
+        address_word, registry_slot,
     },
 };
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
@@ -135,7 +135,7 @@ impl BlockSession<'_> {
         let (address, reads) = self.resolve_system_address()?;
         self.commit_pre_block_state(reads);
         self.system_address = address;
-        self.evm.ext_mut().system_address = SystemAddress::Resolved(address);
+        self.evm.ext_mut().system_address = Some(address);
         Ok(())
     }
 
@@ -298,39 +298,14 @@ impl BlockSession<'_> {
     /// version 2.0.0 or whose slot 0 is zero makes the block invalid (`SATIN-REG-004`); a read the
     /// database cannot serve is an internal error (`SATIN-REG-007`).
     fn resolve_system_address(&mut self) -> Result<(Address, PendingState), BlockError> {
-        let key = registry_slot::CURRENT_SYSTEM_ADDRESS;
-        let failed = |slot: Option<U256>| {
-            move |e: evm2::DatabaseError| {
-                let context = ErrorContext { slot, ..ErrorContext::account(SEQUENCER_REGISTRY) };
-                BlockError::read(Phase::SystemAddressResolution, e, context)
-            }
-        };
-        let state = self.evm.state_mut();
-        let Some(info) = state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(failed(None))?
-        else {
-            return Err(BlockError::system_address(
-                SEQUENCER_REGISTRY,
-                SystemAddressFault::RegistryAbsent,
-            ));
-        };
-        if info.code_hash != SEQUENCER_REGISTRY_CONTRACT.code_hash {
-            return Err(BlockError::system_address(
-                SEQUENCER_REGISTRY,
-                SystemAddressFault::RegistryCode(info.code_hash),
-            ));
-        }
-        let current =
-            state.storage_slot_untracked(&SEQUENCER_REGISTRY, &key).map_err(failed(Some(key)))?;
-        if current.is_zero() {
-            return Err(BlockError::system_address(
-                SEQUENCER_REGISTRY,
-                SystemAddressFault::ZeroSystemAddress,
-            ));
-        }
-        let mut reads = PendingState::default();
-        reads.insert_account(SEQUENCER_REGISTRY, Some(info.clone()), Some(info));
-        reads.insert_storage(SEQUENCER_REGISTRY, key, current, current);
-        Ok((Address::from_word(B256::from(current)), reads))
+        let read = RegistryRead::read(&mut self.evm).map_err(|(slot, e)| {
+            let context = ErrorContext { slot, ..ErrorContext::account(SEQUENCER_REGISTRY) };
+            BlockError::read(Phase::SystemAddressResolution, e, context)
+        })?;
+        let address = read
+            .resolve()
+            .map_err(|fault| BlockError::system_address(SEQUENCER_REGISTRY, fault))?;
+        Ok((address, read.state()))
     }
 
     /// Satin `read_l1_block_info`: the account, then its slots when it exists, read-only. A read

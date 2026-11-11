@@ -7,10 +7,14 @@
 
 pub use crate::system_code::*;
 use crate::{
-    ORACLE, SEQUENCER_REGISTRY, intercept::LIMIT_CONTROL, keyless::KEYLESS,
-    satin_ext::ACCESS_CONTROL,
+    MegaTypes, ORACLE, SEQUENCER_REGISTRY, error::SystemAddressFault, intercept::LIMIT_CONTROL,
+    keyless::KEYLESS, satin_ext::ACCESS_CONTROL,
 };
 use alloy_primitives::{Address, B256, Bytes, U256, address, b256};
+use evm2::{
+    DatabaseError, Evm,
+    evm::{AccountInfo, PendingState},
+};
 
 /// The High-Precision Timestamp's address.
 pub const HIGH_PRECISION_TIMESTAMP: Address =
@@ -138,6 +142,54 @@ pub mod registry_slot {
 /// An address as a storage word (Solidity's address-in-slot layout).
 pub fn address_word(address: Address) -> U256 {
     U256::from_be_slice(address.as_slice())
+}
+
+/// What the resolution of the live system address reads (`SATIN-REG-002`): the registry's account
+/// and its slot 0, read directly off the state, neither loaded into a transaction, warmed nor
+/// charged. A block reads them once, after its other pre-block steps; a single transaction's EVM
+/// once, when it is made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegistryRead {
+    pub account: Option<AccountInfo>,
+    /// Slot 0, `_currentSystemAddress`.
+    pub current_system_address: U256,
+}
+
+impl RegistryRead {
+    /// Reads the registry's account, then its slot 0, off `evm`'s state. A read the database cannot
+    /// serve is returned with the slot it was of (`None`: the account).
+    pub fn read(evm: &mut Evm<'_, MegaTypes>) -> Result<Self, (Option<U256>, DatabaseError)> {
+        let key = registry_slot::CURRENT_SYSTEM_ADDRESS;
+        let state = evm.state_mut();
+        let account = state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(|e| (None, e))?;
+        let current_system_address =
+            state.storage_slot_untracked(&SEQUENCER_REGISTRY, &key).map_err(|e| (Some(key), e))?;
+        Ok(Self { account, current_system_address })
+    }
+
+    /// The live system address: slot 0's, when the account holds version 2.0.0's code and the slot
+    /// is not zero; otherwise why there is none (`SATIN-REG-004`).
+    pub fn resolve(&self) -> Result<Address, SystemAddressFault> {
+        let Some(account) = &self.account else {
+            return Err(SystemAddressFault::RegistryAbsent);
+        };
+        if account.code_hash != SEQUENCER_REGISTRY_CODE_HASH {
+            return Err(SystemAddressFault::RegistryCode(account.code_hash));
+        }
+        if self.current_system_address.is_zero() {
+            return Err(SystemAddressFault::ZeroSystemAddress);
+        }
+        Ok(Address::from_word(B256::from(self.current_system_address)))
+    }
+
+    /// The read as a read-only state: the account and slot 0 as they stood.
+    pub fn state(&self) -> PendingState {
+        let mut state = PendingState::default();
+        state.insert_account(SEQUENCER_REGISTRY, self.account.clone(), self.account.clone());
+        let (key, value) = (registry_slot::CURRENT_SYSTEM_ADDRESS, self.current_system_address);
+        state.insert_storage(SEQUENCER_REGISTRY, key, value, value);
+        state
+    }
 }
 
 #[cfg(test)]

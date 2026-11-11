@@ -125,8 +125,9 @@ fn test_protocol_source_from_live_system_sender_still_fails_without_a_frame() {
     assert!(out.result.ext.failed_deposit);
     assert_eq!(out.result.tx_gas_used(), 1_000_000);
     assert!(out.pending_state.account_changes_for(&ORACLE).is_none());
-    let registry = out.pending_state.account_changes_for(&SEQUENCER_REGISTRY).unwrap();
-    assert!(registry.storage.slots.contains_key(&U256::ZERO));
+    // The live system address was resolved when the EVM was made: the transaction read nothing of
+    // the registry for its classification (`SATIN-REG-002`).
+    assert!(out.pending_state.account_changes_for(&SEQUENCER_REGISTRY).is_none());
     let caller = out.pending_state.account_info(&SYSTEM).unwrap();
     assert_eq!((caller.nonce, caller.balance), (8, U256::from(17)));
 }

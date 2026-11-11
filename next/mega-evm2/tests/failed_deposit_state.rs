@@ -1,5 +1,7 @@
 //! Failed deposits undo writes while retaining every account and slot loaded in returned state.
 //! Database-read instrumentation in the differential gates cannot observe discarded loaded entries.
+//! The live system address is resolved once, when the EVM is made, so no transaction's state holds
+//! the registry for its classification (`SATIN-REG-002`).
 mod common;
 
 use alloy_consensus::transaction::Recovered;
@@ -68,23 +70,19 @@ fn test_failed_deposit_returns_loaded_slots_but_no_frame_writes() {
         assert_eq!(value.original, U256::from(slot + 10));
         assert_eq!(value.current, value.original);
     }
-    let registry = state.account_changes_for(&SEQUENCER_REGISTRY).expect("registry retained");
-    assert!(!registry.is_changed());
-    assert!(registry.storage.slots.contains_key(&U256::ZERO));
+    assert!(state.account_changes_for(&SEQUENCER_REGISTRY).is_none(), "no classification read");
     let sender = state.account_info(&SENDER).unwrap();
     assert_eq!((sender.nonce, sender.balance), (8, U256::from(117)));
     assert_eq!(state.account_changes().filter(|a| a.is_changed()).count(), 1);
 }
 
 #[test]
-fn test_intrinsic_failure_keeps_registry_read_without_loading_recipient() {
+fn test_intrinsic_failure_loads_neither_the_recipient_nor_the_registry() {
     let mut evm = evm();
     let out = evm.transact(&deposit(1)).unwrap().detach();
     assert!(out.result.ext.failed_deposit);
     assert!(out.pending_state.account_changes_for(&TARGET).is_none());
-    let registry =
-        out.pending_state.account_changes_for(&SEQUENCER_REGISTRY).expect("registry retained");
-    assert!(registry.storage.slots.contains_key(&U256::ZERO));
+    assert!(out.pending_state.account_changes_for(&SEQUENCER_REGISTRY).is_none());
     let sender = out.pending_state.account_info(&SENDER).unwrap();
     assert_eq!((sender.nonce, sender.balance), (8, U256::from(117)));
 }
