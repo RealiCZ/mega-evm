@@ -133,6 +133,13 @@ scope = "sample"
 why = "An account load's skip-cold check (the account opcodes, the call family's target, SELFDESTRUCT's beneficiary) sees spendable plus withheld gas, through the fork's gas reserve (BudgetUse::ColdAccount); off, spendable gas only, so a cold load Satin makes is skipped and the frame halts instead of crossing."
 
 [[control]]
+switch = "create2_salt_order"
+gate = "main"
+scenario = "edge_create2_missing_salt_detained"
+scope = "sample"
+why = "A CREATE2 short of its salt pays the initcode cost and the memory before it fails on the missing salt (SATIN-SIZE-005, SATIN-SIZE-006), so in a detained frame the memory charge is the crossing and the frame stops with the limit revert and keeps its gas; off, evm2 pops the salt first and the frame halts on the stack and burns its gas."
+
+[[control]]
 switch = "create_lend"
 gate = "main"
 scenario = "q01_det_create_spill_salt2"

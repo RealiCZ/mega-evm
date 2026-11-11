@@ -244,8 +244,9 @@ Upstream merged two patches of the earlier series on 2026-11-09 and one of the s
 ## Dropped from the earlier series
 
 - `b9117de6`, which popped CREATE2's salt after the EIP-3860 init-code charge and the memory expansion, as revm's `create` does: upstream closed the proposal ([#1062](https://github.com/alloy-rs/evm2/pull/1062)), and the series no longer carries it, so `create_with` pops the salt first.
-  Under Ethereum's rules both halts consume the frame's gas, so on a stock family only the halt's label differs (`StackUnderflow` against revm's out-of-gas label).
-  Under gas detention the order also decides the outcome: a charge the frame cannot pay is a crossing, where the frame stops at the compute limit and keeps its gas, and a stack underflow halts and burns it, so a detained frame running CREATE2 on three stack items halts where the reference stops at the crossing (the `edge_create2_missing_salt_*` scenarios).
+  Under Ethereum's rules both halts consume the frame's gas, so on a stock family only the halt's label differs.
+  Satin's order is the reference's (`SATIN-SIZE-005`, `SATIN-SIZE-006`), and under gas detention it decides the outcome: a charge the frame cannot pay is a crossing, where the frame stops at the compute limit and keeps its gas, while a stack underflow halts and burns it.
+  So the engine keeps the order itself: its CREATE2 on three stack items makes `create_with`'s own steps up to the salt (the static context, the operands and the size's range, the initcode size and cost, the memory) and then fails on the missing salt (`create2_short_of_salt` in `mega-evm2/src/lib.rs`, switch `create2_salt_order`, its control `edge_create2_missing_salt_detained`; `diff/tests/create2_salt_order.rs` holds the four `edge_create2_missing_salt_*` scenarios to the reference's figures).
 - `0f50973c`, which checked ModExp's EIP-7823 bound before its formula price (revm's order): the Satin specification follows upstream's order, the formula price charged before the bound, so an over-bound input is priced, and decided under gas detention, by its formula ([#874](https://github.com/alloy-rs/evm2/pull/874)).
   The engine's two-step price probe (`precompile_price_of`) reads the minimum, then the rest of the formula price, for such an input too; the `edge_modexp_*` scenarios show the order.
 - The rebase of open upstream PR [#523](https://github.com/alloy-rs/evm2/pull/523) (native precompile calls): the engine answers `MegaLimitControl` and `MegaAccessControl` from `MessageHooks::before`, which runs before dispatch.
@@ -312,6 +313,9 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
 - **The engine restates op-evm2's deposit execution.**
   `execute_deposit_inner` (`mega-evm2/src/tx.rs`) is its own copy of op-evm2's `execute_deposit_tx` around evm2's `prepare_initial_frame` and `execute_initial_frame`, adding the created caller's state gas, the first frame's start, the creation from a sender whose nonce cannot be bumped and the out-of-funds failure; it runs no `execute_prepared`, so the first-frame hook does not reach it.
   After a rebase, compare it with those functions and with `execute_deposit_tx`, and check that the creation nonce still comes from `PreparedDeposit` (the state nonce).
+- **The engine restates `create_with`'s steps for a CREATE2 short of its salt.**
+  `create2_short_of_salt` (`mega-evm2/src/lib.rs`) makes the steps evm2's `create_with` makes before it pops the salt, in Satin's order (`SATIN-SIZE-005`); compare it with `create_with` after a rebase, as a clean merge does not, and keep `diff/tests/create2_salt_order.rs` and the `fxk` fuzz batch passing.
+  If upstream ever pops the salt after the charges, the engine's copy can go.
 - **Run the negative controls, not only the gates.**
   A fix the new upstream code no longer reaches shows up as a missed control while every gate still passes; `diff/scripts/ci-local.sh` runs the sample controls, `controls.sh full` the rest.
 
