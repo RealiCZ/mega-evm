@@ -277,6 +277,7 @@ pub struct BlockSession<'a> {
 
 impl<'a> BlockSession<'a> {
     /// A session over `evm`, which the factory configured, its pre-block sequence run.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
         evm: Evm<'a, MegaTypes>,
         identity: BlockIdentity,
