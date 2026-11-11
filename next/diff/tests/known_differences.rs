@@ -4,9 +4,9 @@
 use mega_evm2_diff::gate::{
     AUTH_PREFLIGHT_READS, DEPOSIT_HISTORY, DUP_STACK_LABEL, HALTED_FIRST_FRAME, HINT_WITH_VALUE,
     INVALID_IMMEDIATE_LABEL, KEYLESS_DECODED_DISPATCH, Known, MODEXP_FORMULA_PRICE,
-    MST_PACKING_BUDGETS, ORACLE_NO_SERVICE, ORACLE_READ_BEFORE_CHARGE, REFUSAL_COSTS_NOTHING,
-    RESERVOIR_GIVE_BACK, SLOTNUM_ZERO, Verdict, classify, compared_frames, known_classes,
-    known_differences, known_replay_differences,
+    MST_PACKING_BUDGETS, ONCE_PER_BLOCK_RESOLUTION, ORACLE_NO_SERVICE, ORACLE_READ_BEFORE_CHARGE,
+    REFUSAL_COSTS_NOTHING, RESERVOIR_GIVE_BACK, SLOTNUM_ZERO, SYSTEM_CONTRACT_DEPLOYMENT, Verdict,
+    classify, compared_frames, known_classes, known_differences, known_replay_differences,
 };
 use serde_json::{Value, json};
 
@@ -216,6 +216,8 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             HINT_WITH_VALUE,
             MST_PACKING_BUDGETS,
             ORACLE_NO_SERVICE,
+            SYSTEM_CONTRACT_DEPLOYMENT,
+            ONCE_PER_BLOCK_RESOLUTION,
         ]
     );
     let text = include_str!("../known-differences.toml");
@@ -226,7 +228,7 @@ fn test_known_differences_file_lists_exactly_its_entries() {
     for rule in ["SATIN-AUTH-005", "SATIN-PCMP-007", "SATIN-BASE-005"] {
         assert_eq!(text.matches(&format!("owner decision 2026-11-08 ({rule})")).count(), 1);
     }
-    // The give-back rule's class and the seven of the system-contract and block decisions, each
+    // The give-back rule's class and the nine of the system-contract and block decisions, each
     // decided on 2026-11-09 and signed off by its main rule, and no entry of their own.
     for rule in [
         "SATIN-POOL-014",
@@ -237,10 +239,12 @@ fn test_known_differences_file_lists_exactly_its_entries() {
         "SATIN-ORCL-006",
         "SATIN-BLK-007",
         "SATIN-ORCL-005",
+        "SATIN-SYSC-003",
+        "SATIN-REG-002",
     ] {
         assert_eq!(text.matches(&format!("owner decision 2026-11-09 ({rule})")).count(), 1);
     }
-    assert_eq!(text.matches("2026-11-09").count(), 8);
+    assert_eq!(text.matches("2026-11-09").count(), 10);
     // No entry waits for a fix.
     assert_eq!(text.matches("pending fix (").count(), 0);
 }

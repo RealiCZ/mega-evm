@@ -15,7 +15,7 @@
 //! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`SLOTNUM_ZERO`],
 //! [`RESERVOIR_GIVE_BACK`], [`DEPOSIT_HISTORY`], [`ORACLE_READ_BEFORE_CHARGE`],
 //! [`REFUSAL_COSTS_NOTHING`], [`KEYLESS_DECODED_DISPATCH`], [`HINT_WITH_VALUE`],
-//! [`MST_PACKING_BUDGETS`], [`ORACLE_NO_SERVICE`]).
+//! [`MST_PACKING_BUDGETS`], [`ORACLE_NO_SERVICE`], [`SYSTEM_CONTRACT_DEPLOYMENT`]).
 use mega_evm2::ReferenceRule;
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
@@ -280,8 +280,25 @@ pub const MST_PACKING_BUDGETS: &str = "mst_packing_budgets";
 /// reference's rule ([`ReferenceRule::OracleAsksDepositsAndMsts`]).
 pub const ORACLE_NO_SERVICE: &str = "oracle_no_service";
 
+/// Every block deploys the system contracts before its transactions (`SATIN-SYSC-003`,
+/// `SATIN-REG-008`): a missing one is installed, one whose code differs has its code replaced, a
+/// SequencerRegistry of version 1.0.0 is migrated in place; the reference deploys none of them. A
+/// recorded block of an earlier spec, whose state holds an earlier Oracle or lacks a later
+/// contract, reaches it; checked by running the block again without the deployments
+/// ([`ReferenceRule::NoPreBlockDeployment`]).
+pub const SYSTEM_CONTRACT_DEPLOYMENT: &str = "system_contract_deployment";
+
+/// A block resolves its live system address once, after its other pre-block steps, and no
+/// transaction reads the registry, or finds its account or slot warm, for its classification
+/// (`SATIN-REG-002`); the reference reads both for every transaction, warm for the rest of it. A
+/// transaction that then reads the registry, as every Mega System Transaction does through the
+/// Oracle's check of its caller, pays their cold access. Only a block reaches it (a single
+/// transaction outside a block still reads them); checked by running the block again with that read
+/// ([`ReferenceRule::RegistryReadPerTransaction`]).
+pub const ONCE_PER_BLOCK_RESOLUTION: &str = "once_per_block_resolution";
+
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 14] = [
+const CLASSES: [&str; 16] = [
     HALTED_FIRST_FRAME,
     INVALID_IMMEDIATE_LABEL,
     DUP_STACK_LABEL,
@@ -296,6 +313,8 @@ const CLASSES: [&str; 14] = [
     HINT_WITH_VALUE,
     MST_PACKING_BUDGETS,
     ORACLE_NO_SERVICE,
+    SYSTEM_CONTRACT_DEPLOYMENT,
+    ONCE_PER_BLOCK_RESOLUTION,
 ];
 
 /// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
@@ -583,6 +602,18 @@ pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 4] = [
     (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
     (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
     (MST_PACKING_BUDGETS, ReferenceRule::MstPackingExempt),
+    (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
+];
+
+/// The classes the block executor gate checks by running a block again: those of
+/// [`REPLAY_RERUN_CLASSES`], and the system contracts' deployment, which only a block's pre-block
+/// sequence makes.
+pub const BLOCK_RERUN_CLASSES: [(&str, ReferenceRule); 6] = [
+    (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
+    (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
+    (MST_PACKING_BUDGETS, ReferenceRule::MstPackingExempt),
+    (SYSTEM_CONTRACT_DEPLOYMENT, ReferenceRule::NoPreBlockDeployment),
+    (ONCE_PER_BLOCK_RESOLUTION, ReferenceRule::RegistryReadPerTransaction),
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
 
