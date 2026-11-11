@@ -65,7 +65,7 @@ fn send_hint() -> Vec<u8> {
 #[test]
 fn test_a_call_past_the_depth_limit_reaches_no_interceptor() {
     let mut evm = satin_evm();
-    let deepest = evm.version().max_call_depth();
+    let deepest = evm.initial_call_depth() + evm2::constants::CALL_DEPTH_LIMIT;
     for (target, input) in [
         (LIMIT_CONTROL, selector("remainingComputeGas()").to_vec()),
         (ACCESS_CONTROL, selector("isVolatileDataAccessDisabled()").to_vec()),
@@ -86,7 +86,7 @@ fn test_a_call_past_the_depth_limit_reaches_no_interceptor() {
 #[test]
 fn test_a_hint_past_the_depth_limit_is_not_counted() {
     let mut evm = satin_evm();
-    let deepest = evm.version().max_call_depth();
+    let deepest = evm.initial_call_depth() + evm2::constants::CALL_DEPTH_LIMIT;
     let mut past = call(ORACLE, send_hint(), deepest + 1);
     let answer = <StartHooks as MessageHooks<MegaTypes>>::before(&mut evm, &mut past)
         .expect("no execution error");

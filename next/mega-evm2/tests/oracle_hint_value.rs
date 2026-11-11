@@ -264,3 +264,58 @@ fn test_a_transactions_own_value_hint_over_the_data_size_limit_is_stopped() {
         assert_eq!((r.hints, r.data_size, r.stop), (1, 638, None), "{at}");
     }
 }
+
+/// A `sendHint` from a contract's memory: the call's input is a range of the caller's memory, and
+/// the hint the engine keeps is a copy of the bytes the caller passed, on the plain and the
+/// inspected path alike, after the caller overwrites the input and grows its memory into a new
+/// allocation.
+#[test]
+fn test_a_hint_keeps_the_callers_bytes_after_the_caller_overwrites_and_grows_its_memory() {
+    let input = send_hint();
+    let len = input.len() as u8;
+    let mut code = vec![op::PUSH1, len, op::PUSH1, 0, op::PUSH0, 0x39 /* CODECOPY */];
+    // CALL(50_000, ORACLE, 0, 0, len, 0, 0)
+    code.extend([op::PUSH0, op::PUSH0, op::PUSH1, len, op::PUSH0, op::PUSH0, op::PUSH20]);
+    code.extend_from_slice(ORACLE.as_slice());
+    code.extend([op::PUSH2, 0xc3, 0x50, op::CALL, op::POP]);
+    // Overwrites memory 0..160, the whole input, with 0xbb.
+    code.push(op::PUSH32);
+    code.extend([0xbb; 32]);
+    for offset in [0u8, 32, 64, 96, 128] {
+        code.extend([0x80 /* DUP1 */, op::PUSH1, offset, op::MSTORE]);
+    }
+    // MSTORE8(1 << 16, 0xbb): grows memory past 64 KiB, which moves it.
+    code.extend([0x62 /* PUSH3 */, 1, 0, 0, 0x53 /* MSTORE8 */, op::STOP]);
+    let start = code.len() as u8;
+    code[3] = start;
+    code.extend_from_slice(&input);
+    for inspected in [false, true] {
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(&TOP, contract(&code));
+        db.insert_account_info(&ORACLE, contract(&[op::STOP]));
+        let mut evm = satin_evm(db);
+        let success = if inspected {
+            run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000).success
+        } else {
+            let tx = TxLegacy {
+                chain_id: Some(1),
+                gas_limit: 1_000_000,
+                to: TxKind::Call(TOP),
+                ..TxLegacy::default()
+            };
+            let signature = Signature::new(U256::from(1), U256::from(1), false);
+            let tx = Recovered::new_unchecked(
+                OpTxEnvelope::from_signed(tx.into_signed(signature)),
+                SENDER,
+            );
+            evm.transact(&tx).expect("the transaction runs").commit().status
+        };
+        assert!(success, "inspected={inspected}");
+        let m = &evm.ext().mechanisms;
+        assert_eq!(m.hint_bytes, input.len() as u64, "inspected={inspected}");
+        assert_eq!(m.hints.len(), 1, "inspected={inspected}");
+        assert_eq!(m.hints[0].0, TOP, "inspected={inspected}");
+        assert_eq!(m.hints[0].1, B256::repeat_byte(0x11), "inspected={inspected}");
+        assert_eq!(m.hints[0].2.as_ref(), &[0xaa], "inspected={inspected}");
+    }
+}

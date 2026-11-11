@@ -446,7 +446,7 @@ fn modexp_compare(
 ) -> evm2::precompiles::PrecompileResult {
     use evm2::{PrecompileError, precompiles::PrecompileHalt};
     if under_reference_rule(evm.ext(), ReferenceRule::ModexpBoundFirst) &&
-        modexp_over_bound(&msg.input)
+        modexp_over_bound(evm.message_input(msg))
     {
         gas.spend(500).map_err(|_| PrecompileError::Halt(PrecompileHalt::OutOfGas))?;
         return Err(PrecompileError::Halt(PrecompileHalt::ModexpEip7823LimitSize));
@@ -472,11 +472,10 @@ fn kzg100k(
     msg: &Message<MegaTypes>,
     gas: &mut GasTracker,
 ) -> evm2::precompiles::PrecompileResult {
-    let _ = evm;
     gas.spend(100_000)
         .map_err(|_| evm2::PrecompileError::Halt(evm2::precompiles::PrecompileHalt::OutOfGas))?;
     let mut free = GasTracker::new(u64::MAX / 2);
-    evm2::precompiles::kzg_point_evaluation::run(&msg.input, &mut free)
+    evm2::precompiles::kzg_point_evaluation::run(evm.message_input(msg), &mut free)
 }
 
 /// SLOTNUM (EIP-7843) pushes zero in every block: MegaETH has no slot, so the block environment's
@@ -1162,7 +1161,7 @@ fn mega_call_impl(
             let mut start = StartRecords::default();
             // A call past the call-stack limit is refused for its depth before it moves value, so
             // it makes no record and is charged none, as a creation refused for its depth is not.
-            let too_deep = msg.depth > state.version().max_call_depth();
+            let too_deep = msg.depth > max_call_depth(state.host());
             let transfers = !too_deep &&
                 matches!(kind, MessageKind::Call | MessageKind::CallCode) &&
                 !msg.value.is_zero() &&
@@ -1298,6 +1297,9 @@ fn mega_create_impl(
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     is_create2: bool,
 ) -> Result {
+    if is_create2 && stack.len() == 3 && !off("create2_salt_order") {
+        return create2_short_of_salt(stack, gas, state);
+    }
     let creator = state.message().destination;
     let creator_changed = core::cell::Cell::new(false);
     create_with(
@@ -1371,6 +1373,38 @@ fn mega_create_impl(
     detention::on_resume(gas, state)
 }
 
+/// A CREATE2 on three stack items, short of its salt, in Satin's order (`SATIN-SIZE-005`): the
+/// static context, the value, offset and size operands and the size's range, the initcode size
+/// against `MAX_INITCODE_SIZE`, EIP-3860's initcode cost, and the offset's range and the memory
+/// (neither for empty initcode) come before the salt operand, so the frame pays the initcode cost
+/// and the memory, or fails on the first it cannot pay, before it fails on the missing salt
+/// (`SATIN-SIZE-006`). evm2's `create_with` pops the salt before those charges. The halt consumes
+/// the frame's gas either way, but under gas detention one of the charges can be the crossing,
+/// which stops the frame with a revert where the stack underflow would halt it.
+///
+/// The steps are `create_with`'s own, up to its salt; with a salt on the stack, `create_with` runs.
+fn create2_short_of_salt(
+    mut stack: StackMut<'_>,
+    gas: &mut Gas,
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+) -> Result {
+    if state.is_static() {
+        return Err(InstrStop::StateChangeDuringStaticCall);
+    }
+    let [_value, offset, len] = stack.popn::<3>()?;
+    let len = len.to_usize()?;
+    if state.feature(EvmFeatures::EIP3860) {
+        if len > state.version().max_initcode_size {
+            return Err(InstrStop::CreateInitCodeSizeLimit);
+        }
+        gas.spend(state.gas_params().initcode_cost(len))?;
+    }
+    if len != 0 {
+        state.resize_memory(gas, offset.to_usize()?, len)?;
+    }
+    Err(InstrStop::StackUnderflow)
+}
+
 #[instruction(EvmTypes = MegaTypes, no_stack_preamble, hooked)]
 pub fn mega_create(cx: _) -> Result {
     mega_create_impl(stack, cx.gas, cx.state, false)
@@ -1412,6 +1446,12 @@ pub(crate) fn is_precompile(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaType
     evm.precompiles().contains(&msg.call_target)
 }
 
+/// The deepest call depth at which evm2 runs a message: its call-stack limit below the initial
+/// depth, as evm2 measures it (its own `max_call_depth` is private).
+fn max_call_depth(evm: &Evm<'_, MegaTypes>) -> u16 {
+    evm.initial_call_depth() + evm2::constants::CALL_DEPTH_LIMIT
+}
+
 fn is_answered(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
     matches!(
         msg.kind,
@@ -1439,7 +1479,7 @@ impl MessageHooks<MegaTypes> for StartHooks {
         // A message past the call-stack limit reaches no interceptor, counts no hint and is held
         // by no limit: evm2 answers it with `CallTooDeep`, its forward and reservoir share
         // returned whole. The depth gate comes before every other decision about the message.
-        if msg.depth > evm.version().max_call_depth() {
+        if msg.depth > max_call_depth(evm) {
             return Ok(None);
         }
         // A transaction whose sender or recipient is the block beneficiary, or whose

@@ -41,6 +41,7 @@ run cargo test --locked -p mega-evm2 --features compare --lib
 run cargo test --locked -p mega-evm2-diff --lib
 run cargo test --locked -p mega-evm2-diff --test known_differences
 run cargo test --locked -p mega-evm2-diff --test give_back
+run cargo test --locked -p mega-evm2-diff --test create2_salt_order
 run cargo bench --locked -p mega-evm2-diff --bench engine --no-run
 run cargo check --locked -p op-evm2 --target riscv64imac-unknown-none-elf --no-default-features
 run bash diff/scripts/check-regen-refusal.sh

@@ -26,16 +26,16 @@ pub fn non_zero_transfer() -> Bytes {
 
 /// Whether the `before` hook answers `m` for a system contract: `MegaAccessControl` or
 /// `MegaLimitControl`, called with CALL or STATICCALL and a selector the contract answers.
-pub fn is_intercepted(m: &Message<MegaTypes>) -> bool {
+pub fn is_intercepted(evm: &Evm<'_, MegaTypes>, m: &Message<MegaTypes>) -> bool {
     if m.call_target == crate::satin_ext::ACCESS_CONTROL && !crate::off("access_control") {
         // `MegaAccessControl`, scheme guard then selector.
         return matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) &&
-            crate::satin_ext::access_control_method(&m.input).is_some();
+            crate::satin_ext::access_control_method(evm.message_input(m)).is_some();
     }
     if m.call_target == LIMIT_CONTROL {
         // Scheme guard, then the selector on its four bytes.
         return matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) &&
-            m.input.get(..4) == Some(&remaining_compute_gas_selector()[..]);
+            evm.message_input(m).get(..4) == Some(&remaining_compute_gas_selector()[..]);
     }
     false
 }
@@ -74,10 +74,10 @@ pub fn answer_before(
     evm: &mut Evm<'_, MegaTypes>,
     m: &Message<MegaTypes>,
 ) -> Option<evm2::interpreter::MessageResult<MegaTypes>> {
-    if m.call_target == crate::satin_ext::ACCESS_CONTROL && is_intercepted(m) {
+    if m.call_target == crate::satin_ext::ACCESS_CONTROL && is_intercepted(evm, m) {
         // `MegaAccessControl` (Satin `system/control.rs`): the value policy, then the method,
         // answered on the untouched forward.
-        let method = crate::satin_ext::access_control_method(&m.input)?;
+        let method = crate::satin_ext::access_control_method(evm.message_input(m))?;
         let (stop, output) = if !m.value.is_zero() {
             (evm2::interpreter::InstrStop::Revert, non_zero_transfer())
         } else {
@@ -102,7 +102,7 @@ pub fn answer_before(
             ..Default::default()
         });
     }
-    if m.call_target != LIMIT_CONTROL || !is_intercepted(m) {
+    if m.call_target != LIMIT_CONTROL || !is_intercepted(evm, m) {
         return None;
     }
     let (stop, output) = if m.value.is_zero() {
@@ -133,7 +133,7 @@ pub fn hint_before(
     if crate::off("oracle_hints") ||
         m.call_target != crate::ORACLE ||
         !matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) ||
-        !is_send_hint(&m.input) ||
+        !is_send_hint(evm.message_input(m)) ||
         (!m.value.is_zero() &&
             crate::under_reference_rule(evm.ext(), crate::ReferenceRule::HintValueRefused)) ||
         m.gas_limit == 0 ||
@@ -161,8 +161,9 @@ pub fn hint_before(
     }
     ext.tx_net[0] += bytes as i64;
     ext.mechanisms.hint_bytes += bytes;
-    if let Some((topic, data)) = decode_hint(&m.input) {
-        ext.mechanisms.hints.push((m.caller, topic, data));
+    // `decode_hint` copies the data it keeps out of the input.
+    if let Some((topic, data)) = decode_hint(evm.message_input(m)) {
+        evm.ext_mut().mechanisms.hints.push((m.caller, topic, data));
     }
     None
 }
