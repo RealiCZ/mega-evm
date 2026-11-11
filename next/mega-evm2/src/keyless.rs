@@ -78,8 +78,8 @@ pub fn is_dispatched(evm: &Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool
     msg.depth == 0 &&
         msg.call_target == KEYLESS &&
         msg.kind == MessageKind::Call &&
-        msg.input.get(..4) == Some(&selector()[..]) &&
-        (decode_call(&msg.input).is_some() ||
+        evm.message_input(msg).get(..4) == Some(&selector()[..]) &&
+        (decode_call(evm.message_input(msg)).is_some() ||
             crate::under_reference_rule(evm.ext(), crate::ReferenceRule::KeylessSelectorOnly))
 }
 
@@ -206,10 +206,9 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         };
     }
     gas.spend(OVERHEAD)?;
-    let input = state.message().input.clone();
     // Only a call whose arguments decode is dispatched; the reference's rule dispatches by the
     // selector alone (comparison only), and then refuses the rest here.
-    let Some((raw, override_gas)) = decode_call(&input) else {
+    let Some((raw, override_gas)) = decode_call(state.input()) else {
         refuse!(err("MalformedEncoding()", &[]))
     };
     let signed = match decode_tx(&raw) {

@@ -44,7 +44,7 @@ fn test_a_value_call_refused_for_its_depth_is_charged_no_start_records() {
     };
     let mut evm = common::evm(block, Db::new(db));
     evm.ext_mut().begin_tx(SENDER, 310, true, false);
-    let deepest = evm.version().max_call_depth();
+    let deepest = evm.initial_call_depth() + evm2::constants::CALL_DEPTH_LIMIT;
     let mut message = Message::<MegaTypes> {
         kind: MessageKind::Call,
         depth: deepest,

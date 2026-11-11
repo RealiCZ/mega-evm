@@ -446,7 +446,7 @@ fn modexp_compare(
 ) -> evm2::precompiles::PrecompileResult {
     use evm2::{PrecompileError, precompiles::PrecompileHalt};
     if under_reference_rule(evm.ext(), ReferenceRule::ModexpBoundFirst) &&
-        modexp_over_bound(&msg.input)
+        modexp_over_bound(evm.message_input(msg))
     {
         gas.spend(500).map_err(|_| PrecompileError::Halt(PrecompileHalt::OutOfGas))?;
         return Err(PrecompileError::Halt(PrecompileHalt::ModexpEip7823LimitSize));
@@ -472,11 +472,10 @@ fn kzg100k(
     msg: &Message<MegaTypes>,
     gas: &mut GasTracker,
 ) -> evm2::precompiles::PrecompileResult {
-    let _ = evm;
     gas.spend(100_000)
         .map_err(|_| evm2::PrecompileError::Halt(evm2::precompiles::PrecompileHalt::OutOfGas))?;
     let mut free = GasTracker::new(u64::MAX / 2);
-    evm2::precompiles::kzg_point_evaluation::run(&msg.input, &mut free)
+    evm2::precompiles::kzg_point_evaluation::run(evm.message_input(msg), &mut free)
 }
 
 /// SLOTNUM (EIP-7843) pushes zero in every block: MegaETH has no slot, so the block environment's
@@ -1162,7 +1161,7 @@ fn mega_call_impl(
             let mut start = StartRecords::default();
             // A call past the call-stack limit is refused for its depth before it moves value, so
             // it makes no record and is charged none, as a creation refused for its depth is not.
-            let too_deep = msg.depth > state.version().max_call_depth();
+            let too_deep = msg.depth > max_call_depth(state.host());
             let transfers = !too_deep &&
                 matches!(kind, MessageKind::Call | MessageKind::CallCode) &&
                 !msg.value.is_zero() &&
@@ -1412,6 +1411,12 @@ pub(crate) fn is_precompile(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaType
     evm.precompiles().contains(&msg.call_target)
 }
 
+/// The deepest call depth at which evm2 runs a message: its call-stack limit below the initial
+/// depth, as evm2 measures it (its own `max_call_depth` is private).
+fn max_call_depth(evm: &Evm<'_, MegaTypes>) -> u16 {
+    evm.initial_call_depth() + evm2::constants::CALL_DEPTH_LIMIT
+}
+
 fn is_answered(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
     matches!(
         msg.kind,
@@ -1439,7 +1444,7 @@ impl MessageHooks<MegaTypes> for StartHooks {
         // A message past the call-stack limit reaches no interceptor, counts no hint and is held
         // by no limit: evm2 answers it with `CallTooDeep`, its forward and reservoir share
         // returned whole. The depth gate comes before every other decision about the message.
-        if msg.depth > evm.version().max_call_depth() {
+        if msg.depth > max_call_depth(evm) {
             return Ok(None);
         }
         // A transaction whose sender or recipient is the block beneficiary, or whose

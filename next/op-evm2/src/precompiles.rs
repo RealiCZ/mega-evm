@@ -27,18 +27,19 @@ const BLS12_G2_MSM_ADDRESS: Address = Address::with_last_byte(0x0e);
 const BLS12_PAIRING_ADDRESS: Address = Address::with_last_byte(0x0f);
 
 /// Defines a precompile descriptor, generic over the EVM type family, from an input-and-gas
-/// function.
+/// function. The input is read with [`Evm::message_input`], since a call instruction's input is a
+/// range of the caller's memory.
 macro_rules! op_precompile {
     ($(#[$attr:meta])* $vis:vis fn $name:ident = ($address:expr, $id:expr) => $f:path;) => {
         $(#[$attr])*
         #[allow(non_snake_case)]
         $vis fn $name<T: EvmTypes>() -> Precompile<T> {
             fn run<T: EvmTypes>(
-                _evm: &mut Evm<'_, T>,
+                evm: &mut Evm<'_, T>,
                 message: &Message<T>,
                 gas: &mut GasTracker,
             ) -> PrecompileResult {
-                $f(message.input.as_ref(), gas)
+                $f(evm.message_input(message), gas)
             }
             Precompile::new($address, $id, run::<T>)
         }

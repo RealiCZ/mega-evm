@@ -634,7 +634,7 @@ pub fn precompile_price_of(evm: &mut Evm<'_, MegaTypes>, msg: &Message<MegaTypes
     let address =
         if crate::off("precompile_price_target") { msg.code_address } else { msg.call_target };
     let p = crate::precompile_map().get(&address)?;
-    if let Some(price) = precompile_price(&address, &msg.input) {
+    if let Some(price) = precompile_price(&address, evm.message_input(msg)) {
         return Some(price);
     }
     if crate::off("precompile_catalog") {
