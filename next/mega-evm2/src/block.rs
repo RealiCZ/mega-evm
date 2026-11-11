@@ -344,18 +344,24 @@ impl<'a> BlockSession<'a> {
         SaltExport {
             block: self.identity,
             snapshot: self.salt_snapshot,
+            simulated: self.simulation,
             buckets: core::mem::take(&mut self.bucket_reads),
         }
     }
 
     /// Takes the lookups another session of this block made into this one's
-    /// ([`Self::drain_bucket_reads`]). An export of another block or another snapshot is
-    /// refused and handed back (boxed: a refusal is rare, and the result stays small).
+    /// ([`Self::drain_bucket_reads`]). An export of another block, another snapshot or other
+    /// rules (a simulation's into a consensus session, or the reverse) is refused and handed back
+    /// (boxed: a refusal is rare, and the result stays small).
     pub fn merge_bucket_reads(&mut self, export: SaltExport) -> Result<(), Box<ForeignSaltExport>> {
-        if export.block != self.identity || export.snapshot != self.salt_snapshot {
+        if export.block != self.identity ||
+            export.snapshot != self.salt_snapshot ||
+            export.simulated != self.simulation
+        {
             return Err(Box::new(ForeignSaltExport {
                 block: self.identity,
                 snapshot: self.salt_snapshot,
+                simulated: self.simulation,
                 export,
             }));
         }

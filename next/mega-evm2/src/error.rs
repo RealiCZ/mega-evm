@@ -584,33 +584,36 @@ impl From<BlockError> for CandidateError {
 pub fn database_error(error: &HandlerError) -> Option<&DatabaseError> {
     match error {
         HandlerError::Database(e) => Some(e),
-        HandlerError::Fatal(e) | HandlerError::External(e) => erased_database_error(e),
+        HandlerError::Fatal(e) | HandlerError::External(e) => find_erased(e),
         _ => None,
     }
 }
 
-/// The database error an erased error is or wraps: evm2's own wrappers are opened by type (a
-/// transparent wrapper's source skips the error it wraps), then the source chain is followed.
-fn erased_database_error<'e>(
+/// The first error of type `T` an erased error is or wraps: evm2's own wrappers are opened by
+/// type (a transparent wrapper's source skips the error it wraps, and an `AnyError` hides its
+/// inner error behind its type), then the source chain is followed.
+fn find_erased<'e, T: core::error::Error + 'static>(
     error: &'e (dyn core::error::Error + 'static),
-) -> Option<&'e DatabaseError> {
+) -> Option<&'e T> {
     let mut link = Some(error);
     let mut hops = 0;
     while let Some(e) = link {
-        if let Some(db) = e.downcast_ref::<DatabaseError>() {
-            return Some(db);
+        if let Some(found) = e.downcast_ref::<T>() {
+            return Some(found);
         }
         let inner: Option<&'e (dyn core::error::Error + 'static)> =
             if let Some(any) = e.downcast_ref::<evm2::AnyError>() {
-                any.downcast_ref::<DatabaseError>()
-                    .map(|db| db as _)
+                any.downcast_ref::<T>()
+                    .map(|x| x as _)
+                    .or_else(|| any.downcast_ref::<DatabaseError>().map(|x| x as _))
+                    .or_else(|| any.downcast_ref::<SaltLookupError>().map(|x| x as _))
                     .or_else(|| any.downcast_ref::<evm2::ExecutionError>().map(|x| x as _))
                     .or_else(|| any.downcast_ref::<evm2::HostError>().map(|x| x as _))
                     .or_else(|| any.downcast_ref::<evm2::LoadError>().map(|x| x as _))
                     .or_else(|| any.downcast_ref::<HandlerError>().map(|x| x as _))
             } else if let Some(x) = e.downcast_ref::<evm2::ExecutionError>() {
                 match x {
-                    evm2::ExecutionError::Database(db) => return Some(db),
+                    evm2::ExecutionError::Database(db) => Some(db as _),
                     evm2::ExecutionError::Fatal(any) => Some(any as _),
                 }
             } else if let Some(x) = e.downcast_ref::<evm2::HostError>() {
@@ -620,11 +623,15 @@ fn erased_database_error<'e>(
                 }
             } else if let Some(x) = e.downcast_ref::<evm2::LoadError>() {
                 match x {
-                    evm2::LoadError::Database(db) => return Some(db),
+                    evm2::LoadError::Database(db) => Some(db as _),
                     evm2::LoadError::ColdLoadSkipped => None,
                 }
             } else if let Some(x) = e.downcast_ref::<HandlerError>() {
-                return database_error(x);
+                match x {
+                    HandlerError::Database(db) => Some(db as _),
+                    HandlerError::Fatal(e) | HandlerError::External(e) => Some(e as _),
+                    _ => None,
+                }
             } else {
                 None
             };
@@ -648,10 +655,12 @@ pub fn system_address_read_failure(
     }
 }
 
-/// The failed SALT lookup behind a handler error, when there is one.
+/// The failed SALT lookup behind a handler error, through evm2's erased wrappers as a database
+/// error is found ([`database_error`]): whichever charge site failed, and however it carried the
+/// failure out.
 fn salt_failure(error: &HandlerError) -> Option<&SaltLookupError> {
     match error {
-        HandlerError::Fatal(e) | HandlerError::External(e) => e.downcast_ref(),
+        HandlerError::Fatal(e) | HandlerError::External(e) => find_erased(e),
         _ => None,
     }
 }
@@ -792,6 +801,26 @@ mod tests {
         let CandidateError::Block(e) = &routed else { panic!("{routed:?}") };
         assert_eq!(e.disposition(), Disposition::Internal);
         assert_eq!(e.context().bucket, Some(bucket));
+        // A failed lookup is found through every wrapper a charge site may carry it out in, and
+        // stays internal when its snapshot's backend wraps a database error not declared fatal.
+        let backend = crate::salt::SaltReadError::Backend(AnyError::new(db(false)));
+        let failed = SaltLookupError { bucket, failure: crate::salt::SaltFailure::Read(backend) };
+        let any = || AnyError::new(failed.clone());
+        for carried in [
+            HandlerError::Fatal(any()),
+            HandlerError::External(any()),
+            HandlerError::Fatal(AnyError::new(ExecutionError::Fatal(any()))),
+            HandlerError::External(AnyError::new(HostError::Execution(ExecutionError::Fatal(
+                any(),
+            )))),
+            HandlerError::Fatal(AnyError::new(HandlerError::External(any()))),
+        ] {
+            let routed = CandidateError::from_execution(carried.clone(), tx());
+            let CandidateError::Block(e) = &routed else { panic!("{carried:?}: {routed:?}") };
+            assert_eq!(e.disposition(), Disposition::Internal, "{carried:?}");
+            assert_eq!(e.context().bucket, Some(bucket), "{carried:?}");
+            assert_eq!(e.database_error().map(|d| d.is_fatal()), Some(false), "{carried:?}");
+        }
         // The classification read of the live system address: internal whatever the database
         // declares, in the resolution's phase.
         for fatal in [true, false] {

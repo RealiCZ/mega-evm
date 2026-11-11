@@ -183,6 +183,31 @@ impl SaltSnapshot for AnswersOnce {
     }
 }
 
+#[derive(Debug)]
+struct Unavailable;
+
+impl core::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("bucket metadata unavailable")
+    }
+}
+
+impl core::error::Error for Unavailable {}
+
+/// A snapshot whose backend fails every read with a database error the node does not declare
+/// fatal: a SALT read is still the node's fault, never an invalid block (`SATIN-VAL-010`).
+struct Failing;
+
+impl SaltSnapshot for Failing {
+    fn id(&self) -> SnapshotId {
+        id(B256::ZERO)
+    }
+
+    fn capacity(&self, _: BucketId) -> Result<u64, SaltReadError> {
+        Err(SaltReadError::Backend(AnyError::new(DatabaseError::new(Unavailable, false))))
+    }
+}
+
 /// A single transaction's EVM over [`db`] reading `salt`.
 fn evm(salt: Arc<dyn SaltSnapshot>) -> Evm<'static, MegaTypes> {
     common::factory().evm(common::block(), Db::new(db()), salt).expect("a Satin timestamp")
@@ -381,25 +406,6 @@ fn salt_an_error_after_a_successful_lookup_keeps_the_earlier_one_in_both_exports
 
 #[test]
 fn salt_a_backend_failure_is_internal_even_when_it_wraps_a_nonfatal_database_error() {
-    #[derive(Debug)]
-    struct Unavailable;
-    impl core::fmt::Display for Unavailable {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            f.write_str("bucket metadata unavailable")
-        }
-    }
-    impl core::error::Error for Unavailable {}
-    struct Failing;
-    impl SaltSnapshot for Failing {
-        fn id(&self) -> SnapshotId {
-            id(B256::ZERO)
-        }
-        fn capacity(&self, _: BucketId) -> Result<u64, SaltReadError> {
-            // A database error the node does not declare fatal: a SALT read is still the node's
-            // fault, never an invalid block (`SATIN-VAL-010`).
-            Err(SaltReadError::Backend(AnyError::new(DatabaseError::new(Unavailable, false))))
-        }
-    }
     let mut block = session(&input(B256::ZERO), Arc::new(Failing));
     let error = block.execute_candidate(&user_deposit(WRITER), &[]).expect_err("fails");
     let CandidateError::Block(fault) = &error else { panic!("{error:?}") };
@@ -665,4 +671,139 @@ fn salt_the_next_block_starts_with_an_empty_union_and_reads_again() {
         (first_queries.lock().unwrap()[&bucket], next_queries.lock().unwrap()[&bucket]),
         (1, 1)
     );
+}
+
+/// Every kind of state charge carries a failed lookup out as the node's internal error, at the
+/// bucket that failed: the value call's new account, a creation, a `SELFDESTRUCT`'s new
+/// beneficiary, a deposit's created caller, a transaction's new value recipient and an absent
+/// EIP-7702 authority, besides the fresh slot above.
+#[test]
+fn salt_every_charge_site_routes_a_failed_lookup_as_internal() {
+    let absent = |n: u8| Address::with_last_byte(0xe0 + n);
+    let caller = |code: &[u8]| common::contract(code).with_balance(U256::from(10));
+    let call_value = [
+        [op::PUSH1, 0, op::PUSH1, 0, op::PUSH1, 0, op::PUSH1, 0, op::PUSH1, 1, op::PUSH20]
+            .as_slice(),
+        absent(1).as_slice(),
+        &[op::GAS, op::CALL, op::STOP],
+    ]
+    .concat();
+    let create = [op::PUSH1, 0, op::PUSH1, 0, op::PUSH1, 0, op::CREATE, op::STOP];
+    let destroy = [[op::PUSH20].as_slice(), absent(2).as_slice(), &[op::SELFDESTRUCT]].concat();
+    let (value_caller, creator, destroyer) = (
+        Address::with_last_byte(0xc1),
+        Address::with_last_byte(0xc2),
+        Address::with_last_byte(0xc3),
+    );
+    let mut world = db();
+    world.insert_account_info(&value_caller, caller(&call_value));
+    world.insert_account_info(&creator, common::contract(&create));
+    world.insert_account_info(&destroyer, caller(&destroy));
+    world.insert_account_info(
+        &SENDER,
+        AccountInfo::default().with_nonce(1).with_balance(U256::from(10).pow(U256::from(18))),
+    );
+    let value_tx = TxLegacy {
+        chain_id: Some(1),
+        nonce: 1,
+        gas_price: 0,
+        gas_limit: 1_000_000,
+        to: TxKind::Call(absent(4)),
+        value: U256::from(1),
+        input: Bytes::new(),
+    };
+    let signature = Signature::new(U256::from(1), U256::from(1), false);
+    let value_tx = Recovered::new_unchecked(
+        OpTxEnvelope::from_signed(value_tx.into_signed(signature)),
+        SENDER,
+    );
+    let cases = [
+        ("value call", user_deposit(value_caller), account(absent(1))),
+        ("creation", user_deposit(creator), account(creator.create(1))),
+        ("selfdestruct", user_deposit(destroyer), account(absent(2))),
+        (
+            "deposit caller",
+            deposit(absent(3), NOOP, B256::with_last_byte(0x42)),
+            account(absent(3)),
+        ),
+        ("value recipient", value_tx, account(absent(4))),
+        ("authority", authorizing(absent(5)), account(absent(5))),
+    ];
+    for (site, tx, bucket) in cases {
+        let mut block = session_over(&input(B256::ZERO), world.clone(), Arc::new(Failing));
+        let error = block.execute_candidate(&tx, &[]).expect_err(site);
+        let CandidateError::Block(fault) = &error else { panic!("{site}: {error:?}") };
+        assert_eq!(fault.disposition(), Disposition::Internal, "{site}");
+        assert_eq!(fault.phase(), Phase::Transaction, "{site}");
+        assert_eq!(fault.context().bucket, Some(bucket), "{site}");
+        assert!(block.receipts().is_empty() && block.bucket_reads().is_empty(), "{site}");
+    }
+}
+
+/// A type-4 transaction from [`SENDER`] to [`NOOP`] whose one authorization delegates `authority`
+/// (nonce zero) to [`NOOP`].
+fn authorizing(authority: Address) -> Recovered<OpTxEnvelope> {
+    use alloy_eips::eip7702::{Authorization, SignedAuthorization};
+    let entry = SignedAuthorization::new_unchecked(
+        Authorization { chain_id: U256::from(1), address: NOOP, nonce: 0 },
+        0,
+        U256::ZERO,
+        U256::ZERO,
+    );
+    let tx = alloy_consensus::TxEip7702 {
+        chain_id: 1,
+        nonce: 1,
+        gas_limit: 1_000_000,
+        to: NOOP,
+        authorization_list: vec![entry],
+        ..Default::default()
+    };
+    let lazy = evm2::ethereum::LazyTxEip7702::from_cached_recovered_authorizations(
+        tx,
+        vec![Some(authority)],
+    );
+    Recovered::new_unchecked(OpTxEnvelope::new(lazy, Some(Bytes::new())), SENDER)
+}
+
+/// An absent authority's two charges — its new leaf and its delegation indicator — land in its
+/// account's bucket, which the transaction reads once and exports.
+#[test]
+fn salt_an_authority_is_priced_by_its_bucket_once_for_both_of_its_charges() {
+    let authority = Address::with_last_byte(0xe5);
+    let state = |capacity| {
+        let (salt, queries) =
+            counting(SaltCapacities::new(id(B256::ZERO)).with(account(authority), capacity));
+        let mut evm = evm(salt);
+        let (state, ..) = spend(&mut evm, &authorizing(authority));
+        assert_eq!(evm.ext().salt.lookups(), [account(authority)]);
+        assert_eq!(*queries.lock().unwrap(), [(account(authority), 1)].into_iter().collect());
+        state
+    };
+    // The leaf (120 bytes) and the indicator (23 bytes), each at the bucket's multiplier.
+    assert_eq!(state(512) - state(256), ACCOUNT_STATE + 23 * 1_530);
+}
+
+/// A simulation's lookups are not a consensus block's, as a simulation's candidate is not.
+#[test]
+fn salt_a_simulations_lookups_are_not_merged_into_a_consensus_session() {
+    let salt: Arc<dyn SaltSnapshot> =
+        Arc::new(SaltCapacities::new(id(B256::ZERO)).with(slot(WRITER, 0), 512));
+    let simulation =
+        mega_evm2::factory::Simulation { skip_nonce_check: true, ..Default::default() };
+    let mut simulated = common::factory()
+        .start_simulated_block(
+            &input(B256::ZERO),
+            Db::new(db()),
+            BlockServices::new(salt.clone()),
+            &simulation,
+        )
+        .expect("the simulated block starts");
+    drop(run(&mut simulated, &user_deposit(WRITER)));
+    let export = simulated.drain_bucket_reads();
+    assert!(export.is_simulated());
+    let mut consensus = session(&input(B256::ZERO), salt);
+    let refused = consensus.merge_bucket_reads(export.clone()).expect_err("other rules");
+    assert!(!refused.simulated);
+    assert_eq!(refused.export, export);
+    assert!(consensus.bucket_reads().is_empty());
 }

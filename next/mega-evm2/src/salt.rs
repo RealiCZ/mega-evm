@@ -143,8 +143,9 @@ pub struct SnapshotId {
 
 /// The node's reader of SALT's bucket capacities in one immutable state ([`SnapshotId`]).
 ///
-/// Object-safe and free of any thread or runtime requirement: a node adapts its bucket metadata
-/// reader, a validator or a prover its verified capacity metadata. A capacity the snapshot cannot
+/// Object-safe and free of any thread or runtime requirement (no `Send` or `Sync` bound: a guest
+/// may own a single-threaded one): a node adapts its bucket metadata reader, a validator or a
+/// prover its verified capacity metadata. A capacity the snapshot cannot
 /// give is an error ([`SaltReadError`]), which fails the transaction that asked as an internal
 /// error of the node (`SATIN-STATE-007`, `SATIN-VAL-010`); a snapshot never answers a bucket it
 /// cannot read with the minimum.
@@ -347,12 +348,14 @@ impl SaltCache {
 
 /// The valid SALT lookups a block session made, drained to be merged into the session that builds
 /// the block (`BlockSession::drain_bucket_reads`, `BlockSession::merge_bucket_reads`): bound to the
-/// block and to the snapshot they were read from.
+/// block, to the snapshot they were read from and to the rules the session ran under (consensus
+/// or a simulation's), as a candidate is.
 #[must_use = "the lookups are evidence the block's witness needs: merge them"]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SaltExport {
     pub(crate) block: BlockIdentity,
     pub(crate) snapshot: SnapshotId,
+    pub(crate) simulated: bool,
     pub(crate) buckets: BTreeSet<BucketId>,
 }
 
@@ -365,33 +368,42 @@ impl SaltExport {
         self.snapshot
     }
 
+    /// Whether the session ran under a simulation's switches.
+    pub const fn is_simulated(&self) -> bool {
+        self.simulated
+    }
+
     pub const fn buckets(&self) -> &BTreeSet<BucketId> {
         &self.buckets
     }
 }
 
-/// A [`SaltExport`] a merge refused: it is of another block or another snapshot than the
-/// session's. The export comes back with the refusal.
+/// A [`SaltExport`] a merge refused: it is of another block, another snapshot or other rules than
+/// the session's. The export comes back with the refusal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ForeignSaltExport {
-    /// The merging session's block and snapshot.
+    /// The merging session's block, snapshot and rules.
     pub block: BlockIdentity,
     pub snapshot: SnapshotId,
+    pub simulated: bool,
     pub export: SaltExport,
 }
 
 impl core::fmt::Display for ForeignSaltExport {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let rules = |simulated| if simulated { "a simulation" } else { "consensus rules" };
         let (e, s) = (&self.export.block, &self.export.snapshot);
         write!(
             f,
-            "SALT lookups of block {} on {} (state {}) merged into block {} on {} (state {})",
+            "SALT lookups of block {} on {} (state {}, {}) merged into block {} on {} (state {}, {})",
             e.number,
             e.parent_hash,
             s.state_root,
+            rules(self.export.simulated),
             self.block.number,
             self.block.parent_hash,
-            self.snapshot.state_root
+            self.snapshot.state_root,
+            rules(self.simulated)
         )
     }
 }
@@ -450,10 +462,8 @@ mod tests {
         }
         assert_eq!(kv_bucket(0).get(), NUM_META_BUCKETS);
         assert_eq!(kv_bucket(u64::from(NUM_BUCKETS - NUM_META_BUCKETS) - 1).get(), NUM_BUCKETS - 1);
-        assert_eq!(
-            kv_bucket(u64::MAX),
-            kv_bucket(u64::MAX % u64::from(NUM_BUCKETS - NUM_META_BUCKETS))
-        );
+        // (2^64 − 1) mod (2^24 − 2^16) + 2^16.
+        assert_eq!(kv_bucket(u64::MAX).get(), 131_071);
     }
 
     /// A wider id converts only when it is a bucket id: never truncated into another bucket.

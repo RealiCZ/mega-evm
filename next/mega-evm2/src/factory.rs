@@ -68,7 +68,8 @@ pub struct BlockInput {
 pub struct BlockServices<'a> {
     /// SALT's bucket capacities in the block's parent state, the state the database reads: the
     /// factory refuses a snapshot of another parent. Shared, so a node can hand the same snapshot
-    /// to several sessions of a block.
+    /// to several sessions of a block; a node that runs them on several threads keeps its own
+    /// thread-safe snapshot in an `Arc` and gives each session a clone of it.
     pub salt: Arc<dyn SaltSnapshot>,
     /// The node's environment: the Oracle service's answers.
     pub environment: Cfg,
