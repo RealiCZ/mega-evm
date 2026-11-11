@@ -381,7 +381,7 @@ fn lifecycle_correct_system_contracts_and_registry_v2_are_left_as_they_are() {
     let resolved = states[RESOLUTION].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
     assert!(!resolved.is_changed());
     assert_eq!(resolved.storage.slots[&U256::ZERO].value.current, address_word(LIVE));
-    assert_eq!(block.system_address(), LIVE);
+    assert_eq!(block.system_address(), Some(LIVE));
 }
 
 /// A registry of version 1.0.0 is migrated in place: its code replaced by version 2.0.0, slot 13
@@ -409,7 +409,7 @@ fn lifecycle_registry_v1_is_migrated_writing_slot_13_alone() {
     assert_eq!((current.nonce, current.balance), (3, U256::from(4)));
     assert_eq!(changed_slots(&block, SEQUENCER_REGISTRY), [(13, U256::from(DELAY))]);
     assert!(!wiped(&block, SEQUENCER_REGISTRY), "the roles and histories are kept");
-    assert_eq!(block.system_address(), LIVE);
+    assert_eq!(block.system_address(), Some(LIVE));
     // Version 2.0.0's code reads the kept roles and the new slot.
     assert_eq!(
         view(&mut block, 0, SEQUENCER_REGISTRY, call_data("minRotationDelay()", None)),
@@ -447,7 +447,7 @@ fn lifecycle_absent_registry_is_seeded_from_the_bootstrap_values() {
         ]
     );
     assert!(!wiped(&block, SEQUENCER_REGISTRY), "an absent account holds no storage to clear");
-    assert_eq!(block.system_address(), MEGA_SYSTEM_ADDRESS);
+    assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
 }
 
 /// An account without code at the registry's address receives version 2.0.0 as a new contract: its
@@ -470,7 +470,7 @@ fn lifecycle_registry_without_code_is_seeded_over_its_cleared_storage() {
     let seeded: Vec<u64> =
         changed_slots(&block, SEQUENCER_REGISTRY).iter().map(|(k, _)| *k).collect();
     assert_eq!(seeded, [0, 1, 2, 4, 5, 6, 13]);
-    assert_eq!(block.system_address(), MEGA_SYSTEM_ADDRESS);
+    assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
     // The cleared `_pendingAdmin` reads zero through the new code.
     assert_eq!(
         view(&mut block, 0, SEQUENCER_REGISTRY, call_data("pendingAdmin()", None)),
@@ -510,7 +510,7 @@ fn lifecycle_a_zero_system_address_invalidates_the_block_and_a_zero_sequencer_do
     let mut db = with_registry(world(), registry_v2());
     set_slot(&mut db, 1, U256::ZERO);
     let block = start(&genesis_chain(), &block_input(), db).expect("a zero sequencer");
-    assert_eq!(block.system_address(), LIVE);
+    assert_eq!(block.system_address(), Some(LIVE));
 }
 
 /// The resolution itself refuses a registry that is absent or holds other code. The deployment
@@ -539,6 +539,22 @@ fn lifecycle_resolution_refuses_an_absent_or_foreign_registry() {
     assert_eq!(error.kind(), &BlockErrorKind::SystemAddress(SystemAddressFault::RegistryCode(v1)));
     assert_eq!(error.phase(), Phase::SystemAddressResolution);
     assert_eq!(error.disposition(), Disposition::InvalidBlock);
+    // Under the reference's per-transaction classification too, as the reference runs such a
+    // block: the registry names no address and the block is not invalidated.
+    let both = Simulation {
+        reference_rules: vec![
+            ReferenceRule::NoPreBlockDeployment,
+            ReferenceRule::RegistryReadPerTransaction,
+        ],
+        ..Simulation::default()
+    };
+    for db in [world(), with_registry(world(), registry_v1())] {
+        let block = genesis_chain()
+            .start_simulated_block(&block_input(), Db::new(db), BlockServices::default(), &both)
+            .expect("the reference's rules invalidate nothing here");
+        assert_eq!(block.system_address(), None);
+        assert_eq!(block.evm().ext().system_address, None);
+    }
 }
 
 /// The due-change read loads the registry's account and each role's pending address slot, and a
@@ -581,7 +597,7 @@ fn lifecycle_due_change_compares_the_whole_activation_block() {
         let applied = block.pre_block_states().len() == 12;
         assert_eq!(applied, due, "block {number}, activation {activation}");
         let live = if due { NEXT } else { LIVE };
-        assert_eq!(block.system_address(), live, "block {number}, activation {activation}");
+        assert_eq!(block.system_address(), Some(live), "block {number}, activation {activation}");
     }
 }
 
@@ -612,7 +628,7 @@ fn lifecycle_due_change_applies_both_roles_before_the_registry_is_deployed() {
     for cleared in [7, 8, 9, 10] {
         assert!(slots.contains(&(cleared, U256::ZERO)), "slot {cleared} cleared: {slots:?}");
     }
-    assert_eq!(block.system_address(), NEXT);
+    assert_eq!(block.system_address(), Some(NEXT));
 }
 
 /// Every transaction of a block is classified against the address resolved after the role change:
@@ -627,7 +643,7 @@ fn lifecycle_transactions_are_classified_against_the_address_resolved_last() {
         db.insert_account_info(&funded, AccountInfo::default().with_balance(U256::from(1) << 64));
     }
     let mut block = start(&genesis_chain(), &block_input(), db).expect("the block starts");
-    assert_eq!(block.system_address(), NEXT);
+    assert_eq!(block.system_address(), Some(NEXT));
     let data = call_data("getSlot(uint256)", Some(1));
     let retired = block.execute_candidate(&legacy(LIVE, 0, ORACLE, data.clone()), &[]).unwrap();
     assert!(!retired.is_system_transaction(), "the retired address sends a user's transaction");
@@ -811,7 +827,7 @@ fn lifecycle_block_zero_makes_no_eip_call_and_installs_every_contract() {
     let slots = changed_slots(&block, SEQUENCER_REGISTRY);
     assert!(slots.contains(&(0, address_word(MEGA_SYSTEM_ADDRESS))), "{slots:?}");
     assert!(!slots.iter().any(|(k, _)| *k == 6), "the initial block, zero, writes no change");
-    assert_eq!(block.system_address(), MEGA_SYSTEM_ADDRESS);
+    assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
 }
 
 /// Satin active from genesis at a genesis timestamp after `satinTime`: no block is the one in
@@ -835,7 +851,7 @@ fn lifecycle_a_genesis_active_chain_has_no_crossing_block() {
     let states = block.pre_block_states();
     assert_eq!(states.len(), 11);
     assert!(states.iter().all(|s| s.account_changes_for(&CREATE2_FACTORY).is_none()));
-    assert_eq!(block.system_address(), MEGA_SYSTEM_ADDRESS);
+    assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
 }
 
 /// A pre-block call's first frame as the block's inspector saw it.

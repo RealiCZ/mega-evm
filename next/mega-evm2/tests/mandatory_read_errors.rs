@@ -350,7 +350,7 @@ fn test_block_classifies_every_envelope_without_reading_the_registry() {
             backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::ZERO);
             let (block, armed) = start_block_over(backend, false);
             let mut block = block.expect("the block starts");
-            assert_eq!(block.system_address(), SYSTEM);
+            assert_eq!(block.system_address(), Some(SYSTEM));
             armed.set(true);
             let out = block.execute_candidate(&tx, &[]);
             let out = out.unwrap_or_else(|e| panic!("{name} {fail:?}: {e:?}"));

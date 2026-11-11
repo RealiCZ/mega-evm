@@ -220,8 +220,10 @@ pub struct BlockOutput {
     /// set is the block's state transition: a registry seeded over an account without code clears
     /// that account's earlier storage there, which its pre-block state does not mark.
     pub pre_block_states: Vec<PendingState>,
-    /// The live system address the block's transactions were classified against.
-    pub system_address: Address,
+    /// The live system address the block's transactions were classified against: always resolved
+    /// under consensus rules (`None` only in a comparison run under the reference's
+    /// per-transaction classification, where the registry named none).
+    pub system_address: Option<Address>,
     pub limiter: BlockLimiter,
     /// Valid SALT lookups across every execution in the block, including discarded candidates.
     #[cfg(feature = "witness")]
@@ -246,7 +248,7 @@ pub struct BlockSession<'a> {
     /// The configuration's registry bootstrap values, which a new registry is seeded with.
     bootstrap: RegistryBootstrap,
     /// The live system address, resolved by the pre-block sequence.
-    system_address: Address,
+    system_address: Option<Address>,
     /// The limits every candidate runs under: Satin's, or a simulation's.
     limits: TxLimits,
     simulation: bool,
@@ -278,7 +280,7 @@ impl<'a> BlockSession<'a> {
             parent_beacon_block_root,
             activation,
             bootstrap,
-            system_address: Address::ZERO,
+            system_address: None,
             limits,
             simulation,
             fault: None,
@@ -316,8 +318,10 @@ impl<'a> BlockSession<'a> {
     }
 
     /// The live system address the pre-block sequence resolved, which every transaction of the
-    /// block is classified against (`SATIN-REG-002`).
-    pub const fn system_address(&self) -> Address {
+    /// block is classified against (`SATIN-REG-002`): always resolved under consensus rules, the
+    /// block invalid otherwise (`None` only in a comparison run under the reference's
+    /// per-transaction classification, where the registry named none).
+    pub const fn system_address(&self) -> Option<Address> {
         self.system_address
     }
 
@@ -406,7 +410,7 @@ impl<'a> BlockSession<'a> {
     /// that address is refused when the engine validates it). Nothing is read.
     fn is_system_transaction(&self, tx: &Recovered<OpTxEnvelope>) -> bool {
         let shape = tx.inner().ty() == 0 && tx.inner().kind() == TxKind::Call(ORACLE);
-        shape && tx.signer() == self.system_address
+        shape && self.system_address == Some(tx.signer())
     }
 
     /// The kept failure, if one decided the block.

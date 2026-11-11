@@ -135,7 +135,7 @@ impl BlockSession<'_> {
         let (address, reads) = self.resolve_system_address()?;
         self.commit_pre_block_state(reads);
         self.system_address = address;
-        self.evm.ext_mut().system_address = Some(address);
+        self.evm.ext_mut().system_address = address;
         Ok(())
     }
 
@@ -296,15 +296,25 @@ impl BlockSession<'_> {
     /// off the state the other steps left, its code hash compared and its code neither loaded nor
     /// run, with the read-only state of the read. A registry that is absent, holds other code than
     /// version 2.0.0 or whose slot 0 is zero makes the block invalid (`SATIN-REG-004`); a read the
-    /// database cannot serve is an internal error (`SATIN-REG-007`).
-    fn resolve_system_address(&mut self) -> Result<(Address, PendingState), BlockError> {
+    /// database cannot serve is an internal error (`SATIN-REG-007`). Under the reference's
+    /// per-transaction classification (comparison only) such a registry names no address and
+    /// invalidates nothing, as that classification's own read finds none.
+    fn resolve_system_address(&mut self) -> Result<(Option<Address>, PendingState), BlockError> {
         let read = RegistryRead::read(&mut self.evm).map_err(|(slot, e)| {
             let context = ErrorContext { slot, ..ErrorContext::account(SEQUENCER_REGISTRY) };
             BlockError::read(Phase::SystemAddressResolution, e, context)
         })?;
-        let address = read
-            .resolve()
-            .map_err(|fault| BlockError::system_address(SEQUENCER_REGISTRY, fault))?;
+        let address = if crate::under_reference_rule(
+            self.evm.ext(),
+            crate::ReferenceRule::RegistryReadPerTransaction,
+        ) {
+            read.resolve().ok()
+        } else {
+            Some(
+                read.resolve()
+                    .map_err(|fault| BlockError::system_address(SEQUENCER_REGISTRY, fault))?,
+            )
+        };
         Ok((address, read.state()))
     }
 

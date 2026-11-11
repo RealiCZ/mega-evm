@@ -94,7 +94,7 @@ fn test_read_only_pre_block_states_are_committed_in_order() {
         assert!(!resolved.is_changed());
         let live = if due { PENDING } else { LIVE };
         assert_eq!(resolved.storage.slots[&U256::ZERO].value.current, address_word(live));
-        assert_eq!(block.system_address(), live);
+        assert_eq!(block.system_address(), Some(live));
         assert_eq!(block.limiter().block_gas_used, 0);
         assert_eq!(block.limiter().usage, [0; 3]);
         // A due change was applied: none is due any more.
