@@ -24,14 +24,14 @@ use evm2::{
     interpreter::Word,
 };
 use mega_evm2::{
-    MegaTypes,
+    MegaTypes, SaltCapacities, SaltSnapshot, SnapshotId,
     chain::{BootstrapInput, ChainConfig},
-    factory::{BlockHeader, BlockInput, ParentContext, SatinFactory, Simulation},
+    factory::{BlockHeader, BlockInput, BlockServices, ParentContext, SatinFactory, Simulation},
     ledger::*,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit};
 use serde_json::{Map, Value, json};
-use std::{cell::RefCell, collections::HashMap, convert::Infallible, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, convert::Infallible, rc::Rc, sync::Arc};
 
 /// The block state as an evm2 `Database`. Bytecode is kept per hash, analysed once (as a node's
 /// code cache keeps it), so neither the jump-table analysis nor the hashing is in a run.
@@ -126,6 +126,20 @@ pub fn factory(chain_id: u64) -> SatinFactory {
     SatinFactory::new(gate_chain(chain_id))
 }
 
+/// The SALT snapshot the gates execute the recorded block `h` on: the recording carries no
+/// capacity, so every bucket is at the minimum, the test policy `Unlisted::TestMinimum` (as the
+/// reference's replay prices it). It is of `h`'s parent, with a zero state root.
+pub fn minimum_salt(h: &Header) -> Arc<dyn SaltSnapshot> {
+    let id = SnapshotId { parent_hash: h.parent_hash, state_root: B256::ZERO };
+    Arc::new(SaltCapacities::test_minimum(id))
+}
+
+/// The services of the recorded block `h`: its [`minimum_salt`], an empty environment, no
+/// inspector.
+pub fn services(h: &Header) -> BlockServices<'static> {
+    BlockServices::new(minimum_salt(h))
+}
+
 /// The simulation of the reference's `rules` (`Lite::reference_rules`), `None` for Satin's.
 pub fn simulation_under(rules: &[ReferenceRule]) -> Option<Simulation> {
     (!rules.is_empty())
@@ -173,9 +187,10 @@ pub fn new_evm_under(
 ) -> Evm<'static, MegaTypes> {
     let factory = factory(chain_id);
     let db = evm2::evm::Db::new(db);
+    let salt = minimum_salt(h);
     let mut evm = match simulation_under(rules) {
-        None => factory.evm(block_env(h), db),
-        Some(simulation) => factory.simulated_evm(block_env(h), db, &simulation),
+        None => factory.evm(block_env(h), db, salt),
+        Some(simulation) => factory.simulated_evm(block_env(h), db, salt, &simulation),
     }
     .expect("a Satin block");
     // The harness's fixture switch: off, evm2 skips the storage read of an account the database
@@ -317,7 +332,8 @@ pub fn run_tx_under(
     let d = db.borrow();
     let mut reads = d.reads.to_json();
     let ro = reads.as_object_mut().unwrap();
-    ro.insert("buckets".into(), json!(ext.bucket_reads.iter().collect::<Vec<_>>()));
+    let buckets: Vec<u64> = ext.salt.lookups().into_iter().map(u64::from).collect();
+    ro.insert("buckets".into(), json!(buckets));
     ro.insert("oracle_reads".into(), json!(ext.oracle_reads));
     let flags: Map<String, Value> = changes
         .iter()
@@ -429,7 +445,7 @@ mod tests {
         );
         for h in [header(0, 0), header(1, 7), header(10_108_963, 1_000)] {
             let db = evm2::evm::Db::new(evm2::evm::InMemoryDB::default());
-            let started = factory(1).start_block(&block_input(&h), db, Default::default());
+            let started = factory(1).start_block(&block_input(&h), db, services(&h));
             assert!(started.is_ok(), "block {}: {:?}", h.number, started.err());
         }
     }

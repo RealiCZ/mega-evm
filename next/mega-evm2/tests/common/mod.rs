@@ -1,5 +1,6 @@
 //! The harness of the engine's give-back tests: a Satin EVM over an in-memory database at `m = 1`
-//! everywhere, a frame recorder, and a keyless deployment's transaction and call.
+//! everywhere (a SALT snapshot under the test policy [`Unlisted::TestMinimum`]), a frame recorder,
+//! and a keyless deployment's transaction and call.
 #![allow(dead_code)]
 
 use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
@@ -13,13 +14,14 @@ use evm2::{
     interpreter::{InstrStop, Interpreter, Message, MessageResult},
 };
 use mega_evm2::{
-    MegaTypes, TxLimits,
+    MegaTypes, SaltCapacities, SaltSnapshot, SnapshotId, TxLimits,
     block::BlockSession,
     chain::{BootstrapInput, ChainConfig},
     factory::{BlockHeader, BlockInput, BlockServices, ParentContext, SatinFactory, Simulation},
     keyless,
 };
 use op_evm2::OpTxEnvelope;
+use std::sync::Arc;
 
 pub const SENDER: Address = Address::with_last_byte(0x50);
 pub const TOP: Address = Address::with_last_byte(0xa0);
@@ -239,9 +241,27 @@ pub fn block() -> BlockEnv<MegaTypes> {
     }
 }
 
-/// A single transaction's Satin EVM over `database` in `block`, from the factory.
+/// The SALT snapshot of the state after `parent_hash` (state root zero) that answers every bucket
+/// with the minimum capacity, `m = 1`: the test policy [`mega_evm2::Unlisted::TestMinimum`].
+pub fn minimum_salt(parent_hash: B256) -> Arc<dyn SaltSnapshot> {
+    Arc::new(SaltCapacities::test_minimum(snapshot_id(parent_hash)))
+}
+
+/// The tests' id of the state after `parent_hash`: its state root zero.
+pub const fn snapshot_id(parent_hash: B256) -> SnapshotId {
+    SnapshotId { parent_hash, state_root: B256::ZERO }
+}
+
+/// The services of a block whose parent is `parent_hash`, at the minimum bucket everywhere
+/// ([`minimum_salt`]).
+pub fn services(parent_hash: B256) -> BlockServices<'static> {
+    BlockServices::new(minimum_salt(parent_hash))
+}
+
+/// A single transaction's Satin EVM over `database` in `block`, from the factory, at the minimum
+/// bucket everywhere.
 pub fn evm<'a>(block: BlockEnv<MegaTypes>, database: impl DynDatabase + 'a) -> Evm<'a, MegaTypes> {
-    factory().evm(block, database).expect("a Satin timestamp")
+    factory().evm(block, database, minimum_salt(B256::ZERO)).expect("a Satin timestamp")
 }
 
 /// [`evm`] under a simulation's switches.
@@ -250,7 +270,9 @@ pub fn simulated_evm<'a>(
     database: impl DynDatabase + 'a,
     simulation: &Simulation,
 ) -> Evm<'a, MegaTypes> {
-    factory().simulated_evm(block, database, simulation).expect("a Satin timestamp")
+    factory()
+        .simulated_evm(block, database, minimum_salt(B256::ZERO), simulation)
+        .expect("a Satin timestamp")
 }
 
 /// Block `number` (at least 1) at `timestamp` with gas limit `gas_limit`, on a parent one block
@@ -283,9 +305,11 @@ pub fn committed_slot(block: &BlockSession<'_>, address: Address, key: U256) -> 
         .map(|(_, t)| t.current)
 }
 
-/// A consensus block session for `input` over `database`, its pre-block sequence run.
+/// A consensus block session for `input` over `database` at the minimum bucket everywhere, its
+/// pre-block sequence run.
 pub fn start_block<'a>(input: &BlockInput, database: impl DynDatabase + 'a) -> BlockSession<'a> {
-    factory().start_block(input, database, BlockServices::default()).expect("the block starts")
+    let services = BlockServices::new(minimum_salt(input.header.parent_hash));
+    factory().start_block(input, database, services).expect("the block starts")
 }
 
 /// A Satin EVM over `db` in a block at `m = 1` everywhere.

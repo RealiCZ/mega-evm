@@ -8,13 +8,12 @@ use evm2::evm::{Db, InMemoryDB};
 use mega_evm2::{
     block::BEACON_ROOTS,
     error::{BlockError, BlockErrorKind, Disposition, Phase},
-    factory::BlockServices,
 };
 
 fn start(parent_beacon_block_root: Option<B256>) -> Result<(), BlockError> {
     let input = common::block_input(1, 1_000, 30_000_000, parent_beacon_block_root);
     common::factory()
-        .start_block(&input, Db::new(InMemoryDB::default()), BlockServices::default())
+        .start_block(&input, Db::new(InMemoryDB::default()), common::services(B256::ZERO))
         .map(drop)
 }
 

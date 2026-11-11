@@ -95,8 +95,7 @@ fn assert_protocol_run(ty: u8, sender: Address, hash: B256) {
     let bytes = 310 + if ty == 4 { 101 } else { 0 } + 40;
     assert_eq!(evm.ext().history(true), (bytes * 88, bytes), "type {ty}");
     assert_eq!(evm.ext().usage(true)[1..], [1, 1]);
-    #[cfg(feature = "witness")]
-    assert!(evm.ext().bucket_reads.is_empty());
+    assert!(evm.ext().salt.lookups().is_empty());
 }
 
 #[test]

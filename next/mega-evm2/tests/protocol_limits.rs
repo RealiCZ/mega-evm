@@ -17,7 +17,7 @@ use evm2::{
 use mega_evm2::{
     MegaTypes, TxLimits,
     error::{CandidateError, Refusal},
-    factory::{BlockServices, Simulation},
+    factory::Simulation,
 };
 use op_evm2::OpTxEnvelope;
 
@@ -121,7 +121,12 @@ fn test_a_block_session_runs_every_transaction_under_satins_limits() {
 
     let simulation = Simulation { limits: Some(nothing), ..Simulation::default() };
     let mut simulated = common::factory()
-        .start_simulated_block(&input, Db::new(db(&[0x00])), BlockServices::default(), &simulation)
+        .start_simulated_block(
+            &input,
+            Db::new(db(&[0x00])),
+            common::services(B256::ZERO),
+            &simulation,
+        )
         .expect("the simulated block starts");
     assert!(simulated.is_simulation());
     let refused = simulated.execute_candidate(&tx, &encoded).expect_err("under no room");

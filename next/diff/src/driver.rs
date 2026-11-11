@@ -14,7 +14,7 @@ use evm2::{
     inspector::Inspector,
     interpreter::{InstrStop, Interpreter, Message, MessageKind, MessageResult, Word},
 };
-use mega_evm2::{MegaTypes, ledger::*};
+use mega_evm2::{MegaTypes, ledger::*, salt::*};
 use op_evm2::{OpTxEnvelope, TxDeposit};
 use scenarios::{Scenario, record, record::hex};
 
@@ -344,9 +344,20 @@ fn evm_under(
         ..BlockEnv::<MegaTypes>::default()
     };
     let database = evm2::evm::Db::new(RecordingDb { inner: db(s), reads });
+    // The scenario's capacities; a bucket it does not list is at the minimum, the test policy the
+    // reference's harness has too.
+    let mut salt = SaltCapacities::test_minimum(SnapshotId::default());
+    for (a, k, m) in &s.salt {
+        let capacity = scenarios::salt_capacity(*m)
+            .unwrap_or_else(|| panic!("{}: {m} minimum buckets is not a u64 capacity", s.name));
+        salt.insert(site_bucket(*a, *k), capacity);
+    }
+    for (a, k, capacity) in &s.salt_capacity {
+        salt.insert(site_bucket(*a, *k), *capacity);
+    }
     // The scenarios sign for the chain id of Satin's version as the engine defines it.
     let mut evm = crate::replay::factory(mega_evm2::satin_version().chain_id)
-        .simulated_evm(block, database, &simulation)
+        .simulated_evm(block, database, std::sync::Arc::new(salt), &simulation)
         .expect("a Satin block");
     // The harness's fixture switch: off, evm2 skips the storage read of an account the database
     // lacks (the factory has it read, as revm does).
@@ -355,23 +366,15 @@ fn evm_under(
     for (k, v) in &s.oracle {
         ext.cfg.oracle.insert(U256::from(*k), U256::from(*v));
     }
-    for (a, k, m) in &s.salt {
-        let id = match k {
-            Some(k) => bucket_for(evm2::version::StateGasSite::Storage(*a, U256::from(*k))),
-            None => bucket_for(evm2::version::StateGasSite::Account(*a)),
-        };
-        let capacity = scenarios::salt_capacity(*m)
-            .unwrap_or_else(|| panic!("{}: {m} minimum buckets is not a u64 capacity", s.name));
-        ext.cfg.buckets.insert(id, capacity);
-    }
-    for (a, k, capacity) in &s.salt_capacity {
-        let id = match k {
-            Some(k) => bucket_for(evm2::version::StateGasSite::Storage(*a, U256::from(*k))),
-            None => bucket_for(evm2::version::StateGasSite::Account(*a)),
-        };
-        ext.cfg.buckets.insert(id, *capacity);
-    }
     evm
+}
+
+/// The bucket of `a`'s slot `k`, or of its account when there is no slot.
+fn site_bucket(a: Address, k: Option<u64>) -> BucketId {
+    match k {
+        Some(k) => bucket_for(evm2::version::StateGasSite::Storage(a, U256::from(k))),
+        None => bucket_for(evm2::version::StateGasSite::Account(a)),
+    }
 }
 
 pub fn tx(s: &Scenario) -> Recovered<OpTxEnvelope> {
@@ -551,7 +554,7 @@ fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
         "storage": rd.storage.iter().filter(|_| served).map(|(a, k)| record::slot_key(*a, *k)).collect::<Vec<_>>(),
         "codes": rd.codes.iter().filter(|_| served).map(|h| format!("{h}")).collect::<Vec<_>>(),
         "block_hashes": rd.block_hashes.iter().filter(|_| served).collect::<Vec<_>>(),
-        "buckets": ext.bucket_reads.iter().collect::<Vec<_>>(),
+        "buckets": ext.salt.lookups().into_iter().map(u64::from).collect::<Vec<_>>(),
         "oracle_reads": ext.oracle_reads,
     });
     drop(rd);

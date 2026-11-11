@@ -10,6 +10,11 @@
 //! deposits, whether it is block zero — are worked out from the configuration and the parent
 //! context ([`ChainConfig::activation`]), never taken from the caller (`SATIN-ACT-010`).
 //!
+//! Every EVM reads SALT's bucket capacities from a snapshot the caller gives it
+//! ([`SaltSnapshot`]); there is no default that answers a bucket the snapshot cannot read. A block
+//! session's snapshot must be of the block's parent ([`SnapshotId::parent_hash`]): the same height
+//! under another parent is another snapshot.
+//!
 //! Simulations — a tool's or a test's counterfactual run — use the separately named entry points
 //! ([`SatinFactory::start_simulated_block`], [`SatinFactory::simulated_evm`]) with the switches of
 //! a [`Simulation`]; a session reports whether it is one ([`BlockSession::is_simulation`]). The
@@ -20,11 +25,12 @@ use crate::{
     block::BlockSession,
     chain::{Activation, ChainConfig, Engine, Fork, ProtocolParams},
     error::{BlockError, BlockIdentity, ErrorContext, InputError, Phase},
+    salt::{SaltCache, SaltSnapshot},
     system_contracts::RegistryRead,
 };
 use alloy_primitives::{Address, B256, U256};
 use evm2::{Evm, ExecutionConfig, Inspector, env::BlockEnv, evm::DynDatabase};
-use std::boxed::Box;
+use std::{boxed::Box, sync::Arc};
 
 /// The header fields of a block the engine reads, from the consumer's authenticated header.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -60,13 +66,25 @@ pub struct BlockInput {
 }
 
 /// What the node supplies a block beside its state.
-#[derive(Default)]
 pub struct BlockServices<'a> {
-    /// The node's environment: SALT bucket capacities and the Oracle service's answers.
+    /// SALT's bucket capacities in the block's parent state, the state the database reads: the
+    /// factory refuses a snapshot of another parent. Shared, so a node can hand the same snapshot
+    /// to several sessions of a block; a node that runs them on several threads keeps its own
+    /// thread-safe snapshot in an `Arc` and gives each session a clone of it.
+    pub salt: Arc<dyn SaltSnapshot>,
+    /// The node's environment: the Oracle service's answers.
     pub environment: Cfg,
     /// An inspector that observes the whole block, its pre-block calls included. It observes; it
     /// does not change what the block executes.
     pub inspector: Option<Box<dyn Inspector<MegaTypes> + 'a>>,
+}
+
+impl BlockServices<'_> {
+    /// The services of a block over the SALT snapshot `salt`, with an empty environment and no
+    /// inspector.
+    pub fn new(salt: Arc<dyn SaltSnapshot>) -> Self {
+        Self { salt, environment: Cfg::default(), inspector: None }
+    }
 }
 
 /// The explicitly named switches of a simulation: a run that is not the chain's, which a tool or a
@@ -106,8 +124,9 @@ impl SatinFactory {
     }
 
     /// Starts the block `input` over `database` under consensus rules: checks the input against
-    /// the configuration and its parent, derives its activation facts, and runs its pre-block
-    /// sequence. The session returned is ready for transactions.
+    /// the configuration and its parent, and the SALT snapshot against the parent, derives its
+    /// activation facts, and runs its pre-block sequence. The session returned is ready for
+    /// transactions.
     pub fn start_block<'a>(
         &self,
         input: &BlockInput,
@@ -137,6 +156,13 @@ impl SatinFactory {
     ) -> Result<BlockSession<'a>, BlockError> {
         let activation = self.check_input(input)?;
         let h = &input.header;
+        let snapshot = services.salt.id();
+        if snapshot.parent_hash != h.parent_hash {
+            return Err(BlockError::input(InputError::SaltSnapshotParent {
+                parent_hash: h.parent_hash,
+                snapshot,
+            }));
+        }
         let block = BlockEnv::<MegaTypes> {
             number: U256::from(h.number),
             beneficiary: h.beneficiary,
@@ -150,7 +176,7 @@ impl SatinFactory {
             slot_num: U256::ZERO,
             ..BlockEnv::<MegaTypes>::default()
         };
-        let mut evm = self.build(block, database, simulation);
+        let mut evm = self.build(block, database, services.salt, simulation);
         evm.ext_mut().cfg = services.environment;
         if let Some(inspector) = services.inspector {
             evm.set_boxed_inspector(inspector);
@@ -169,6 +195,7 @@ impl SatinFactory {
         BlockSession::start(
             evm,
             identity,
+            snapshot,
             h.parent_beacon_block_root,
             activation,
             bootstrap,
@@ -178,20 +205,23 @@ impl SatinFactory {
     }
 
     /// A single transaction's EVM in the block environment `block`, under Satin's rules: for a
-    /// transaction executed outside a block session (a call, an estimate). Its environment
-    /// (`Lite::cfg`) starts empty. Its live system address is resolved once, now, off the state it
-    /// runs on, as a block resolves its own ([`Self::resolve_system_address`]), so a transaction
-    /// is priced as in a block: none reads the registry for its classification. A caller that
-    /// knows the block's resolved address may set `Lite::system_address` instead.
+    /// transaction executed outside a block session (a call, an estimate). It reads SALT from
+    /// `salt`, which the caller binds to the state `database` reads (the environment carries no
+    /// parent to check it against); its environment (`Lite::cfg`) starts empty. Its live system
+    /// address is resolved once, now, off the state it runs on, as a block resolves its own
+    /// ([`Self::resolve_system_address`]), so a transaction is priced as in a block: none reads the
+    /// registry for its classification. A caller that knows the block's resolved address may set
+    /// `Lite::system_address` instead.
     pub fn evm<'a>(
         &self,
         block: BlockEnv<MegaTypes>,
         database: impl DynDatabase + 'a,
+        salt: Arc<dyn SaltSnapshot>,
     ) -> Result<Evm<'a, MegaTypes>, BlockError> {
         let timestamp = u64::try_from(block.timestamp)
             .map_err(|_| BlockError::input(InputError::TimestampTooLarge))?;
         self.check_timestamp(timestamp)?;
-        let mut evm = self.build(block, database, None);
+        let mut evm = self.build(block, database, salt, None);
         Self::resolve_system_address(&mut evm)?;
         Ok(evm)
     }
@@ -201,12 +231,13 @@ impl SatinFactory {
         &self,
         block: BlockEnv<MegaTypes>,
         database: impl DynDatabase + 'a,
+        salt: Arc<dyn SaltSnapshot>,
         simulation: &Simulation,
     ) -> Result<Evm<'a, MegaTypes>, BlockError> {
         let timestamp = u64::try_from(block.timestamp)
             .map_err(|_| BlockError::input(InputError::TimestampTooLarge))?;
         self.check_timestamp(timestamp)?;
-        let mut evm = self.build(block, database, Some(simulation));
+        let mut evm = self.build(block, database, salt, Some(simulation));
         Self::resolve_system_address(&mut evm)?;
         Ok(evm)
     }
@@ -292,11 +323,13 @@ impl SatinFactory {
         Ok(self.config.activation(h.timestamp, parent_timestamp))
     }
 
-    /// An EVM with what the spec fixes installed, plus a simulation's switches.
+    /// An EVM with what the spec fixes installed, reading SALT from `salt`, plus a simulation's
+    /// switches.
     fn build<'a>(
         &self,
         block: BlockEnv<MegaTypes>,
         database: impl DynDatabase + 'a,
+        salt: Arc<dyn SaltSnapshot>,
         simulation: Option<&Simulation>,
     ) -> Evm<'a, MegaTypes> {
         #[cfg(feature = "compare")]
@@ -326,6 +359,7 @@ impl SatinFactory {
         // Read storage of an account the database lacks, as revm does: the read set holds it.
         evm.state_mut().set_read_absent_storage(true);
         let ext = evm.ext_mut();
+        ext.salt = SaltCache::new(salt);
         ext.limits = simulation.and_then(|s| s.limits).unwrap_or(TxLimits::SATIN);
         #[cfg(feature = "compare")]
         if let Some(s) = simulation {

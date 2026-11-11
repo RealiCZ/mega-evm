@@ -29,9 +29,7 @@ default = []
 # Everything that exists only for the differential comparison: start-ledger settlements, the
 # precompile pricing report, the `MEGA_EVM2_DISABLE` negative-control switches and the
 # `MEGA_EVM2_DEBUG` traces.
-compare = ["witness"]
-# The read-set recording a witness producer needs beyond the database reads (SALT bucket reads).
-witness = []
+compare = []
 # Satin's test SALT bucket hasher (FNV-1a, `TestExternalEnvs`' `SimpleBucketHasher`) in place of
 # SALT's production one, the default: the differential scenarios name their buckets with it.
 salt-test-hasher = []

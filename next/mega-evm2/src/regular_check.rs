@@ -587,13 +587,19 @@ mod catches {
             gas_limit: U256::from(10_000_000_000u64),
             ..BlockEnv::<MegaTypes>::default()
         };
+        // The minimum bucket everywhere: a test's policy.
+        let salt = std::sync::Arc::new(crate::SaltCapacities::test_minimum(crate::SnapshotId {
+            parent_hash: alloy_primitives::B256::ZERO,
+            state_root: alloy_primitives::B256::ZERO,
+        }));
         match version {
-            Version::Satin => factory.evm(block, Db::new(db)).expect("a Satin block"),
+            Version::Satin => factory.evm(block, Db::new(db), salt).expect("a Satin block"),
             Version::Under(rules) => {
                 let simulation =
                     Simulation { reference_rules: rules.to_vec(), ..Simulation::default() };
-                let mut evm =
-                    factory.simulated_evm(block, Db::new(db), &simulation).expect("a Satin block");
+                let mut evm = factory
+                    .simulated_evm(block, Db::new(db), salt, &simulation)
+                    .expect("a Satin block");
                 evm.ext_mut().reference_rules.clear();
                 evm
             }

@@ -100,7 +100,7 @@ fn run_block(
         evm2::evm::Db::new(Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) });
     let inspector =
         inspected.then(|| Box::new(Frames::default()) as Box<dyn evm2::Inspector<MegaTypes>>);
-    let services = BlockServices { inspector, ..BlockServices::default() };
+    let services = BlockServices { inspector, ..replay::services(&b.header) };
     let factory = replay::factory(b.chain_id);
     let input = replay::block_input(&b.header);
     let mut ex = match replay::simulation_under(rules) {

@@ -28,7 +28,6 @@ use mega_evm2::{
     MegaTypes, SEQUENCER_REGISTRY,
     block::BlockSession,
     error::{BlockError, CandidateError, Disposition, Phase},
-    factory::BlockServices,
     tx::SEQUENCER_REGISTRY_CODE_HASH,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit, constants::L1_BLOCK_CONTRACT};
@@ -193,7 +192,8 @@ fn start_block_over(
     let switch = backend.armed.clone();
     switch.set(armed);
     let input = common::block_input(1, 1_000, 30_000_000, Some(B256::repeat_byte(0x11)));
-    let block = common::factory().start_block(&input, Db::new(backend), BlockServices::default());
+    let block =
+        common::factory().start_block(&input, Db::new(backend), common::services(B256::ZERO));
     (block, switch)
 }
 

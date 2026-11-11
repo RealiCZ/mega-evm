@@ -98,7 +98,24 @@ fn start(
     input: &BlockInput,
     db: InMemoryDB,
 ) -> Result<BlockSession<'static>, BlockError> {
-    factory.start_block(input, Db::new(db), BlockServices::default())
+    factory.start_block(input, Db::new(db), services(input))
+}
+
+/// The SALT snapshot of the state after `parent_hash`: the minimum bucket everywhere (a test's
+/// policy).
+fn minimum_salt(parent_hash: B256) -> std::sync::Arc<dyn mega_evm2::SaltSnapshot> {
+    let id = mega_evm2::SnapshotId { parent_hash, state_root: B256::ZERO };
+    std::sync::Arc::new(mega_evm2::SaltCapacities::test_minimum(id))
+}
+
+/// A single-transaction EVM's SALT snapshot.
+fn salt() -> std::sync::Arc<dyn mega_evm2::SaltSnapshot> {
+    minimum_salt(B256::ZERO)
+}
+
+/// The services of `input`'s block: its parent's snapshot.
+fn services(input: &BlockInput) -> BlockServices<'static> {
+    BlockServices::new(minimum_salt(input.header.parent_hash))
 }
 
 fn legacy(chain_id: u64) -> Recovered<OpTxEnvelope> {
@@ -217,8 +234,10 @@ fn chain_config_refuses_a_block_the_legacy_engine_executes() {
     assert_eq!(error, InputError::NotSatin { timestamp: 99, satin_time: Some(100) });
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(99), ..BlockEnv::<MegaTypes>::default() };
-    let error =
-        factory.evm(env, Db::new(db())).map(drop).expect_err("no Satin EVM before satinTime");
+    let error = factory
+        .evm(env, Db::new(db()), salt())
+        .map(drop)
+        .expect_err("no Satin EVM before satinTime");
     assert_eq!(
         error.kind(),
         &BlockErrorKind::Input(InputError::NotSatin { timestamp: 99, satin_time: Some(100) })
@@ -299,7 +318,7 @@ fn chain_config_fails_explicitly_under_a_fork_without_rules() {
     assert_eq!(error, InputError::UnsupportedFork { fork: Fork::Lagoon, timestamp: 200 });
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(250), ..BlockEnv::<MegaTypes>::default() };
-    assert!(factory.evm(env, Db::new(db())).is_err(), "no single-transaction EVM either");
+    assert!(factory.evm(env, Db::new(db()), salt()).is_err(), "no single-transaction EVM either");
     // A timestamp past the largest `u64` is refused, not saturated into a Satin timestamp; the
     // largest `u64` itself is one.
     let satin = self::factory(1, 0, 0, &[]);
@@ -307,12 +326,12 @@ fn chain_config_fails_explicitly_under_a_fork_without_rules() {
         timestamp: U256::from(u64::MAX),
         ..BlockEnv::<MegaTypes>::default()
     };
-    satin.evm(largest, Db::new(db())).map(drop).expect("the largest timestamp");
+    satin.evm(largest, Db::new(db()), salt()).map(drop).expect("the largest timestamp");
     let past = BlockEnv::<MegaTypes> { timestamp: largest.timestamp + U256::from(1), ..largest };
-    assert_eq!(input_error(satin.evm(past, Db::new(db()))), InputError::TimestampTooLarge);
+    assert_eq!(input_error(satin.evm(past, Db::new(db()), salt())), InputError::TimestampTooLarge);
     let simulation = mega_evm2::factory::Simulation::default();
     assert_eq!(
-        input_error(satin.simulated_evm(past, Db::new(db()), &simulation)),
+        input_error(satin.simulated_evm(past, Db::new(db()), salt(), &simulation)),
         InputError::TimestampTooLarge
     );
 }
@@ -326,7 +345,7 @@ fn chain_config_a_commit_holds_the_candidate_to_the_sessions_rules() {
     let input = child(5, 100, 99);
     let simulation = Simulation { skip_nonce_check: true, ..Simulation::default() };
     let mut simulated = factory
-        .start_simulated_block(&input, Db::new(db()), BlockServices::default(), &simulation)
+        .start_simulated_block(&input, Db::new(db()), services(&input), &simulation)
         .expect("the simulated block starts");
     let out = simulated.execute_candidate(&legacy(1), &[]).expect("runs");
     assert!(out.is_simulated());
@@ -366,6 +385,6 @@ fn chain_config_factory_installs_the_configured_chain_id() {
     assert!(out.result().status, "{:?}", out.result());
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(10), ..BlockEnv::<MegaTypes>::default() };
-    assert_eq!(factory.evm(env, Db::new(db())).unwrap().version().chain_id, 4326);
+    assert_eq!(factory.evm(env, Db::new(db()), salt()).unwrap().version().chain_id, 4326);
     assert_eq!(factory.protocol().chain_id, 4326);
 }

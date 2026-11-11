@@ -2,7 +2,6 @@
 
 use alloy_consensus::transaction::Recovered;
 use alloy_primitives::Bytes;
-use mega_evm2::factory::BlockServices;
 use mega_evm2_diff::replay::{self, Evm2Db, blockdb};
 use op_evm2::OpTxEnvelope;
 use std::{
@@ -28,8 +27,8 @@ fn run(
     let mut refused = 0;
     // The session runs the pre-block sequence as it starts, so the timing starts before it.
     let start = Instant::now();
-    let mut executor =
-        factory.start_block(&input, database, BlockServices::default()).expect("pre-block changes");
+    let services = replay::services(&block.header);
+    let mut executor = factory.start_block(&input, database, services).expect("pre-block changes");
     for (tx, raw) in txs {
         match executor.execute_candidate(tx, raw) {
             Ok(outcome) => {
