@@ -153,14 +153,24 @@ impl SatinFactory {
         evm.ext_mut().cfg = services.environment;
         if let Some(inspector) = services.inspector {
             evm.set_boxed_inspector(inspector);
+            // The inspector observes the whole block, its pre-block calls included.
+            evm.set_inspect_system_calls(true);
         }
         let identity = BlockIdentity { number: h.number, parent_hash: h.parent_hash };
         let limits = simulation.and_then(|s| s.limits).unwrap_or(TxLimits::SATIN);
+        // A configuration that schedules Satin carries its bootstrap values (`SATIN-REG-009`), and
+        // the block's timestamp is a Satin one ([`Self::check_input`]).
+        let bootstrap =
+            self.config.registry_bootstrap().ok_or(BlockError::input(InputError::NotSatin {
+                timestamp: h.timestamp,
+                satin_time: None,
+            }))?;
         BlockSession::start(
             evm,
             identity,
             h.parent_beacon_block_root,
             activation,
+            bootstrap,
             limits,
             simulation.is_some(),
         )

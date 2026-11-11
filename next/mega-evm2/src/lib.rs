@@ -11,7 +11,8 @@
 //! - transaction handlers (body history, first frame, settlement, deposits, L1 fee): `tx.rs`;
 //! - EIP-7702 transactions: `eip7702.rs`; keyless deployment: `keyless.rs`;
 //! - per-transaction state of volatile-access control, hints and authorities: `satin_ext.rs`;
-//! - block execution (the block session): `block.rs`;
+//! - block execution (the block session; its pre-block sequence in `block/pre_block.rs`):
+//!   `block.rs`; the system contracts it deploys: `system_contracts.rs`;
 //! - the chain configuration (schedule, activation, bootstrap, the fixed protocol values):
 //!   `chain.rs`; the factory that makes every EVM and block session: `factory.rs`; typed errors:
 //!   `error.rs`.
@@ -32,6 +33,8 @@ pub mod regular_check;
 #[cfg(not(feature = "salt-test-hasher"))]
 pub mod salt_hash;
 pub mod satin_ext;
+mod system_code;
+pub mod system_contracts;
 pub mod tx;
 
 pub use crate::ledger::*;

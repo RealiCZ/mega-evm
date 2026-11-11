@@ -24,6 +24,10 @@ use op_evm2::{OpTxEnvelope, TxDeposit};
 
 const SENDER: Address = Address::with_last_byte(0x50);
 const TARGET: Address = Address::with_last_byte(0xa0);
+/// The EIP-7997 factory's runtime code, which the block in which Satin activates requires.
+const CREATE2_FACTORY_CODE: &[u8] = &alloy_primitives::hex!(
+    "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3"
+);
 
 fn bootstrap() -> BootstrapInput {
     BootstrapInput {
@@ -45,8 +49,14 @@ fn factory(chain_id: u64, genesis: u64, satin: u64, extra: &[(Fork, u64)]) -> Sa
     SatinFactory::new(ChainConfig::new(input).expect("a valid configuration"))
 }
 
+/// A funded sender, a target that stops, and the EIP-7997 factory.
 fn db() -> InMemoryDB {
     let mut db = InMemoryDB::default();
+    db.insert_account_info(
+        &mega_evm2::system_contracts::CREATE2_FACTORY,
+        AccountInfo::default()
+            .with_code(Bytecode::new_legacy(Bytes::from_static(CREATE2_FACTORY_CODE))),
+    );
     db.insert_account_info(
         &SENDER,
         AccountInfo::default().with_balance(U256::from(10).pow(U256::from(18))),
@@ -176,7 +186,9 @@ fn chain_config_block_zero_skips_the_eip_calls() {
     assert!(block.activation().block_zero());
     assert!(!block.activation().satin_activates() && !block.activation().deposits_only());
     let states = block.pre_block_states();
-    assert_eq!(states.len(), 2, "the registry's and the L1 block info's read-only states");
+    // The five deployments, the due-change read, the registry's deployment, the L1 block info
+    // read and the resolution.
+    assert_eq!(states.len(), 9, "every step but the EIP calls");
     for state in states {
         assert!(state.account_changes_for(&HISTORY_STORAGE).is_none());
         assert!(state.account_changes_for(&BEACON_ROOTS).is_none());
