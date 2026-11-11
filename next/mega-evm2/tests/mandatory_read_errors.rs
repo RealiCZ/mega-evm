@@ -173,7 +173,7 @@ fn try_satin_evm(
     let backend = RegistryBackend::new(fail);
     let switch = backend.armed.clone();
     switch.set(armed);
-    (common::factory().evm(block_env(), Db::new(backend)), switch)
+    (common::factory().evm(block_env(), Db::new(backend), common::minimum_salt(B256::ZERO)), switch)
 }
 
 /// Block 1 over a backend that fails the reads `fail` names: from the start when `armed`,

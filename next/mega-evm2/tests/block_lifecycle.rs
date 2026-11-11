@@ -92,7 +92,7 @@ fn start(
     input: &BlockInput,
     db: InMemoryDB,
 ) -> Result<BlockSession<'static>, BlockError> {
-    factory.start_block(input, Db::new(db), BlockServices::default())
+    factory.start_block(input, Db::new(db), common::services(input.header.parent_hash))
 }
 
 /// A world with a funded sender and nothing else.
@@ -274,7 +274,7 @@ fn assert_read_is_internal(
         let mut backend = Watched::new(db.clone(), watch);
         backend.fail = Some((fail, fatal));
         let error = factory
-            .start_block(input, Db::new(backend), BlockServices::default())
+            .start_block(input, Db::new(backend), common::services(input.header.parent_hash))
             .err()
             .unwrap_or_else(|| panic!("{watch} {fail:?}: the block starts"));
         assert_eq!(error.phase(), phase, "{error:?}");
@@ -528,7 +528,7 @@ fn lifecycle_resolution_refuses_an_absent_or_foreign_registry() {
         genesis_chain().start_simulated_block(
             &block_input(),
             Db::new(db),
-            BlockServices::default(),
+            common::services(B256::ZERO),
             &simulation,
         )
     };
@@ -550,7 +550,7 @@ fn lifecycle_resolution_refuses_an_absent_or_foreign_registry() {
     };
     for db in [world(), with_registry(world(), registry_v1())] {
         let block = genesis_chain()
-            .start_simulated_block(&block_input(), Db::new(db), BlockServices::default(), &both)
+            .start_simulated_block(&block_input(), Db::new(db), common::services(B256::ZERO), &both)
             .expect("the reference's rules invalidate nothing here");
         assert_eq!(block.system_address(), None);
         assert_eq!(block.evm().ext().system_address, None);
@@ -904,7 +904,7 @@ fn lifecycle_pre_block_calls_run_on_thirty_million_regular_gas_and_a_sixteen_slo
     let calls = Rc::new(RefCell::new(Vec::new()));
     let services = BlockServices {
         inspector: Some(Box::new(Calls(calls.clone()))),
-        ..BlockServices::default()
+        ..common::services(B256::ZERO)
     };
     let input = common::block_input(NUMBER, 100, 1_000_000, Some(B256::repeat_byte(0x11)));
     let block =
