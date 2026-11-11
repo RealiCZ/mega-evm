@@ -354,8 +354,10 @@ pub fn run_system_call(
     data: Bytes,
     inspected: bool,
 ) -> Value {
-    db.borrow_mut().begin_run();
     let mut evm = new_evm(h, chain_id, Evm2Db { db: db.clone(), code_cache: code_cache.clone() });
+    // The call's reads are its own: the EVM's resolution of the live system address, made when it
+    // was made, classifies no transaction here.
+    db.borrow_mut().begin_run();
     if inspected {
         evm.set_inspector(Frames::default());
     }

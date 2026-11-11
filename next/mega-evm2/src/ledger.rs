@@ -34,7 +34,8 @@ pub const PRE_FORK_CREATE_COST: u64 = 32_000;
 pub const MIN_BUCKET_SIZE: u64 = 256;
 /// Limit kinds by pool index: data size, KV updates, state growth.
 pub const KIND: [u8; 3] = [0, 1, 3];
-/// `SequencerRegistry` and its `_currentSystemAddress` slot, read by every transaction.
+/// The Oracle, and the `SequencerRegistry` with its `_currentSystemAddress` slot, which a block,
+/// or a single transaction's EVM, reads once to resolve its live system address.
 pub const ORACLE: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01]);
 pub const SEQUENCER_REGISTRY: Address =
@@ -156,6 +157,11 @@ pub struct Settlement {
 #[derive(Clone, Debug, Default)]
 pub struct Lite {
     pub cfg: Cfg,
+    /// The live system address every transaction is classified against, resolved once and kept
+    /// across transactions (`SATIN-REG-002`): by a block's pre-block sequence, after its other
+    /// steps; by the factory for a single transaction's EVM, off the state it runs on. `None`: no
+    /// address is the system address. No transaction reads the registry for its classification.
+    pub system_address: Option<Address>,
     /// The limits every transaction runs under: Satin's ([`TxLimits::SATIN`]), which the block
     /// executor installs. A tool or a test that runs under other values sets them here; what it
     /// computes is then a counterfactual, not the chain's result.
@@ -272,6 +278,12 @@ pub enum ReferenceRule {
     /// Only a system call asks the oracle service nothing: a deposit's and a Mega System
     /// Transaction's Oracle reads ask it.
     OracleAsksDepositsAndMsts,
+    /// The pre-block sequence deploys no system contract: neither the five flat contracts nor the
+    /// SequencerRegistry are installed, replaced or migrated, whatever their addresses hold.
+    NoPreBlockDeployment,
+    /// Every transaction reads the registry's account and slot 0 as it is classified, both warm
+    /// for the rest of the transaction, and is classified against what it read.
+    RegistryReadPerTransaction,
 }
 
 /// Withheld gas a code deposit drew (its state spill, its history), which an admission refusal

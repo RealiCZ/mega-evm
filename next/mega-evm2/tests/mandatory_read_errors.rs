@@ -1,6 +1,7 @@
-//! Every transaction reads the live system address out of the `SequencerRegistry` before anything
-//! else, and a block reads it to decide whether a transaction is a Mega System Transaction and
-//! whether a role change is due; a block reads the L1 block info before its transactions, and a
+//! A transaction outside a block session reads the live system address out of the
+//! `SequencerRegistry` before anything else; a block reads the registry once, before its
+//! transactions, to decide whether a role change is due and which address its transactions are
+//! classified against; a block reads the L1 block info before its transactions, and a
 //! transaction other than a deposit reads the L1Block account before it is priced. A read the
 //! database cannot serve fails the transaction (or the block) with the database's error, whatever
 //! the envelope; it is never taken for an absent account.
@@ -152,13 +153,28 @@ impl Database for RegistryBackend {
 }
 
 fn satin_evm(fail: Fail) -> Evm<'static, MegaTypes> {
-    let block = BlockEnv::<MegaTypes> {
+    try_satin_evm(fail, true).0.expect("the EVM is made")
+}
+
+fn block_env() -> BlockEnv<MegaTypes> {
+    BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000),
         ..BlockEnv::<MegaTypes>::default()
-    };
-    common::evm(block, Db::new(RegistryBackend::new(fail)))
+    }
+}
+
+/// A single transaction's EVM over a backend that fails the reads `fail` names: from the start
+/// when `armed`, otherwise once the returned switch is set.
+fn try_satin_evm(
+    fail: Fail,
+    armed: bool,
+) -> (Result<Evm<'static, MegaTypes>, BlockError>, Rc<Cell<bool>>) {
+    let backend = RegistryBackend::new(fail);
+    let switch = backend.armed.clone();
+    switch.set(armed);
+    (common::factory().evm(block_env(), Db::new(backend)), switch)
 }
 
 /// Block 1 over a backend that fails the reads `fail` names: from the start when `armed`,
@@ -277,14 +293,6 @@ fn assert_unavailable(name: &str, error: &HandlerError) {
 /// A failed read of the live system address a transaction is classified against: the database's
 /// own error, carried so that no path takes it for a refusal and the block routes it as an internal
 /// error (`SATIN-REG-007`).
-fn assert_registry_unavailable(name: &str, error: &HandlerError) {
-    let failed = mega_evm2::error::system_address_read_failure(error)
-        .unwrap_or_else(|| panic!("{name}: not the classification read: {error:?}"));
-    assert!(failed.0.downcast_ref::<Unavailable>().is_some(), "{name}: {failed:?}");
-    let db = mega_evm2::error::database_error(error).expect("the database error");
-    assert!(db.downcast_ref::<Unavailable>().is_some() && db.is_fatal(), "{name}");
-}
-
 /// The control: with the registry readable, every envelope executes.
 #[test]
 fn test_every_envelope_executes_when_the_registry_is_readable() {
@@ -297,46 +305,59 @@ fn test_every_envelope_executes_when_the_registry_is_readable() {
     }
 }
 
+/// A single transaction's EVM resolves the live system address once, when it is made, by a direct
+/// read of the registry's account and slot 0 (`SATIN-REG-002`): a read the database cannot serve
+/// there is an internal error, never an absent registry.
 #[test]
-fn test_unreadable_registry_slot_fails_every_envelope() {
-    for (name, tx) in every_envelope() {
-        let mut evm = satin_evm(Fail::Storage);
-        let error = evm.transact(&tx).err().unwrap_or_else(|| panic!("{name}: executed"));
-        assert_registry_unavailable(name, &error);
+fn test_unreadable_registry_fails_the_evm_when_it_is_made() {
+    for (fail, slot) in [(Fail::Account, None), (Fail::Storage, Some(U256::ZERO))] {
+        let Err(error) = try_satin_evm(fail, true).0 else {
+            panic!("{fail:?}: an unreadable registry is no answer");
+        };
+        assert_eq!(error.phase(), Phase::SystemAddressResolution, "{fail:?}");
+        assert_eq!(error.disposition(), Disposition::Internal, "{fail:?}");
+        assert_eq!(error.context().address, Some(SEQUENCER_REGISTRY), "{fail:?}");
+        assert_eq!(error.context().slot, slot, "{fail:?}");
+        assert_unavailable_block("registry", &error);
     }
 }
 
+/// Once made, the EVM classifies every envelope against the address it resolved: an unreadable
+/// registry then fails none, since none reads it for its classification.
 #[test]
-fn test_unreadable_registry_account_fails_every_envelope() {
-    for (name, tx) in every_envelope() {
-        let mut evm = satin_evm(Fail::Account);
-        let error = evm.transact(&tx).err().unwrap_or_else(|| panic!("{name}: executed"));
-        assert_registry_unavailable(name, &error);
+fn test_a_made_evm_classifies_every_envelope_without_reading_the_registry() {
+    for fail in [Fail::Account, Fail::Storage] {
+        for (name, tx) in every_envelope() {
+            let (evm, armed) = try_satin_evm(fail, false);
+            let mut evm = evm.expect("the EVM is made");
+            assert_eq!(evm.ext().system_address, Some(SYSTEM));
+            armed.set(true);
+            let executed = evm.transact(&tx).unwrap_or_else(|e| panic!("{name} {fail:?}: {e:?}"));
+            assert!(executed.commit().status, "{name} {fail:?}");
+        }
     }
 }
 
-/// A block decides whether a transaction is a Mega System Transaction off the registry before it
-/// runs it: an unreadable registry fails the transaction, its envelope whatever it is. The
-/// pre-block due-change read has put the registry's account into the block's state, so the read
-/// that can still fail is its slot 0's, with no role change due (which would write it).
+/// A block classifies its transactions against the live system address its pre-block sequence
+/// resolved (`SATIN-REG-002`): once the session has started, an unreadable registry fails none of
+/// them, whatever its envelope, since none reads it for its classification.
 #[test]
-fn test_block_fails_a_transaction_on_an_unreadable_registry() {
-    let fail = Fail::Storage;
-    let (name, tx) = every_envelope().remove(0);
-    let mut backend = RegistryBackend::new(fail);
-    backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::ZERO);
-    backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::ZERO);
-    let (block, armed) = start_block_over(backend, false);
-    let mut block = block.expect("the block starts");
-    armed.set(true);
-    let error = block.execute_candidate(&tx, &[]).err();
-    let error = error.unwrap_or_else(|| panic!("{name} {fail:?}: executed"));
-    let CandidateError::Block(fault) = &error else { panic!("{fail:?}: {error:?}") };
-    assert_eq!(fault.phase(), Phase::SystemAddressResolution, "{fail:?}");
-    assert_eq!(fault.disposition(), Disposition::Internal, "{fail:?}");
-    assert_eq!(fault.context().address, Some(SEQUENCER_REGISTRY), "{fail:?}");
-    assert_unavailable_block(name, fault);
-    assert_eq!(block.fault(), Some(fault), "the session keeps the failure");
+fn test_block_classifies_every_envelope_without_reading_the_registry() {
+    for fail in [Fail::Account, Fail::Storage] {
+        for (name, tx) in every_envelope() {
+            let mut backend = RegistryBackend::new(fail);
+            backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::ZERO);
+            backend.inner.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(8), &U256::ZERO);
+            let (block, armed) = start_block_over(backend, false);
+            let mut block = block.expect("the block starts");
+            assert_eq!(block.system_address(), Some(SYSTEM));
+            armed.set(true);
+            let out = block.execute_candidate(&tx, &[]);
+            let out = out.unwrap_or_else(|e| panic!("{name} {fail:?}: {e:?}"));
+            assert!(out.result().status, "{name} {fail:?}: {:?}", out.result());
+            block.commit_candidate(out).unwrap_or_else(|e| panic!("{name} {fail:?}: {e:?}"));
+        }
+    }
 }
 
 /// The pre-block step reads the registry's pending role changes: an unreadable registry fails the
@@ -350,10 +371,11 @@ fn test_pre_block_step_fails_on_an_unreadable_registry() {
         assert_eq!(error.context().address, Some(SEQUENCER_REGISTRY), "{fail:?}");
         assert_unavailable_block("registry", &error);
     }
-    // The control: a change is due, so the sequence calls `applyPendingChanges()` between the
-    // registry's read-only state and the L1 block info's.
+    // The control: a change is due, so the sequence calls `applyPendingChanges()` after the
+    // registry's read-only state: the two EIP calls, five deployments, the read, the call, the
+    // registry's deployment, the L1 block info read and the resolution.
     let block = start_block(Fail::Nothing, true).0.expect("the block starts");
-    assert_eq!(block.pre_block_states().len(), 5, "the control: a change is due");
+    assert_eq!(block.pre_block_states().len(), 12, "the control: a change is due");
 }
 
 /// A transaction other than a deposit reads the L1Block account, then its slots, before it is

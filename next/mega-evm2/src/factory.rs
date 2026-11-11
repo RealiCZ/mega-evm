@@ -16,10 +16,11 @@
 //! consensus entry points take no switch.
 
 use crate::{
-    Cfg, MegaSpec, MegaTypes, TxLimits,
+    Cfg, MegaSpec, MegaTypes, SEQUENCER_REGISTRY, TxLimits,
     block::BlockSession,
     chain::{Activation, ChainConfig, Engine, Fork, ProtocolParams},
-    error::{BlockError, BlockIdentity, InputError},
+    error::{BlockError, BlockIdentity, ErrorContext, InputError, Phase},
+    system_contracts::RegistryRead,
 };
 use alloy_primitives::{Address, B256, U256};
 use evm2::{Evm, ExecutionConfig, Inspector, env::BlockEnv, evm::DynDatabase};
@@ -153,14 +154,24 @@ impl SatinFactory {
         evm.ext_mut().cfg = services.environment;
         if let Some(inspector) = services.inspector {
             evm.set_boxed_inspector(inspector);
+            // The inspector observes the whole block, its pre-block calls included.
+            evm.set_inspect_system_calls(true);
         }
         let identity = BlockIdentity { number: h.number, parent_hash: h.parent_hash };
         let limits = simulation.and_then(|s| s.limits).unwrap_or(TxLimits::SATIN);
+        // A configuration that schedules Satin carries its bootstrap values (`SATIN-REG-009`), and
+        // the block's timestamp is a Satin one ([`Self::check_input`]).
+        let bootstrap =
+            self.config.registry_bootstrap().ok_or(BlockError::input(InputError::NotSatin {
+                timestamp: h.timestamp,
+                satin_time: None,
+            }))?;
         BlockSession::start(
             evm,
             identity,
             h.parent_beacon_block_root,
             activation,
+            bootstrap,
             limits,
             simulation.is_some(),
         )
@@ -168,7 +179,10 @@ impl SatinFactory {
 
     /// A single transaction's EVM in the block environment `block`, under Satin's rules: for a
     /// transaction executed outside a block session (a call, an estimate). Its environment
-    /// (`Lite::cfg`) starts empty.
+    /// (`Lite::cfg`) starts empty. Its live system address is resolved once, now, off the state it
+    /// runs on, as a block resolves its own ([`Self::resolve_system_address`]), so a transaction
+    /// is priced as in a block: none reads the registry for its classification. A caller that
+    /// knows the block's resolved address may set `Lite::system_address` instead.
     pub fn evm<'a>(
         &self,
         block: BlockEnv<MegaTypes>,
@@ -177,7 +191,9 @@ impl SatinFactory {
         let timestamp = u64::try_from(block.timestamp)
             .map_err(|_| BlockError::input(InputError::TimestampTooLarge))?;
         self.check_timestamp(timestamp)?;
-        Ok(self.build(block, database, None))
+        let mut evm = self.build(block, database, None);
+        Self::resolve_system_address(&mut evm)?;
+        Ok(evm)
     }
 
     /// [`Self::evm`] under a simulation's switches.
@@ -190,7 +206,26 @@ impl SatinFactory {
         let timestamp = u64::try_from(block.timestamp)
             .map_err(|_| BlockError::input(InputError::TimestampTooLarge))?;
         self.check_timestamp(timestamp)?;
-        Ok(self.build(block, database, Some(simulation)))
+        let mut evm = self.build(block, database, Some(simulation));
+        Self::resolve_system_address(&mut evm)?;
+        Ok(evm)
+    }
+
+    /// A single transaction's EVM's live system address (`SATIN-REG-002`): the registry's account
+    /// and slot 0 read directly off the state, neither loaded into a transaction, warmed nor
+    /// charged. Outside a block nothing is invalidated: a registry that is absent, holds other code
+    /// or names no address leaves no address the system address. A read the database cannot serve
+    /// is an internal error.
+    fn resolve_system_address(evm: &mut Evm<'_, MegaTypes>) -> Result<(), BlockError> {
+        if crate::off("registry_read") {
+            return Ok(());
+        }
+        let read = RegistryRead::read(evm).map_err(|(slot, e)| {
+            let context = ErrorContext { slot, ..ErrorContext::account(SEQUENCER_REGISTRY) };
+            BlockError::read(Phase::SystemAddressResolution, e, context)
+        })?;
+        evm.ext_mut().system_address = read.resolve().ok();
+        Ok(())
     }
 
     /// A Satin timestamp, at which no fork the engine has no rules for is active.

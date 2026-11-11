@@ -553,6 +553,12 @@ FAULTS = [
     # take it), and nothing else of the block
     ("block-deposit-history-other-field", "block", cmp("tx_size"), block_row("tx", "tx_size", lambda r: r.get("type") in (126, "0x7e"))),
     ("block-deposit-history-not-enabled", "block", cmp("gas_used"), known_toml(lambda t: drop_class(t, "deposit_history"))),
+    # block: the pre-block sequence's deployments and the once-per-block resolution of the live
+    # system address, each by the whole-block rerun, only while the file enables it: without the
+    # first, a block of an earlier spec leaves the contracts it installs in its post-state; without
+    # the second, a Mega System Transaction pays the registry's cold access
+    ("block-deployment-not-enabled", "block", cmp("accounts"), known_toml(lambda t: drop_class(t, "system_contract_deployment"))),
+    ("block-resolution-not-enabled", "block", cmp("receipt_gas"), known_toml(lambda t: drop_class(t, "once_per_block_resolution"))),
     # block: the Satin-rule run's own figures, held to the pinned ones
     ("block-satin-pinned", "block", r"^BLOCK-SATIN DIFFER ", pinned_satin_figures(one_more_included)),
     ("block-satin-digest", "block", r"^BLOCK-SATIN DIGEST ", pinned_satin_figures(other_digest)),

@@ -1,24 +1,37 @@
-//! Each pre-block step returns its own whole state, including read-only witness entries.
+//! Each pre-block step returns its own whole state, including read-only witness entries, in the
+//! order of the sequence (`SATIN-PBLK-003`): the EIP-2935 and EIP-4788 calls, the five flat
+//! system contracts' deployments, the registry's due-change read and its `applyPendingChanges()`
+//! call when due, the registry's deployment, the L1 block info read and the resolution of the live
+//! system address, last.
 
 mod common;
 
-use alloy_primitives::{B256, Bytes, U256, hex};
+use alloy_primitives::{Address, B256, U256};
 use evm2::{
     bytecode::Bytecode,
     evm::{AccountInfo, Db, InMemoryDB},
 };
-use mega_evm2::{SEQUENCER_REGISTRY, block::BlockSession};
+use mega_evm2::{
+    SEQUENCER_REGISTRY,
+    block::BlockSession,
+    system_contracts::{FLAT_SYSTEM_CONTRACTS, SEQUENCER_REGISTRY_CODE, address_word},
+};
 use op_evm2::constants::L1_BLOCK_CONTRACT;
+
+/// The registry's live system address in the fixture, and the pending one a due change installs.
+const LIVE: Address = Address::with_last_byte(0x5a);
+const PENDING: Address = Address::with_last_byte(0x77);
 
 fn block(present: bool, due: bool) -> BlockSession<'static> {
     let mut db = InMemoryDB::default();
     if present {
-        // applyPendingChanges clears slot 7; the preceding read-only state must still hold 77.
+        // A pending system-address change whose activation block is the block (due) or the next.
         db.insert_account_info(
             &SEQUENCER_REGISTRY,
-            AccountInfo::default().with_code(Bytecode::new_legacy(Bytes::from(hex!("5f60075500")))),
+            AccountInfo::default().with_code(Bytecode::new_legacy(SEQUENCER_REGISTRY_CODE)),
         );
-        db.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &U256::from(77));
+        db.insert_account_storage(&SEQUENCER_REGISTRY, &U256::ZERO, &address_word(LIVE));
+        db.insert_account_storage(&SEQUENCER_REGISTRY, &U256::from(7), &address_word(PENDING));
         db.insert_account_storage(
             &SEQUENCER_REGISTRY,
             &U256::from(8),
@@ -43,20 +56,32 @@ fn test_read_only_pre_block_states_are_committed_in_order() {
         // The session runs the pre-block sequence before it is returned.
         let mut block = block(true, due);
         let states = block.pre_block_states().to_vec();
-        assert_eq!(states.len(), if due { 5 } else { 4 }, "due={due}");
+        assert_eq!(states.len(), if due { 12 } else { 11 }, "due={due}");
         assert!(states[0].account_changes_for(&mega_evm2::block::HISTORY_STORAGE).is_some());
         assert!(states[1].account_changes_for(&mega_evm2::block::BEACON_ROOTS).is_some());
-        let registry = states[2].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
+        for (state, contract) in states[2..7].iter().zip(&FLAT_SYSTEM_CONTRACTS) {
+            let deployed = state.account_changes_for(&contract.address).expect(contract.name);
+            assert_eq!(state.account_changes().count(), 1, "{}: its own state", contract.name);
+            assert_eq!(deployed.current.map(|i| i.code_hash), Some(contract.code_hash));
+        }
+        let registry = states[7].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
         assert!(!registry.is_changed());
         let mut keys = registry.storage.slots.keys().copied().collect::<Vec<_>>();
         keys.sort();
         assert_eq!(keys, [7, 8, 9].map(U256::from));
-        assert_eq!(registry.storage.slots[&U256::from(7)].value.current, U256::from(77));
-        if due {
-            let applied = states[3].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
+        assert_eq!(registry.storage.slots[&U256::from(7)].value.current, address_word(PENDING));
+        let next = if due {
+            let applied = states[8].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
             assert_eq!(applied.storage.slots[&U256::from(7)].value.current, U256::ZERO);
-        }
-        let l1 = states.last().unwrap().account_changes_for(&L1_BLOCK_CONTRACT).unwrap();
+            assert_eq!(applied.storage.slots[&U256::ZERO].value.current, address_word(PENDING));
+            9
+        } else {
+            8
+        };
+        // Version 2.0.0: the deployment leaves it as it is, a read-only entry of its own.
+        let deployed = states[next].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
+        assert!(!deployed.is_changed() && deployed.storage.slots.is_empty());
+        let l1 = states[next + 1].account_changes_for(&L1_BLOCK_CONTRACT).unwrap();
         assert!(!l1.is_changed());
         assert_eq!(l1.storage.slots.len(), 5);
         for slot in [1, 3, 5, 7, 8] {
@@ -64,6 +89,12 @@ fn test_read_only_pre_block_states_are_committed_in_order() {
             assert_eq!(value.current, U256::from(slot * 10));
             assert_eq!(value.original, value.current);
         }
+        // The resolution, last: the account and slot 0 as the steps before left them.
+        let resolved = states.last().unwrap().account_changes_for(&SEQUENCER_REGISTRY).unwrap();
+        assert!(!resolved.is_changed());
+        let live = if due { PENDING } else { LIVE };
+        assert_eq!(resolved.storage.slots[&U256::ZERO].value.current, address_word(live));
+        assert_eq!(block.system_address(), Some(live));
         assert_eq!(block.limiter().block_gas_used, 0);
         assert_eq!(block.limiter().usage, [0; 3]);
         // A due change was applied: none is due any more.
@@ -74,8 +105,8 @@ fn test_read_only_pre_block_states_are_committed_in_order() {
 #[test]
 fn test_absent_pre_block_accounts_are_recorded_without_slots() {
     let block = block(false, false);
-    assert_eq!(block.pre_block_states().len(), 4);
-    for (index, address) in [(2, SEQUENCER_REGISTRY), (3, L1_BLOCK_CONTRACT)] {
+    assert_eq!(block.pre_block_states().len(), 11);
+    for (index, address) in [(7, SEQUENCER_REGISTRY), (9, L1_BLOCK_CONTRACT)] {
         let read = block.pre_block_states()[index]
             .account_changes_for(&address)
             .expect("absent account recorded");

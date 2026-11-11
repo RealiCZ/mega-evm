@@ -12,7 +12,8 @@
 //! | the block's input contradicting its parent or the schedule; a fork the engine has no rules for | [`Disposition::Internal`] |
 //! | a pre-block call: a database error declared fatal | [`Disposition::Internal`] |
 //! | a pre-block call: any other database error, another execution error, a result that is not a success; a missing parent beacon block root | [`Disposition::InvalidBlock`] |
-//! | a read of the due-change predicate, of the L1 block info before the transactions, of the live system address | [`Disposition::Internal`], whatever the database declares |
+//! | the EIP-7997 factory absent, without code or with other code in the block in which Satin activates; a SequencerRegistry with code the deployment cannot migrate; a registry the resolution finds absent, with other code or naming no system address | [`Disposition::InvalidBlock`] |
+//! | a read of the factory check, of a system contract's deployment, of the due-change predicate, of the L1 block info before the transactions, of the live system address | [`Disposition::Internal`], whatever the database declares |
 //! | a transaction's validation or execution: a database error declared fatal, a bucket capacity read that fails or is below the minimum, another fatal error | [`Disposition::Internal`] |
 //! | a transaction's validation or execution: a database error not declared fatal | [`Disposition::InvalidBlock`] |
 //! | the block's bookkeeping outside a transaction's execution: the sender's account, the L1 footprint scalar | [`Disposition::Internal`] |
@@ -53,6 +54,10 @@ pub enum Phase {
     BlockInput,
     /// A pre-block EVM call: EIP-2935, EIP-4788, the registry's `applyPendingChanges()`.
     PreBlockCall,
+    /// The check of the EIP-7997 factory in the block in which Satin activates.
+    FactoryCheck,
+    /// A system contract's deployment of the pre-block sequence, the SequencerRegistry's included.
+    Deployment,
     /// The registry's due-change read of the pre-block sequence.
     DueChangeRead,
     /// The pre-block read of the L1 block info.
@@ -236,9 +241,29 @@ pub enum BlockErrorKind {
     MissingParentBeaconRoot,
     /// Block zero's parent beacon block root is not zero (`SATIN-ACT-012`).
     GenesisParentBeaconRoot(B256),
+    /// In the block in which Satin activates, the EIP-7997 factory's address holds no account
+    /// (`None`) or an account whose code hash is not the factory's (`SATIN-ACT-005`).
+    Create2Factory { code_hash: Option<B256> },
+    /// The SequencerRegistry's address holds code the deployment cannot migrate
+    /// (`SATIN-REG-008`).
+    UnmigratableRegistry { code_hash: B256 },
+    /// The live system address cannot be resolved after the other pre-block steps
+    /// (`SATIN-REG-004`).
+    SystemAddress(SystemAddressFault),
     /// A transaction's execution failed for a reason that is not the transaction's: a database
     /// error, a bucket capacity, another fatal error.
     Execution(HandlerError),
+}
+
+/// Why the block's live system address cannot be resolved (`SATIN-REG-004`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemAddressFault {
+    /// No account at the registry's address.
+    RegistryAbsent,
+    /// The registry's account holds other code than version 2.0.0.
+    RegistryCode(B256),
+    /// The registry's slot 0 (`_currentSystemAddress`) is zero.
+    ZeroSystemAddress,
 }
 
 /// A failure of a block's execution, with its phase, context and disposition (boxed: an error is
@@ -319,6 +344,39 @@ impl BlockError {
         }))
     }
 
+    /// The EIP-7997 factory the block in which Satin activates requires is not at its address
+    /// (`SATIN-ACT-005`): an invalid block.
+    pub(crate) fn create2_factory(address: Address, code_hash: Option<B256>) -> Self {
+        Self(Box::new(Failure {
+            kind: BlockErrorKind::Create2Factory { code_hash },
+            phase: Phase::FactoryCheck,
+            disposition: Disposition::InvalidBlock,
+            context: ErrorContext::account(address),
+        }))
+    }
+
+    /// The SequencerRegistry holds code its deployment cannot migrate (`SATIN-REG-008`): an
+    /// invalid block.
+    pub(crate) fn unmigratable_registry(address: Address, code_hash: B256) -> Self {
+        Self(Box::new(Failure {
+            kind: BlockErrorKind::UnmigratableRegistry { code_hash },
+            phase: Phase::Deployment,
+            disposition: Disposition::InvalidBlock,
+            context: ErrorContext::account(address),
+        }))
+    }
+
+    /// The live system address cannot be resolved (`SATIN-REG-004`): an invalid block.
+    pub(crate) fn system_address(address: Address, fault: SystemAddressFault) -> Self {
+        let slot = matches!(fault, SystemAddressFault::ZeroSystemAddress).then_some(U256::ZERO);
+        Self(Box::new(Failure {
+            kind: BlockErrorKind::SystemAddress(fault),
+            phase: Phase::SystemAddressResolution,
+            disposition: Disposition::InvalidBlock,
+            context: ErrorContext { slot, ..ErrorContext::account(address) },
+        }))
+    }
+
     /// A transaction's execution that failed for a reason that is not the transaction's
     /// ([`CandidateError::from_execution`] decides which those are): a database error by its
     /// fatality, everything else internal (`SATIN-VAL-010`, `SATIN-STATE-007`).
@@ -392,6 +450,8 @@ impl core::fmt::Display for BlockError {
                     write!(f, "registry read: {e:?}")
                 }
                 Phase::L1BlockInfoRead => write!(f, "L1 block info read: {e:?}"),
+                Phase::FactoryCheck => write!(f, "factory read: {e:?}"),
+                Phase::Deployment => write!(f, "system contract read: {e:?}"),
                 _ => write!(f, "{e:?}"),
             },
             BlockErrorKind::SystemCall { target, error } => {
@@ -405,6 +465,25 @@ impl core::fmt::Display for BlockError {
             }
             BlockErrorKind::GenesisParentBeaconRoot(root) => {
                 write!(f, "block zero's parent beacon block root {root} is not zero")
+            }
+            BlockErrorKind::Create2Factory { code_hash: None } => {
+                f.write_str("the EIP-7997 factory is absent in the block in which Satin activates")
+            }
+            BlockErrorKind::Create2Factory { code_hash: Some(h) } => write!(
+                f,
+                "the EIP-7997 factory's code hash is {h} in the block in which Satin activates"
+            ),
+            BlockErrorKind::UnmigratableRegistry { code_hash } => {
+                write!(f, "the SequencerRegistry holds code {code_hash} no deployment migrates")
+            }
+            BlockErrorKind::SystemAddress(SystemAddressFault::RegistryAbsent) => {
+                f.write_str("no live system address: the SequencerRegistry is absent")
+            }
+            BlockErrorKind::SystemAddress(SystemAddressFault::RegistryCode(h)) => {
+                write!(f, "no live system address: the SequencerRegistry holds code {h}")
+            }
+            BlockErrorKind::SystemAddress(SystemAddressFault::ZeroSystemAddress) => {
+                f.write_str("no live system address: the SequencerRegistry's slot 0 is zero")
             }
             BlockErrorKind::Execution(e) => write!(f, "EVM reported invalid transaction: {e:?}"),
         }

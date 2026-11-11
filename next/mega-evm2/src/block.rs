@@ -4,15 +4,16 @@
 //! derives the block's activation facts from the chain configuration; it holds its EVM privately,
 //! so nothing can change a protocol value under it.
 //!
-//! - **pre-block**, before the session is returned: the EIP-2935 and EIP-4788 system calls (block
-//!   zero makes neither, and its parent beacon block root must be zero), the `SequencerRegistry`'s
-//!   due-change read and its `applyPendingChanges()` call when due, each on evm2's
-//!   `Evm::system_call` as the protocol's own work, then the read of the L1 block info slots
-//!   (read-only, as Satin's `read_l1_block_info`). Each step is committed on its own;
+//! - **pre-block**, before the session is returned (`pre_block`): the EIP-2935 and EIP-4788 system
+//!   calls (block zero makes neither, and its parent beacon block root must be zero), the EIP-7997
+//!   factory's check in the block in which Satin activates, the five flat system contracts'
+//!   deployment, the `SequencerRegistry`'s due-change read and its `applyPendingChanges()` call
+//!   when due, the registry's deployment, the read of the L1 block info slots, and the resolution
+//!   of the block's live system address, each committed on its own in that order;
 //! - **per candidate, before it runs** ([`BlockSession::execute_candidate`]): the activation
-//!   block's deposit-only rule, the Mega System Transaction decision off the block's state
-//!   (`live_system_address` + the system shape), `BlockLimiter::pre_execution_check` (the block's
-//!   gas limit, the builder's size limits, the three packing budgets: data size, KV updates, state
+//!   block's deposit-only rule, the Mega System Transaction decision against the block's live
+//!   system address (+ the system shape), `BlockLimiter::pre_execution_check` (the block's gas
+//!   limit, the builder's size limits, the three packing budgets: data size, KV updates, state
 //!   growth; a deposit is held to the gas limit alone, a Mega System Transaction to all of them as
 //!   any other non-deposit transaction), the DA footprint against the block's gas limit, the
 //!   sender's account read; then `Evm::transact` and `ExecutedTx::detach` (nothing committed);
@@ -26,9 +27,11 @@
 //! refusal names its rule; a failure that decides the block (an internal error or an invalid
 //! block) is kept, and the session refuses every later candidate and cannot finish.
 
+mod pre_block;
+
 use crate::{
-    MegaTypes, SEQUENCER_REGISTRY, TxLimits,
-    chain::Activation,
+    MegaTypes, TxLimits,
+    chain::{Activation, RegistryBootstrap},
     error::{
         BlockError, BlockIdentity, Budget, CandidateError, ErrorContext, Phase, Refusal, TxContext,
     },
@@ -36,7 +39,7 @@ use crate::{
 };
 use alloy_consensus::{Transaction, transaction::Recovered};
 use alloy_eips::Typed2718;
-use alloy_primitives::{Address, B256, Bytes, Log, TxKind, U256, keccak256};
+use alloy_primitives::{Address, B256, Bytes, Log, TxKind, U256};
 use evm2::{
     Evm, TxResult,
     evm::{BlockStateAccumulator, PendingState, StateChangeSource, SystemTx, TxResultWithState},
@@ -48,11 +51,6 @@ use op_evm2::{
 /// Satin's `ProtocolLimits::for_spec(SATIN)` block budgets: data size, KV updates, state growth.
 pub const BLOCK_BUDGETS: [u64; 3] = [13_107_200, 500_000, 1_000];
 const COMPRESSED_SIZE_SCALE: u64 = 1_000_000;
-/// The L1 block slots the transactions can be priced against (Satin `L1_BLOCK_INFO_SLOTS`).
-const L1_BLOCK_INFO_SLOTS: [u64; 5] = [1, 3, 5, 7, 8];
-/// The registry's pending-change slots: (pending system address, its activation block) and
-/// (pending sequencer, its activation block).
-const REGISTRY_PENDING: [(u64, u64); 2] = [(7, 8), (9, 10)];
 pub const HISTORY_STORAGE: Address =
     alloy_primitives::address!("0x0000F90827F1C53a10cb7A02335B175320002935");
 pub const BEACON_ROOTS: Address =
@@ -218,8 +216,14 @@ pub struct BlockOutput {
     pub receipts: Vec<Receipt>,
     /// The block's change set, pre-block states included.
     pub changes: BlockStateAccumulator,
-    /// Whole pre-block states in commit order, including read-only accounts and slots.
+    /// Whole pre-block states in commit order, including read-only accounts and slots. The change
+    /// set is the block's state transition: a registry seeded over an account without code clears
+    /// that account's earlier storage there, which its pre-block state does not mark.
     pub pre_block_states: Vec<PendingState>,
+    /// The live system address the block's transactions were classified against: always resolved
+    /// under consensus rules (`None` only in a comparison run under the reference's
+    /// per-transaction classification, where the registry named none).
+    pub system_address: Option<Address>,
     pub limiter: BlockLimiter,
     /// Valid SALT lookups across every execution in the block, including discarded candidates.
     #[cfg(feature = "witness")]
@@ -241,6 +245,10 @@ pub struct BlockSession<'a> {
     identity: BlockIdentity,
     parent_beacon_block_root: Option<B256>,
     activation: Activation,
+    /// The configuration's registry bootstrap values, which a new registry is seeded with.
+    bootstrap: RegistryBootstrap,
+    /// The live system address, resolved by the pre-block sequence.
+    system_address: Option<Address>,
     /// The limits every candidate runs under: Satin's, or a simulation's.
     limits: TxLimits,
     simulation: bool,
@@ -255,6 +263,7 @@ impl<'a> BlockSession<'a> {
         identity: BlockIdentity,
         parent_beacon_block_root: Option<B256>,
         activation: Activation,
+        bootstrap: RegistryBootstrap,
         limits: TxLimits,
         simulation: bool,
     ) -> Result<Self, BlockError> {
@@ -270,11 +279,13 @@ impl<'a> BlockSession<'a> {
             identity,
             parent_beacon_block_root,
             activation,
+            bootstrap,
+            system_address: None,
             limits,
             simulation,
             fault: None,
         };
-        session.apply_pre_execution_changes()?;
+        session.run_pre_block_sequence()?;
         Ok(session)
     }
 
@@ -306,6 +317,14 @@ impl<'a> BlockSession<'a> {
         &self.bucket_reads
     }
 
+    /// The live system address the pre-block sequence resolved, which every transaction of the
+    /// block is classified against (`SATIN-REG-002`): always resolved under consensus rules, the
+    /// block invalid otherwise (`None` only in a comparison run under the reference's
+    /// per-transaction classification, where the registry named none).
+    pub const fn system_address(&self) -> Option<Address> {
+        self.system_address
+    }
+
     /// What the schedule decided for the block.
     pub const fn activation(&self) -> &Activation {
         &self.activation
@@ -334,6 +353,7 @@ impl<'a> BlockSession<'a> {
             receipts: self.receipts,
             changes: self.changes,
             pre_block_states: self.pre_block_states,
+            system_address: self.system_address,
             limiter: self.limiter,
             #[cfg(feature = "witness")]
             bucket_reads: self.bucket_reads,
@@ -359,10 +379,9 @@ impl<'a> BlockSession<'a> {
         self.pre_block_states.push(state);
     }
 
-    /// Whether the registry has a role change due in this block (Satin
-    /// `is_apply_pending_changes_due`), read off the block's state: each role's pending value, and
-    /// its activation block when one is pending. A read the database cannot serve is an internal
-    /// error.
+    /// Whether the registry has a role change due in this block (`SATIN-PBLK-004`), read off the
+    /// block's state as it stands: each role's pending value, and its activation block when one is
+    /// pending. A read the database cannot serve is an internal error.
     pub fn registry_due(&mut self) -> Result<bool, BlockError> {
         match self.read_registry_due() {
             Ok((due, _)) => Ok(due),
@@ -372,97 +391,6 @@ impl<'a> BlockSession<'a> {
                 Err(e)
             }
         }
-    }
-
-    fn read_registry_due(&mut self) -> Result<(bool, PendingState), BlockError> {
-        let number = self.evm.block().number;
-        let state = self.evm.state_mut();
-        let failed = |slot: Option<U256>| {
-            move |e: evm2::DatabaseError| {
-                let context = ErrorContext { slot, ..ErrorContext::account(SEQUENCER_REGISTRY) };
-                BlockError::read(Phase::DueChangeRead, e, context)
-            }
-        };
-        let info = state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(failed(None))?;
-        let mut reads = PendingState::default();
-        reads.insert_account(SEQUENCER_REGISTRY, info.clone(), info.clone());
-        let mut due = false;
-        if info.is_some() {
-            for (p, a) in REGISTRY_PENDING {
-                let key = U256::from(p);
-                let pending = state
-                    .storage_slot_untracked(&SEQUENCER_REGISTRY, &key)
-                    .map_err(failed(Some(key)))?;
-                reads.insert_storage(SEQUENCER_REGISTRY, key, pending, pending);
-                if pending.is_zero() {
-                    continue;
-                }
-                let key = U256::from(a);
-                let activation = state
-                    .storage_slot_untracked(&SEQUENCER_REGISTRY, &key)
-                    .map_err(failed(Some(key)))?;
-                reads.insert_storage(SEQUENCER_REGISTRY, key, activation, activation);
-                due |= number >= activation;
-            }
-        }
-        Ok((due, reads))
-    }
-
-    /// Satin `apply_pre_execution_changes` (the activation block's factory check and the system
-    /// contracts' deployment are not made). A block without a parent beacon block root is invalid
-    /// at the EIP-4788 step; block zero makes neither EIP call (`SATIN-ACT-012`).
-    fn apply_pre_execution_changes(&mut self) -> Result<(), BlockError> {
-        if self.activation.block_zero() {
-            // Block zero has no parent: no EIP-2935 or EIP-4788 call, and its parent beacon block
-            // root must be zero.
-            match self.parent_beacon_block_root {
-                Some(root) if root.is_zero() => {}
-                Some(root) => return Err(BlockError::genesis_parent_beacon_root(root)),
-                None => return Err(BlockError::missing_parent_beacon_root(BEACON_ROOTS)),
-            }
-        } else {
-            let parent = Bytes::from(self.identity.parent_hash.0.to_vec());
-            let state = self.system_call(HISTORY_STORAGE, parent)?;
-            self.commit_pre_block_state(state);
-            // A block without a parent beacon block root is invalid (EIP-4788).
-            let root = self
-                .parent_beacon_block_root
-                .ok_or_else(|| BlockError::missing_parent_beacon_root(BEACON_ROOTS))?;
-            let state = self.system_call(BEACON_ROOTS, Bytes::from(root.0.to_vec()))?;
-            self.commit_pre_block_state(state);
-        }
-        let (due, reads) = self.read_registry_due()?;
-        self.commit_pre_block_state(reads);
-        if due {
-            let state = self.system_call(
-                SEQUENCER_REGISTRY,
-                Bytes::from(keccak256("applyPendingChanges()")[..4].to_vec()),
-            )?;
-            self.commit_pre_block_state(state);
-        }
-        // Satin `read_l1_block_info`: the account, then its slots when it exists. A read the
-        // database cannot serve is an internal error.
-        let state = self.evm.state_mut();
-        let failed = |slot: Option<U256>| {
-            move |e: evm2::DatabaseError| {
-                let context = ErrorContext { slot, ..ErrorContext::account(L1_BLOCK_CONTRACT) };
-                BlockError::read(Phase::L1BlockInfoRead, e, context)
-            }
-        };
-        let info = state.account_info_untracked(&L1_BLOCK_CONTRACT).map_err(failed(None))?;
-        let mut reads = PendingState::default();
-        reads.insert_account(L1_BLOCK_CONTRACT, info.clone(), info.clone());
-        if info.is_some() {
-            for slot in L1_BLOCK_INFO_SLOTS {
-                let key = U256::from(slot);
-                let value = state
-                    .storage_slot_untracked(&L1_BLOCK_CONTRACT, &key)
-                    .map_err(failed(Some(key)))?;
-                reads.insert_storage(L1_BLOCK_CONTRACT, key, value, value);
-            }
-        }
-        self.commit_pre_block_state(reads);
-        Ok(())
     }
 
     /// Whether a transaction escapes the three packing budgets: a deposit does (`SATIN-BLK-006`); a
@@ -477,21 +405,12 @@ impl<'a> BlockSession<'a> {
                 )
     }
 
-    /// Whether `tx` is a Mega System Transaction: sent from the live system address, which every
-    /// transaction reads off the block's state, with the system shape (a transaction of another
-    /// shape from that address is refused when the engine validates it). A read the database
-    /// cannot serve is an internal error.
-    fn is_system_transaction(
-        &mut self,
-        tx: &Recovered<OpTxEnvelope>,
-        context: TxContext,
-    ) -> Result<bool, BlockError> {
-        let live = crate::tx::live_system_address(&mut self.evm).map_err(|e| {
-            let context = ErrorContext::account(SEQUENCER_REGISTRY).with_transaction(context);
-            BlockError::read(Phase::SystemAddressResolution, e, context)
-        })?;
+    /// Whether `tx` is a Mega System Transaction: sent from the block's live system address, which
+    /// the pre-block sequence resolved, with the system shape (a transaction of another shape from
+    /// that address is refused when the engine validates it). Nothing is read.
+    fn is_system_transaction(&self, tx: &Recovered<OpTxEnvelope>) -> bool {
         let shape = tx.inner().ty() == 0 && tx.inner().kind() == TxKind::Call(ORACLE);
-        Ok(shape && live == Some(tx.signer()))
+        shape && self.system_address == Some(tx.signer())
     }
 
     /// The kept failure, if one decided the block.
@@ -540,7 +459,7 @@ impl<'a> BlockSession<'a> {
         let tx_size = encoded.len() as u64;
         let da_size = estimated_da_size(encoded);
         let gas_limit = env.gas_limit();
-        let is_system_transaction = !is_deposit && self.is_system_transaction(tx, context)?;
+        let is_system_transaction = !is_deposit && self.is_system_transaction(tx);
         self.limiter.pre_execution_check(
             gas_limit,
             self.packing_exempt(is_deposit, is_system_transaction),

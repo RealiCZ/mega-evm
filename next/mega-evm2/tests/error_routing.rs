@@ -2,9 +2,9 @@
 //! (`SATIN-VAL-010`, `SATIN-PBLK-006`, `SATIN-REG-007`), at every phase of a block:
 //!
 //! - a pre-block call: a fatal error is internal, any other an invalid block;
-//! - the pre-block due-change read and L1 block info read, the live system address read, and the
-//!   block's own reads for a transaction outside its execution (the sender, the footprint scalar):
-//!   always internal;
+//! - the pre-block reads (a system contract's deployment, the due-change read, the L1 block info
+//!   read, the resolution of the live system address), and the block's own reads for a transaction
+//!   outside its execution (the sender, the footprint scalar): always internal;
 //! - a transaction's validation or execution (its frames, a deposit's, an authorization's
 //!   preflight): a fatal error is internal, any other an invalid block.
 //!
@@ -27,10 +27,11 @@ use evm2::{
     registry::HandlerError,
 };
 use mega_evm2::{
-    SEQUENCER_REGISTRY,
+    ORACLE, SEQUENCER_REGISTRY,
     block::{BlockSession, HISTORY_STORAGE},
     error::{BlockError, BlockErrorKind, CandidateError, Disposition, Phase, Refusal},
     factory::BlockServices,
+    intercept::LIMIT_CONTROL,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit, constants::L1_BLOCK_CONTRACT};
 use std::{cell::RefCell, rc::Rc};
@@ -258,6 +259,8 @@ fn test_routing_a_pre_block_call_by_the_databases_fatality() {
 #[test]
 fn test_routing_the_pre_block_reads_as_internal_whatever_the_fatality() {
     for (fail, phase, address, slot) in [
+        (Read::Account(ORACLE), Phase::Deployment, ORACLE, None),
+        (Read::Account(LIMIT_CONTROL), Phase::Deployment, LIMIT_CONTROL, None),
         (Read::Account(SEQUENCER_REGISTRY), Phase::DueChangeRead, SEQUENCER_REGISTRY, None),
         (Read::Storage(SEQUENCER_REGISTRY, 7), Phase::DueChangeRead, SEQUENCER_REGISTRY, Some(7)),
         (Read::Storage(SEQUENCER_REGISTRY, 9), Phase::DueChangeRead, SEQUENCER_REGISTRY, Some(9)),
@@ -274,34 +277,25 @@ fn test_routing_the_pre_block_reads_as_internal_whatever_the_fatality() {
     }
 }
 
+/// The registry's slot 0 is read first by the resolution of the live system address, after every
+/// other pre-block step: a read the database fails there is the resolution's, internal whatever
+/// the database declares (`SATIN-PBLK-006`, `SATIN-REG-007`), and no transaction's. (The registry's
+/// account is read first by the due-change read, above; the block's state serves it after.)
 #[test]
 fn test_routing_the_live_system_address_read_as_internal_whatever_the_fatality() {
-    for fatal in [true, false] {
-        let (mut block, plan) = started(true, Read::Storage(SEQUENCER_REGISTRY, 0), fatal);
-        let error = block.execute_candidate(&legacy(TARGET), &[]).expect_err("the read fails");
-        assert_eq!(plan.borrow().served, 1);
-        let fault = assert_decides(block, error);
-        assert_routed(&fault, Phase::SystemAddressResolution, Disposition::Internal, fatal);
-        assert_eq!(fault.context().address, Some(SEQUENCER_REGISTRY));
-        let tx = fault.context().transaction.expect("the transaction");
-        assert_eq!((tx.index, tx.sender, tx.ty), (0, SENDER, 0));
-    }
-}
-
-/// A deposit is classified inside its validation (the block reads the live system address only
-/// for a non-deposit): its read of the registry's slot 0 is still the resolution's, internal
-/// whatever the database declares, and never a failed deposit.
-#[test]
-fn test_routing_a_deposits_classification_read_as_internal_whatever_the_fatality() {
-    for fatal in [true, false] {
-        let (mut block, plan) = started(true, Read::Storage(SEQUENCER_REGISTRY, 0), fatal);
-        let error = block.execute_candidate(&deposit(TARGET), &[]).expect_err("the read fails");
-        assert_eq!(plan.borrow().served, 1);
-        let fault = assert_decides(block, error);
-        assert_routed(&fault, Phase::SystemAddressResolution, Disposition::Internal, fatal);
-        assert_eq!(fault.context().address, Some(SEQUENCER_REGISTRY));
-        let BlockErrorKind::Execution(cause) = fault.kind() else { panic!("{fault:?}") };
-        assert!(mega_evm2::error::system_address_read_failure(cause).is_some(), "{cause:?}");
+    for (fail, phase, slot) in [
+        (Read::Account(SEQUENCER_REGISTRY), Phase::DueChangeRead, None),
+        (Read::Storage(SEQUENCER_REGISTRY, 0), Phase::SystemAddressResolution, Some(0)),
+    ] {
+        for fatal in [true, false] {
+            let (block, plan) = start(true, fail, fatal, true);
+            let error = block.err().expect("the read fails");
+            assert_eq!(plan.borrow().served, 1, "{fail:?}");
+            assert_routed(&error, phase, Disposition::Internal, fatal);
+            assert_eq!(error.context().address, Some(SEQUENCER_REGISTRY));
+            assert_eq!(error.context().slot, slot.map(U256::from), "{fail:?}");
+            assert!(error.context().transaction.is_none(), "no transaction's: {error:?}");
+        }
     }
 }
 

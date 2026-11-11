@@ -1,8 +1,9 @@
 //! Transaction handlers: op-evm2's OP layer (L1 data fee, operator fee, vaults, deposits) with
-//! Satin's transaction rules on top: the registry read every transaction makes first and the
-//! classification of every envelope against the live system address it finds, the body's history
-//! as intrinsic state gas, the first frame's start records and their charge after validation (an
-//! out-of-gas there runs no frame and reads nothing of its target), the first-frame settlement,
+//! Satin's transaction rules on top: the classification of every envelope against the live system
+//! address resolved once (by the block's pre-block sequence, or by a single transaction's EVM when
+//! it is made), which reads nothing, the body's history as intrinsic state gas, the first frame's
+//! start records and their charge after validation (an out-of-gas there runs no frame and reads
+//! nothing of its target), the first-frame settlement,
 //! and deposits, which pay history gas as any transaction does — their body's in their
 //! validation, their start record's before their first frame — and are charged their created
 //! caller's account state (SALT-priced) before their first frame's start is made, and held to
@@ -175,10 +176,21 @@ fn host_error(error: evm2::HostError) -> evm2::registry::HandlerError {
     }
 }
 
-/// Every transaction reads the live system address first (Satin `load_system_address`, the first
-/// thing its `validate_env` does): the registry's account and slot 0, warm for the rest of the
-/// transaction, both read whatever the account holds. A read the database cannot serve fails the
-/// transaction. The address is the slot's only under the trusted code and when it is non-zero.
+/// The live system address a transaction is classified against: the one its block, or its EVM's
+/// construction, resolved (`Lite::system_address`); nothing is read (`SATIN-REG-002`). Under the
+/// reference's rule (comparison only) the transaction reads it first ([`read_registry`]).
+fn system_address(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<Option<Address>> {
+    if crate::under_reference_rule(host.ext(), crate::ReferenceRule::RegistryReadPerTransaction) {
+        return read_registry(host);
+    }
+    Ok(host.ext().system_address)
+}
+
+/// The reference's classification read (Satin `load_system_address`, the first thing its
+/// `validate_env` does), made under [`crate::ReferenceRule::RegistryReadPerTransaction`] only: the
+/// registry's account and slot 0, warm for the rest of the transaction, both read whatever the
+/// account holds. A read the database cannot serve fails the transaction. The address is the
+/// slot's only under the trusted code and when it is non-zero.
 fn read_registry(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<Option<Address>> {
     if crate::off("registry_read") {
         return Ok(None);
@@ -229,10 +241,10 @@ fn system_address_read_failed(error: evm2::registry::HandlerError) -> evm2::regi
 pub const SYSTEM_ADDRESS_WITHOUT_SYSTEM_SHAPE: &str =
     "a transaction from the system address must be a legacy call to a whitelisted contract";
 
-/// Satin `classify_system_transaction`, made first for every envelope on the registry read
-/// (`read_registry`): whether the transaction is a system-address transaction, a legacy (`ty` 0)
-/// call to the Oracle from the live system address. Every other envelope from that address — a
-/// call off the whitelist, a creation, a typed transaction, a deposit — is refused; any other
+/// Satin `classify_system_transaction`, made first for every envelope against the live system
+/// address ([`system_address`]): whether the transaction is a system-address transaction, a legacy
+/// (`ty` 0) call to the Oracle from the live system address. Every other envelope from that address
+/// — a call off the whitelist, a creation, a typed transaction, a deposit — is refused; any other
 /// sender is an ordinary one.
 pub(crate) fn classify(
     host: &mut Evm<'_, MegaTypes>,
@@ -240,7 +252,7 @@ pub(crate) fn classify(
     ty: u8,
     to: TxKind,
 ) -> HandlerResult<bool> {
-    if read_registry(host).map_err(system_address_read_failed)? != Some(caller) {
+    if system_address(host).map_err(system_address_read_failed)? != Some(caller) {
         return Ok(false);
     }
     if ty == 0 && to == TxKind::Call(ORACLE) {
@@ -460,23 +472,6 @@ pub const ORACLE: Address = address!("0x6342000000000000000000000000000000000001
 /// Satin `MEGA_SYSTEM_TRANSACTION_SOURCE_HASH`, stamped on a promoted system-address transaction.
 pub const MEGA_SYSTEM_TRANSACTION_SOURCE_HASH: B256 =
     b256!("852c082c0faff590c6300c2c34815d1f79882552fa95ba413cd5aeb1dba84957");
-
-/// The live system address the registry names, read off the state (Satin `live_system_address`):
-/// only with the trusted code and a non-zero `_currentSystemAddress`. A read the database cannot
-/// serve is an error.
-pub fn live_system_address(
-    host: &mut Evm<'_, MegaTypes>,
-) -> Result<Option<Address>, evm2::DatabaseError> {
-    let Some(info) = host.state_mut().account_info_untracked(&SEQUENCER_REGISTRY)? else {
-        return Ok(None);
-    };
-    if info.code_hash != SEQUENCER_REGISTRY_CODE_HASH {
-        return Ok(None);
-    }
-    let slot = REGISTRY_SLOT;
-    let current = host.state_mut().storage_slot_untracked(&SEQUENCER_REGISTRY, &slot)?;
-    Ok((!current.is_zero()).then(|| Address::from_word(current.into())))
-}
 
 /// Satin's body bytes beyond the 310-byte envelope: calldata, 20 per access-list address and
 /// 32 per storage key.

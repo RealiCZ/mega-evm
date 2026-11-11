@@ -514,8 +514,10 @@ fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
     if inspected {
         evm.set_inspector(Frames::default());
     }
-    // What the transaction reads is its own: the read set starts empty.
-    *reads.borrow_mut() = Reads::default();
+    // The read set is what the database served from the EVM's construction on: the transaction's
+    // own reads and its EVM's one resolution of the live system address (the registry's account
+    // and slot 0, which the reference's transaction reads as it is classified). Only a block's
+    // first transaction reports it (`served`).
     let tx = tx(s);
     let (r, changes) = {
         let executed = match evm.transact(&tx) {

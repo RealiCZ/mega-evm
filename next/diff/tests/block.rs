@@ -447,7 +447,7 @@ fn test_blocks_match_reference_plain_and_inspected() {
             p.iter().zip(&q).all(|(p, q)| candidate_differences(p, q).is_empty())
         {
             let mut first = None;
-            let taken = gate::rerun_class(&classes, &gate::REPLAY_RERUN_CLASSES, |rules| {
+            let taken = gate::rerun_class(&classes, &gate::BLOCK_RERUN_CLASSES, |rules| {
                 let p2 = run_block(&set, &path, &st, false, rules);
                 let q2 = run_block(&set, &path, &st, true, rules);
                 let same = sb

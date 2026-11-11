@@ -12,6 +12,7 @@ use mega_evm2::{
     Cfg,
     block::{BEACON_ROOTS, BlockSession},
     factory::BlockServices,
+    system_contracts::ORACLE_CODE,
     tx::ORACLE,
 };
 
@@ -20,19 +21,20 @@ const ON_CHAIN: u64 = 5;
 const ANSWER: u64 = 7;
 
 /// A block whose beacon-roots system call (the last pre-block call when no registry change is
-/// due) calls the Oracle, whose code returns its slot 1, and stores the returned word in its own
-/// slot 0.
+/// due) calls the Oracle's `getSlot(1)`, the Oracle holding its own code (which the block's
+/// deployment leaves as it is), and stores the returned word in its own slot 0.
 fn block() -> BlockSession<'static> {
     let mut db = InMemoryDB::default();
-    // PUSH1 1 SLOAD PUSH0 MSTORE PUSH1 32 PUSH0 RETURN
-    let oracle = [0x60, 0x01, 0x54, 0x5f, 0x52, 0x60, 0x20, 0x5f, 0xf3];
     db.insert_account_info(
         &ORACLE,
-        AccountInfo::default().with_code(Bytecode::new_legacy(Bytes::copy_from_slice(&oracle))),
+        AccountInfo::default().with_code(Bytecode::new_legacy(ORACLE_CODE)),
     );
     db.insert_account_storage(&ORACLE, &U256::from(1), &U256::from(ON_CHAIN));
-    // CALL(GAS, ORACLE, 0, 0, 0, 0, 32) POP; SSTORE(0, MLOAD(0)); STOP
-    let mut caller = vec![0x60, 0x20, 0x5f, 0x5f, 0x5f, 0x5f, 0x73];
+    // MSTORE(0, getSlot's selector << 224); MSTORE(4, 1);
+    // CALL(GAS, ORACLE, 0, 0, 36, 0, 32) POP; SSTORE(0, MLOAD(0)); STOP
+    let mut caller = vec![0x63, 0x7e, 0xba, 0x7b, 0xa6, 0x60, 0xe0, 0x1b, 0x5f, 0x52];
+    caller.extend_from_slice(&[0x60, 0x01, 0x60, 0x04, 0x52]);
+    caller.extend_from_slice(&[0x60, 0x20, 0x5f, 0x60, 0x24, 0x5f, 0x5f, 0x73]);
     caller.extend_from_slice(ORACLE.as_slice());
     caller.extend_from_slice(&[0x5a, 0xf1, 0x50, 0x5f, 0x51, 0x5f, 0x55, 0x00]);
     db.insert_account_info(
