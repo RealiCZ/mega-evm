@@ -9,11 +9,11 @@
 //! | Cause and phase | Disposition |
 //! | --- | --- |
 //! | malformed Satin key or schedule, missing or zero bootstrap value | [`ConfigError`], before execution |
-//! | the block's input contradicting its parent or the schedule; a fork the engine has no rules for | [`Disposition::Internal`] |
+//! | the block's input contradicting its parent or the schedule; a SALT snapshot of another parent; a fork the engine has no rules for | [`Disposition::Internal`] |
 //! | a pre-block call: a database error declared fatal | [`Disposition::Internal`] |
 //! | a pre-block call: any other database error, another execution error, a result that is not a success; a missing parent beacon block root | [`Disposition::InvalidBlock`] |
 //! | a read of the due-change predicate, of the L1 block info before the transactions, of the live system address | [`Disposition::Internal`], whatever the database declares |
-//! | a transaction's validation or execution: a database error declared fatal, a bucket capacity read that fails or is below the minimum, another fatal error | [`Disposition::Internal`] |
+//! | a transaction's validation or execution: a database error declared fatal, a bucket capacity read that fails or is below the minimum (whatever the snapshot's backend declares), another fatal error | [`Disposition::Internal`] |
 //! | a transaction's validation or execution: a database error not declared fatal | [`Disposition::InvalidBlock`] |
 //! | the block's bookkeeping outside a transaction's execution: the sender's account, the L1 footprint scalar | [`Disposition::Internal`] |
 //! | a candidate the block's rules refuse: the activation policy, the block's gas limit, its packing budgets, its footprint room, the transaction's own validity | [`Disposition::Refused`] |
@@ -24,8 +24,8 @@
 //! ([`database_error`]).
 
 use crate::{
-    SaltBelowMinimum,
     chain::{Fork, JsonError},
+    salt::{BucketId, SaltLookupError, SnapshotId},
 };
 use alloy_primitives::{Address, B256, U256};
 use evm2::{DatabaseError, interpreter::InstrStop, registry::HandlerError};
@@ -86,7 +86,7 @@ pub struct ErrorContext {
     /// The storage slot the failing read was of.
     pub slot: Option<U256>,
     /// The SALT bucket whose capacity failed.
-    pub bucket: Option<u64>,
+    pub bucket: Option<BucketId>,
     /// The transaction the failure met.
     pub transaction: Option<TxContext>,
 }
@@ -187,6 +187,8 @@ pub enum InputError {
     /// A block, or block zero's child's parent, at another timestamp than the configuration's
     /// genesis allows.
     GenesisTimestamp { timestamp: u64, genesis_timestamp: u64 },
+    /// The SALT snapshot is of the state after another block than the block's parent.
+    SaltSnapshotParent { parent_hash: B256, snapshot: SnapshotId },
 }
 
 impl core::fmt::Display for InputError {
@@ -216,6 +218,11 @@ impl core::fmt::Display for InputError {
             Self::GenesisTimestamp { timestamp, genesis_timestamp } => write!(
                 f,
                 "timestamp {timestamp} contradicts the genesis timestamp {genesis_timestamp}"
+            ),
+            Self::SaltSnapshotParent { parent_hash, snapshot } => write!(
+                f,
+                "SALT snapshot of the state after {} (root {}), the block's parent is {parent_hash}",
+                snapshot.parent_hash, snapshot.state_root
             ),
         }
     }
@@ -320,8 +327,9 @@ impl BlockError {
     }
 
     /// A transaction's execution that failed for a reason that is not the transaction's
-    /// ([`CandidateError::from_execution`] decides which those are): a database error by its
-    /// fatality, everything else internal (`SATIN-VAL-010`, `SATIN-STATE-007`).
+    /// ([`CandidateError::from_execution`] decides which those are): a SALT lookup internal,
+    /// whatever its snapshot's backend wraps; a database error by its fatality; everything else
+    /// internal (`SATIN-VAL-010`, `SATIN-STATE-007`).
     pub(crate) fn execution(error: HandlerError, tx: TxContext) -> Self {
         // The read of the live system address the transaction is classified against: internal,
         // whatever the database declares (`SATIN-REG-007`).
@@ -334,11 +342,11 @@ impl BlockError {
                 context,
             }));
         }
+        let bucket = salt_failure(&error).map(|s| s.bucket);
         let disposition = match database_error(&error) {
-            Some(e) if !e.is_fatal() => Disposition::InvalidBlock,
+            Some(e) if !e.is_fatal() && bucket.is_none() => Disposition::InvalidBlock,
             _ => Disposition::Internal,
         };
-        let bucket = salt_failure(&error).map(|s| s.bucket);
         Self(Box::new(Failure {
             kind: BlockErrorKind::Execution(error),
             phase: Phase::Transaction,
@@ -640,8 +648,8 @@ pub fn system_address_read_failure(
     }
 }
 
-/// The bucket-capacity failure behind a handler error, when there is one.
-fn salt_failure(error: &HandlerError) -> Option<&SaltBelowMinimum> {
+/// The failed SALT lookup behind a handler error, when there is one.
+fn salt_failure(error: &HandlerError) -> Option<&SaltLookupError> {
     match error {
         HandlerError::Fatal(e) | HandlerError::External(e) => e.downcast_ref(),
         _ => None,
@@ -767,11 +775,14 @@ mod tests {
             }
         }
         // A bucket capacity below the minimum, another fatal error: internal.
-        let salt = SaltBelowMinimum { bucket: 9, capacity: 255 };
-        let routed = CandidateError::from_execution(HandlerError::Fatal(AnyError::new(salt)), tx());
+        let bucket = BucketId::new(9).unwrap();
+        let below = crate::salt::SaltFailure::BelowMinimum { capacity: 255 };
+        let salt = SaltLookupError { bucket, failure: below };
+        let routed =
+            CandidateError::from_execution(HandlerError::Fatal(AnyError::new(salt.clone())), tx());
         let CandidateError::Block(e) = &routed else { panic!("{routed:?}") };
         assert_eq!(e.disposition(), Disposition::Internal);
-        assert_eq!(e.context().bucket, Some(9));
+        assert_eq!(e.context().bucket, Some(bucket));
         assert!(e.database_error().is_none());
         let fatal = CandidateError::from_execution(HandlerError::Fatal(AnyError::from("x")), tx());
         assert_eq!(fatal.disposition(), Disposition::Internal);
@@ -780,7 +791,7 @@ mod tests {
         let routed = CandidateError::from_execution(external, tx());
         let CandidateError::Block(e) = &routed else { panic!("{routed:?}") };
         assert_eq!(e.disposition(), Disposition::Internal);
-        assert_eq!(e.context().bucket, Some(9));
+        assert_eq!(e.context().bucket, Some(bucket));
         // The classification read of the live system address: internal whatever the database
         // declares, in the resolution's phase.
         for fatal in [true, false] {

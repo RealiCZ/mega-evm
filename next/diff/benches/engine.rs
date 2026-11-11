@@ -103,7 +103,7 @@ fn run_block(b: blockdb::Block, raws: &[alloy_primitives::Bytes], inspected: boo
         evm2::evm::Db::new(Evm2Db { db, code_cache: Rc::new(RefCell::new(HashMap::new())) });
     let inspector =
         inspected.then(|| Box::new(Frames::default()) as Box<dyn evm2::Inspector<MegaTypes>>);
-    let services = BlockServices { inspector, ..BlockServices::default() };
+    let services = BlockServices { inspector, ..replay::services(&b.header) };
     let mut ex = replay::factory(b.chain_id)
         .start_block(&replay::block_input(&b.header), database, services)
         .expect("pre-block");

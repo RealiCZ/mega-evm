@@ -4,7 +4,9 @@
 //!
 //! Where each mechanism lives:
 //! - type family, Satin `Version`, opcode table, SALT pricing (state-gas price hook): this file;
-//! - start ledger, pools, stops, history ledger, SALT multipliers: `ledger.rs`;
+//! - start ledger, pools, stops, history ledger: `ledger.rs`;
+//! - SALT's mapping, the node's capacity snapshot, the per-attempt multiplier cache and the lookup
+//!   exports: `salt.rs`;
 //! - withheld-gas detention (side ledger, read and drawn through the fork's gas reserve),
 //!   code-deposit and precompile sites: `detention.rs`;
 //! - interceptors (`MegaLimitControl`, `MegaAccessControl`, the Oracle's hints): `intercept.rs`;
@@ -29,12 +31,13 @@ pub mod keyless;
 pub mod ledger;
 #[cfg(feature = "compare")]
 pub mod regular_check;
+pub mod salt;
 #[cfg(not(feature = "salt-test-hasher"))]
 pub mod salt_hash;
 pub mod satin_ext;
 pub mod tx;
 
-pub use crate::ledger::*;
+pub use crate::{ledger::*, salt::*};
 
 use alloy_primitives::{Address, Bytes, U256};
 use evm2::{
@@ -165,8 +168,11 @@ impl EvmTypesHost for MegaTypes {
 
 /// The SALT price of a state charge at `site`, as `state_gas_price` makes it for an account the
 /// destruction table has not given back: the schedule's entry times the bucket's multiplier, read
-/// through the transaction's cache (so the same price every time in a transaction). A bucket whose
-/// capacity is below the minimum fails the transaction.
+/// through the attempt's cache (so the same price for every charge and give-back in the bucket in
+/// a transaction, `SATIN-STATE-006`). The protocol's own work — a system-originated transaction, a
+/// system call — prices at `m = 1` and reads no capacity (`SATIN-STATE-009`). A lookup that fails,
+/// or answers a capacity below the minimum, fails the transaction as an internal error of the node
+/// (`SATIN-STATE-007`).
 pub fn reprice(
     host: &mut Evm<'_, MegaTypes>,
     id: GasId,
@@ -175,7 +181,9 @@ pub fn reprice(
     let m = if host.ext().is_system || off("salt") {
         1
     } else {
-        multiplier(host.ext_mut(), site)
+        host.ext_mut()
+            .salt
+            .multiplier(bucket_for(site))
             .map_err(|e| evm2::ExecutionError::Fatal(evm2::AnyError::new(e)))?
     };
     Ok(host.version().gas_params.get(id).saturating_mul(m))

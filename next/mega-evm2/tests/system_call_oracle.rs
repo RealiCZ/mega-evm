@@ -42,7 +42,7 @@ fn block() -> BlockSession<'static> {
     let mut environment = Cfg::default();
     environment.oracle.insert(U256::from(1), U256::from(ANSWER));
     let input = common::block_input(1, 1_000, 30_000_000, Some(B256::repeat_byte(0x11)));
-    let services = BlockServices { environment, ..BlockServices::default() };
+    let services = BlockServices { environment, ..common::services(B256::ZERO) };
     common::factory().start_block(&input, Db::new(db), services).expect("pre-block calls")
 }
 

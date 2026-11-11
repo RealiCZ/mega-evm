@@ -1,5 +1,4 @@
 //! SALT witness exports belong to the block execution, including dropped candidates.
-#![cfg(feature = "witness")]
 
 mod common;
 
@@ -11,7 +10,7 @@ use evm2::{
     version::StateGasSite,
 };
 use mega_evm2::{
-    Cfg, SaltBelowMinimum,
+    BucketId, SaltCapacities, SaltFailure, SaltLookupError,
     block::BlockSession,
     bucket_for,
     error::{BlockErrorKind, CandidateError, Disposition, Phase},
@@ -23,7 +22,7 @@ const SENDER: Address = Address::with_last_byte(0x50);
 const WRITER: Address = Address::with_last_byte(0xa0);
 const NOOP: Address = Address::with_last_byte(0xb0);
 
-fn bucket(slot: u64) -> u64 {
+fn bucket(slot: u64) -> BucketId {
     bucket_for(StateGasSite::Storage(WRITER, U256::from(slot)))
 }
 
@@ -41,11 +40,11 @@ fn db() -> InMemoryDB {
 
 /// Block `number` over [`db`], the second slot's bucket of capacity zero when `fail_second`.
 fn block(number: u64, fail_second: bool) -> BlockSession<'static> {
-    let mut environment = Cfg::default();
-    environment.buckets.insert(bucket(1), 512);
-    environment.buckets.insert(bucket(2), if fail_second { 0 } else { 768 });
+    let salt = SaltCapacities::test_minimum(common::snapshot_id(B256::ZERO))
+        .with(bucket(1), 512)
+        .with(bucket(2), if fail_second { 0 } else { 768 });
     let input = common::block_input(number, 1_000 + number, 30_000_000, Some(B256::ZERO));
-    let services = BlockServices { environment, ..BlockServices::default() };
+    let services = BlockServices::new(std::sync::Arc::new(salt));
     common::factory().start_block(&input, Db::new(db()), services).expect("the block starts")
 }
 
@@ -106,8 +105,11 @@ fn test_failed_candidate_keeps_only_successful_bucket_answers() {
     let BlockErrorKind::Execution(cause) = fault.kind() else { panic!("{fault:?}") };
     let evm2::registry::HandlerError::Fatal(any) = cause else { panic!("{cause:?}") };
     assert_eq!(
-        any.downcast_ref::<SaltBelowMinimum>(),
-        Some(&SaltBelowMinimum { bucket: bucket(2), capacity: 0 })
+        any.downcast_ref::<SaltLookupError>(),
+        Some(&SaltLookupError {
+            bucket: bucket(2),
+            failure: SaltFailure::BelowMinimum { capacity: 0 }
+        })
     );
     assert!(error.to_string().contains("below the minimum bucket"), "{error}");
     assert_eq!(*block.bucket_reads(), [bucket(1)].into_iter().collect());

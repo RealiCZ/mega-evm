@@ -30,7 +30,6 @@ use mega_evm2::{
     SEQUENCER_REGISTRY,
     block::{BlockSession, HISTORY_STORAGE},
     error::{BlockError, BlockErrorKind, CandidateError, Disposition, Phase, Refusal},
-    factory::BlockServices,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit, constants::L1_BLOCK_CONTRACT};
 use std::{cell::RefCell, rc::Rc};
@@ -158,7 +157,8 @@ fn start(
     let plan = Rc::new(RefCell::new(Plan { armed, fail: Some(fail), fatal, served: 0 }));
     let backend = Backend { inner: world(l1), plan: plan.clone() };
     let input = common::block_input(1, 1_000, 30_000_000, Some(B256::repeat_byte(0x11)));
-    let block = common::factory().start_block(&input, Db::new(backend), BlockServices::default());
+    let block =
+        common::factory().start_block(&input, Db::new(backend), common::services(B256::ZERO));
     (block, plan)
 }
 

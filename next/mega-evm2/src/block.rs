@@ -21,6 +21,14 @@
 //!   deposit's nonce and receipt version), the state into the EVM's overlay and the block's change
 //!   set (`BlockStateAccumulator`, the counterpart of revm's bundle).
 //!
+//! SALT (`SATIN-WIT-013`): every attempt begins with an empty multiplier cache, and its valid
+//! lookups join the block's union ([`BlockSession::bucket_reads`]) whatever becomes of it — a
+//! candidate dropped, one whose later lookup failed — and travel with its candidate
+//! ([`Candidate::bucket_reads`]). Committing a candidate adds nothing to the union: a session that
+//! executed candidates for another one hands its union over with
+//! [`BlockSession::drain_bucket_reads`], which that session takes with
+//! [`BlockSession::merge_bucket_reads`]. The pre-block calls price at `m = 1` and read no bucket.
+//!
 //! The limits are Satin's `ProtocolLimits::for_spec(SATIN)`; the builder's policy is a
 //! validator's (`BlockLimits::default()`: no limit). Failures are typed ([`crate::error`]): a
 //! refusal names its rule; a failure that decides the block (an internal error or an invalid
@@ -32,6 +40,7 @@ use crate::{
     error::{
         BlockError, BlockIdentity, Budget, CandidateError, ErrorContext, Phase, Refusal, TxContext,
     },
+    salt::{BucketId, ForeignSaltExport, SaltExport, SnapshotId},
     tx::ORACLE,
 };
 use alloy_consensus::{Transaction, transaction::Recovered};
@@ -44,6 +53,7 @@ use evm2::{
 use op_evm2::{
     L1BlockInfo, OpTxEnvelope, constants::L1_BLOCK_CONTRACT, estimate_tx_compressed_size,
 };
+use std::{boxed::Box, collections::BTreeSet, vec::Vec};
 
 /// Satin's `ProtocolLimits::for_spec(SATIN)` block budgets: data size, KV updates, state growth.
 pub const BLOCK_BUDGETS: [u64; 3] = [13_107_200, 500_000, 1_000];
@@ -144,6 +154,7 @@ pub struct Candidate {
     usage: [u64; 3],
     gas: [u64; 4],
     gas_used: u64,
+    bucket_reads: Vec<BucketId>,
     block: BlockIdentity,
     simulated: bool,
 }
@@ -202,6 +213,10 @@ impl Candidate {
     pub const fn gas_used(&self) -> u64 {
         self.gas_used
     }
+    /// The SALT buckets its execution read a valid capacity of, ascending: its attempt's export.
+    pub fn bucket_reads(&self) -> &[BucketId] {
+        &self.bucket_reads
+    }
     /// The block the candidate ran for.
     pub const fn block(&self) -> BlockIdentity {
         self.block
@@ -221,9 +236,11 @@ pub struct BlockOutput {
     /// Whole pre-block states in commit order, including read-only accounts and slots.
     pub pre_block_states: Vec<PendingState>,
     pub limiter: BlockLimiter,
-    /// Valid SALT lookups across every execution in the block, including discarded candidates.
-    #[cfg(feature = "witness")]
-    pub bucket_reads: std::collections::BTreeSet<u64>,
+    /// Valid SALT lookups of every attempt of the session, discarded candidates included, and of
+    /// every export merged into it.
+    pub bucket_reads: BTreeSet<BucketId>,
+    /// The SALT snapshot the block read its capacities from.
+    pub salt_snapshot: SnapshotId,
 }
 
 /// One block's execution over one `Evm` for the whole block.
@@ -235,9 +252,11 @@ pub struct BlockSession<'a> {
     changes: BlockStateAccumulator,
     /// Whole pre-block states in commit order, including read-only accounts and slots.
     pre_block_states: Vec<PendingState>,
-    /// Valid SALT lookups across every execution in this block, including discarded candidates.
-    #[cfg(feature = "witness")]
-    bucket_reads: std::collections::BTreeSet<u64>,
+    /// Valid SALT lookups of every attempt of the session, discarded candidates included, and of
+    /// every export merged into it; emptied by a drain.
+    bucket_reads: BTreeSet<BucketId>,
+    /// The SALT snapshot the session reads, of the block's parent state.
+    salt_snapshot: SnapshotId,
     identity: BlockIdentity,
     parent_beacon_block_root: Option<B256>,
     activation: Activation,
@@ -253,6 +272,7 @@ impl<'a> BlockSession<'a> {
     pub(crate) fn start(
         evm: Evm<'a, MegaTypes>,
         identity: BlockIdentity,
+        salt_snapshot: SnapshotId,
         parent_beacon_block_root: Option<B256>,
         activation: Activation,
         limits: TxLimits,
@@ -265,8 +285,8 @@ impl<'a> BlockSession<'a> {
             receipts: Vec::new(),
             changes: BlockStateAccumulator::new(),
             pre_block_states: Vec::new(),
-            #[cfg(feature = "witness")]
-            bucket_reads: Default::default(),
+            bucket_reads: BTreeSet::new(),
+            salt_snapshot,
             identity,
             parent_beacon_block_root,
             activation,
@@ -299,11 +319,48 @@ impl<'a> BlockSession<'a> {
         &self.pre_block_states
     }
 
-    /// Valid SALT lookups across every execution in this block, including discarded candidates
-    /// and a candidate whose later lookup failed.
-    #[cfg(feature = "witness")]
-    pub const fn bucket_reads(&self) -> &std::collections::BTreeSet<u64> {
+    /// Valid SALT lookups of every attempt of the session — discarded candidates, a candidate
+    /// whose later lookup failed — and of every export merged into it, since the session started
+    /// or was last drained (`SATIN-WIT-013`). Committing a candidate adds nothing to it.
+    pub const fn bucket_reads(&self) -> &BTreeSet<BucketId> {
         &self.bucket_reads
+    }
+
+    /// The valid SALT lookups of the session's last attempt, ascending: after a candidate the
+    /// candidate's own, after a failed one the lookups it made before it failed.
+    pub fn last_attempt_bucket_reads(&self) -> Vec<BucketId> {
+        self.evm.ext().salt.lookups()
+    }
+
+    /// The SALT snapshot the session reads.
+    pub const fn salt_snapshot(&self) -> SnapshotId {
+        self.salt_snapshot
+    }
+
+    /// Hands the session's lookups over to the session that builds the block (a worker's to its
+    /// coordinator's, or a session that empties its set between transactions), and empties them.
+    /// Available after a failure too: the lookups made before it are still the node's.
+    pub fn drain_bucket_reads(&mut self) -> SaltExport {
+        SaltExport {
+            block: self.identity,
+            snapshot: self.salt_snapshot,
+            buckets: core::mem::take(&mut self.bucket_reads),
+        }
+    }
+
+    /// Takes the lookups another session of this block made into this one's
+    /// ([`Self::drain_bucket_reads`]). An export of another block or another snapshot is
+    /// refused and handed back (boxed: a refusal is rare, and the result stays small).
+    pub fn merge_bucket_reads(&mut self, export: SaltExport) -> Result<(), Box<ForeignSaltExport>> {
+        if export.block != self.identity || export.snapshot != self.salt_snapshot {
+            return Err(Box::new(ForeignSaltExport {
+                block: self.identity,
+                snapshot: self.salt_snapshot,
+                export,
+            }));
+        }
+        self.bucket_reads.extend(export.buckets);
+        Ok(())
     }
 
     /// What the schedule decided for the block.
@@ -335,8 +392,8 @@ impl<'a> BlockSession<'a> {
             changes: self.changes,
             pre_block_states: self.pre_block_states,
             limiter: self.limiter,
-            #[cfg(feature = "witness")]
             bucket_reads: self.bucket_reads,
+            salt_snapshot: self.salt_snapshot,
         })
     }
 
@@ -527,6 +584,9 @@ impl<'a> BlockSession<'a> {
         tx: &Recovered<OpTxEnvelope>,
         encoded: &[u8],
     ) -> Result<Candidate, CandidateError> {
+        // An attempt reads its buckets afresh (`SATIN-STATE-006`), and exports only its own
+        // lookups, also when it is refused before it runs.
+        self.evm.ext_mut().salt.begin_attempt();
         let env = tx.inner();
         let ty = env.ty();
         let is_deposit = env.is_deposit();
@@ -566,13 +626,12 @@ impl<'a> BlockSession<'a> {
                 BlockError::read(Phase::Bookkeeping, e, context)
             })?
             .unwrap_or_default();
-        #[cfg(feature = "witness")]
-        self.evm.ext_mut().bucket_reads.clear();
         let executed = self.evm.transact(tx).map(|executed| executed.detach());
-        // Capture successful capacity answers even if a later lookup aborts the transaction.
-        // Committing an outcome executed elsewhere deliberately contributes no reads here.
-        #[cfg(feature = "witness")]
-        self.bucket_reads.extend(self.evm.ext().bucket_reads.iter().copied());
+        // The attempt's valid lookups join the block's union whatever became of it: kept when a
+        // later lookup failed, and when the candidate is dropped (`SATIN-WIT-013`). Committing an
+        // outcome executed elsewhere adds no lookup here.
+        let bucket_reads = self.evm.ext().salt.lookups();
+        self.bucket_reads.extend(bucket_reads.iter().copied());
         let TxResultWithState { result, pending_state, .. } =
             executed.map_err(|e| CandidateError::from_execution(e, context))?;
         let ext = self.evm.ext();
@@ -597,6 +656,7 @@ impl<'a> BlockSession<'a> {
             usage,
             gas,
             gas_used,
+            bucket_reads,
             block: self.identity,
             simulated: self.simulation,
         })

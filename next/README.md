@@ -49,6 +49,13 @@ A configuration that schedules Satin must schedule the Mega ladder below it in n
 `mega_evm2::factory::SatinFactory` makes every EVM the engine runs, with Satin's version, the configured chain id, the transaction limits, the transaction registry and the precompiles installed.
 `SatinFactory::start_block` checks a block's input against its parent context and the schedule, derives whether the block is block zero, whether Satin activates in it and whether it admits only deposits, runs its pre-block sequence and returns a `BlockSession`; `SatinFactory::evm` makes a single transaction's EVM.
 Simulations use the separately named `start_simulated_block` and `simulated_evm` with the switches of a `Simulation`.
+
+Every EVM reads SALT's bucket capacities from a `mega_evm2::SaltSnapshot` its caller gives it: `BlockServices::salt` for a block session, an argument of `SatinFactory::evm` and `simulated_evm` for a single transaction.
+A snapshot is the node's fallible reader of one immutable state, the block's parent state, and names it (`SnapshotId`: the parent's hash and its state root); `start_block` refuses a snapshot of another parent as an internal error, so the same height under another parent is another snapshot.
+A capacity the snapshot cannot give is an error (`SaltReadError`), never a default: the transaction that asked has no outcome and the block fails with an internal error, whatever the snapshot's backend wraps.
+`SaltCapacities` is an in-memory snapshot; `SaltCapacities::new` refuses a bucket it does not list, as production does, and only `SaltCapacities::test_minimum` (policy `Unlisted::TestMinimum`) answers one with the minimum capacity, for tests and tools.
+The harness and the engine tests run every recorded block and every scenario on that named test policy, plus the capacities a scenario lists.
+Each attempt (one execution of a transaction) reads a bucket at its first state charge there, refuses a capacity below 256, and keeps `floor(capacity / 256)` for every later charge and give-back in the bucket, across frame reverts, until the next attempt; a system-originated transaction and a system call price at `m = 1` and read no capacity.
 Errors are typed (`mega_evm2::error`): each block-level error carries its phase, its context and what it decides about the block; a session that meets one that decides the block executes nothing after it and cannot finish.
 
 ## State and witness exports
@@ -58,9 +65,11 @@ The registry due-change read is a separate state before its optional application
 A witness collector must consume these states and each transaction's `Candidate::pending` before reducing them to changed entries.
 A failed deposit keeps its loaded accounts and slots in that returned state while undoing every write except its sender's nonce bump and mint.
 
-With feature `witness`, `BlockSession::bucket_reads` exports the union of valid SALT capacity lookups made by this block execution, including candidates that were dropped or aborted after an earlier successful lookup.
+`BlockSession::bucket_reads` is the union of the valid SALT lookups of every attempt the session made, including candidates that were dropped or aborted after an earlier successful lookup; it is always recorded, and `BlockOutput::bucket_reads` exports it with the snapshot's id.
+A failed lookup is never in it.
+Each `Candidate::bucket_reads` holds its own attempt's lookups, and `BlockSession::last_attempt_bucket_reads` the last attempt's, also after a failure.
 The set starts empty for each session; committing a transaction executed by another session of the same block adds no lookup to it.
-The per-transaction `Lite::bucket_reads` remains available for integrations that collect their own union.
+That session hands its lookups over explicitly: `BlockSession::drain_bucket_reads` returns them as a `SaltExport` and empties its set, and `merge_bucket_reads` takes them into the building session, refusing an export of another block or snapshot.
 
 ## Coverage and mutation testing in CI
 

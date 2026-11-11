@@ -1,5 +1,5 @@
 //! The engine's per-transaction ledger: the start ledger with the three resource pools, the signed
-//! history ledger, the write records, the SALT multipliers and what a transaction reports.
+//! history ledger, the write records, the SALT cache (`salt.rs`) and what a transaction reports.
 //! History is state gas on evm2's shared spill plus a signed per-frame ledger, with the LOG
 //! allowance; a history give-back follows the version's give-back rule, into a reservoir alone
 //! under Satin's (`SATIN-HIST-012`).
@@ -10,10 +10,8 @@ use core::cmp::min;
 use evm2::{
     Evm,
     interpreter::{Gas, InstrStop, InterpreterState, Result},
-    version::{GasId, StateGasSite},
+    version::GasId,
 };
-#[cfg(feature = "witness")]
-use std::collections::BTreeSet;
 
 pub const CPSB: u64 = 1_530;
 pub const CPHB: u64 = 88;
@@ -42,12 +40,10 @@ pub const SEQUENCER_REGISTRY: Address =
 /// The registry slot that holds `_currentSystemAddress`: slot 0, fixed by the protocol.
 pub const REGISTRY_SLOT: U256 = U256::ZERO;
 
-/// What the node supplies (persists across transactions): the inputs the protocol leaves to the
-/// node's environment, SALT's bucket capacities and the Oracle service's answers.
+/// What the node supplies beside the SALT snapshot (`Lite::salt`), persisting across
+/// transactions: the Oracle service's answers.
 #[derive(Clone, Debug, Default)]
 pub struct Cfg {
-    /// SALT bucket capacities by bucket id; missing = the minimum bucket.
-    pub buckets: HashMap<u64, u64>,
     /// The oracle service's answers by slot (Satin `OracleEnv::get_oracle_storage`).
     pub oracle: HashMap<U256, U256>,
 }
@@ -152,7 +148,7 @@ pub struct Settlement {
 /// capacity. The slot records and the destroyed accounts are undone per frame through undo logs
 /// (O(changes)), not snapshotted per frame. What exists only for the comparison is behind the
 /// `compare` feature (settlements, precompile pricing report, negative-control switches, debug
-/// traces); the read-set recording a witness producer needs (bucket reads) is behind `witness`.
+/// traces).
 #[derive(Clone, Debug, Default)]
 pub struct Lite {
     pub cfg: Cfg,
@@ -185,11 +181,9 @@ pub struct Lite {
     pub body_bytes: u64,
     pub last_caller_remaining: u64,
     pub reservoir_left: u64,
-    /// SALT: multipliers read this transaction.
-    pub salt_cache: HashMap<u64, u64>,
-    /// SALT: every bucket read (read set; a witness producer needs it, a validator does not).
-    #[cfg(feature = "witness")]
-    pub bucket_reads: BTreeSet<u64>,
+    /// SALT: the snapshot capacities are read from, and the multipliers of the running attempt,
+    /// whose keys are its valid lookups.
+    pub salt: crate::salt::SaltCache,
     /// The price an account-level creation charge (`CreateState`, `CodeDepositState`) was
     /// made at, for the destruction table; a slot's charge is re-priced through the transaction's
     /// SALT cache instead (Satin re-prices through `state_gas_price`). Was every state charge.
@@ -352,9 +346,7 @@ impl Lite {
         self.tx_start_bytes = 0;
         self.last_caller_remaining = 0;
         self.reservoir_left = 0;
-        self.salt_cache.clear();
-        #[cfg(feature = "witness")]
-        self.bucket_reads.clear();
+        self.salt.begin_attempt();
         self.created_prices.clear();
         self.slot_records.clear();
         self.slot_undo.clear();
@@ -711,110 +703,4 @@ pub fn refill_history(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTy
     }
     evm2::interpreter::instructions::give_back_state_gas(gas, state, bytes * CPHB);
     state.host().ext_mut().book_history(-((bytes * CPHB) as i64), -(bytes as i64));
-}
-
-/// SALT: the bucket id of `key`, by SALT's own production mapping (`salt_hash`), which the
-/// specification takes as an input; feature `salt-test-hasher` swaps in Satin's test hasher.
-#[cfg(not(feature = "salt-test-hasher"))]
-#[inline(always)]
-pub fn bucket_id(key: &[u8]) -> u64 {
-    crate::salt_hash::bucket_id(key)
-}
-
-/// SALT: FNV-1a bucket ids of Satin's `TestExternalEnvs` (`SimpleBucketHasher`), which the
-/// differential scenarios name buckets with (feature `salt-test-hasher` only).
-#[cfg(feature = "salt-test-hasher")]
-pub fn bucket_id(key: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &byte in key {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    const NUM_BUCKETS: u64 = 1 << 24;
-    const NUM_META_BUCKETS: u64 = NUM_BUCKETS / 256;
-    hash % (NUM_BUCKETS - NUM_META_BUCKETS) + NUM_META_BUCKETS
-}
-
-pub fn bucket_for(site: StateGasSite) -> u64 {
-    match site {
-        StateGasSite::Account(a) => bucket_id(a.as_slice()),
-        StateGasSite::Storage(a, k) => {
-            // The 52-byte key on the stack (not a heap `Vec` per lookup).
-            let mut key = [0u8; 52];
-            key[..20].copy_from_slice(a.as_slice());
-            key[20..].copy_from_slice(&k.to_be_bytes::<32>());
-            bucket_id(&key)
-        }
-    }
-}
-
-/// A SALT bucket that reports a capacity below the minimum bucket (Satin
-/// `BucketError::BelowMinimum`): a broken backend. The transaction fails with it rather than
-/// price its state at a multiplier nobody chose (zero, the floor division's answer). Its `Debug`
-/// is its message, as Satin reports the failure.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct SaltBelowMinimum {
-    pub bucket: u64,
-    pub capacity: u64,
-}
-
-impl core::fmt::Display for SaltBelowMinimum {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "SALT bucket lookup failed: bucket {} reports capacity {}, below the minimum bucket of \
-             {MIN_BUCKET_SIZE}",
-            self.bucket, self.capacity
-        )
-    }
-}
-
-impl core::fmt::Debug for SaltBelowMinimum {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Display::fmt(self, f)
-    }
-}
-
-impl std::error::Error for SaltBelowMinimum {}
-
-/// The SALT multiplier of `site`, read once per transaction and recorded in the read set. A
-/// capacity below the minimum bucket is an error, neither cached nor recorded.
-pub fn multiplier(
-    ext: &mut Lite,
-    site: StateGasSite,
-) -> core::result::Result<u64, SaltBelowMinimum> {
-    let id = bucket_for(site);
-    if let Some(m) = ext.salt_cache.get(&id) {
-        return Ok(*m);
-    }
-    let capacity = ext.cfg.buckets.get(&id).copied().unwrap_or(MIN_BUCKET_SIZE);
-    let m = capacity / MIN_BUCKET_SIZE;
-    if m == 0 && !crate::off("salt_min_bucket") {
-        return Err(SaltBelowMinimum { bucket: id, capacity });
-    }
-    #[cfg(feature = "witness")]
-    ext.bucket_reads.insert(id);
-    ext.salt_cache.insert(id, m);
-    Ok(m)
-}
-
-/// The default build's mapping; under feature `salt-test-hasher` the scenarios' test hasher
-/// replaces it.
-#[cfg(all(test, not(feature = "salt-test-hasher")))]
-mod tests {
-    use super::*;
-
-    /// The bucket an account or a slot lands in is SALT's own mapping: the ids below are
-    /// `salt::state::hasher::bucket_id`'s for these keys (cross-verified against salt v1.0.1 by
-    /// Satin's hasher tests).
-    #[test]
-    fn test_the_default_bucket_mapping_is_salts() {
-        let account = Address::new([
-            0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
-            0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
-        ]);
-        assert_eq!(bucket_for(StateGasSite::Account(account)), 12_196_828);
-        assert_eq!(bucket_for(StateGasSite::Storage(account, U256::from(1))), 9_450_146);
-        assert_eq!(bucket_for(StateGasSite::Account(Address::ZERO)), 12_666_336);
-    }
 }
