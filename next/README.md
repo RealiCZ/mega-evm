@@ -87,6 +87,14 @@ Each `Candidate::bucket_reads` holds its own attempt's lookups, and `BlockSessio
 The set starts empty for each session; committing a transaction executed by another session of the same block adds no lookup to it.
 That session hands its lookups over explicitly: `BlockSession::drain_bucket_reads` returns them as a `SaltExport` and empties its set, and `merge_bucket_reads` takes them into the building session, refusing an export of another block or snapshot.
 
+`BlockSession::block_hash_reads` is every block hash `BLOCKHASH` was served during the block, by block number: in a pre-block call and in every attempt the session made, including candidates that were dropped or failed after the read; `BlockOutput::block_hash_reads` exports it.
+The engine's own `BLOCKHASH` records each hash where the host serves it, above the EVM's overlay and any state cache under it, so a hash a cache answers is in the export and a hash a cache holds from an earlier block is not.
+A `BLOCKHASH` of the current block, a future block or a block older than the last 256 reads nothing and is not recorded; neither is one refused in a frame whose volatile-data access is off, nor one the database failed to answer.
+Each `Candidate::block_hash_reads` holds its own attempt's reads, and `BlockSession::last_attempt_block_hash_reads` the last attempt's, also after a failure.
+The export starts empty for each session, and is handed over as the SALT lookups are: `BlockSession::drain_block_hash_reads` returns it as a `BlockHashExport`, and `merge_block_hash_reads` takes one into the building session, refusing an export of another block and one that holds another hash for a block the session was served.
+A single transaction's EVM keeps the reads of its last transaction in `Lite::block_hashes`, emptied when the next one begins.
+A block replayed on a database that holds exactly the witness — a strict one, which fails a read of anything else — makes the same reads; the fork's `EmptyDB`, which answers any number with a hash it makes up, is not a witness database.
+
 ## Coverage and mutation testing in CI
 
 The `coverage` job of `.github/workflows/next.yml` runs `scripts/coverage.sh`: branch coverage (`cargo llvm-cov`) of `mega-evm2` and `op-evm2` under their own tests and the sample gate's test targets, which run every scenario, fuzz seed and recorded block of the sample through the engine.
