@@ -684,9 +684,13 @@ fn blockhash_witness_single_transaction_evm_exposes_its_own_set() {
 #[test]
 fn blockhash_witness_merge_takes_another_sessions_reads() {
     let mut worker = block();
-    drop(worker.execute_candidate(&read(&[800, 801]), &[]).unwrap());
+    let candidate = worker.execute_candidate(&read(&[800, 801]), &[]).unwrap();
     let mut builder = block();
+    // Committing an outcome another session executed adds no read: they come with the export.
+    builder.commit_candidate(candidate).unwrap();
+    assert!(builder.block_hash_reads().is_empty());
     include(&mut builder, &[read(&[801, 900])]);
+    assert_eq!(*builder.block_hash_reads(), served(&[801, 900]));
     let export = worker.drain_block_hash_reads();
     assert!(worker.block_hash_reads().is_empty());
     assert_eq!(export.block(), builder.identity());
