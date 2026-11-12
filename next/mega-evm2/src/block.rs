@@ -30,6 +30,15 @@
 //! [`BlockSession::drain_bucket_reads`], which that session takes with
 //! [`BlockSession::merge_bucket_reads`]. The pre-block calls price at `m = 1` and read no bucket.
 //!
+//! Block hashes (`SATIN-WIT-014`): every hash `BLOCKHASH` is served is recorded where it is
+//! served, above every cache (`crate::block_hashes`). Every attempt begins with an empty record,
+//! and what it was served joins the block's union ([`BlockSession::block_hash_reads`]) whatever
+//! becomes of it — a candidate dropped, one that failed after the read — as a pre-block call's
+//! does, and travels with its candidate ([`Candidate::block_hash_reads`]). The union starts empty
+//! with the session, whatever a cache under it already holds, and is handed over and taken as the
+//! SALT lookups are ([`BlockSession::drain_block_hash_reads`],
+//! [`BlockSession::merge_block_hash_reads`]).
+//!
 //! The limits are Satin's `ProtocolLimits::for_spec(SATIN)`; the builder's policy is a
 //! validator's (`BlockLimits::default()`: no limit). Failures are typed ([`crate::error`]): a
 //! refusal names its rule; a failure that decides the block (an internal error or an invalid
@@ -39,6 +48,7 @@ mod pre_block;
 
 use crate::{
     MegaTypes, TxLimits,
+    block_hashes::{BlockHashExport, BlockHashMergeRefusal, RefusedBlockHashExport},
     chain::{Activation, RegistryBootstrap},
     error::{
         BlockError, BlockIdentity, Budget, CandidateError, ErrorContext, Phase, Refusal, TxContext,
@@ -56,7 +66,11 @@ use evm2::{
 use op_evm2::{
     L1BlockInfo, OpTxEnvelope, constants::L1_BLOCK_CONTRACT, estimate_tx_compressed_size,
 };
-use std::{boxed::Box, collections::BTreeSet, vec::Vec};
+use std::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 
 /// Satin's `ProtocolLimits::for_spec(SATIN)` block budgets: data size, KV updates, state growth.
 pub const BLOCK_BUDGETS: [u64; 3] = [13_107_200, 500_000, 1_000];
@@ -153,6 +167,7 @@ pub struct Candidate {
     gas: [u64; 4],
     gas_used: u64,
     bucket_reads: Vec<BucketId>,
+    block_hash_reads: Vec<(u64, B256)>,
     block: BlockIdentity,
     simulated: bool,
 }
@@ -215,6 +230,11 @@ impl Candidate {
     pub fn bucket_reads(&self) -> &[BucketId] {
         &self.bucket_reads
     }
+    /// The block hashes its `BLOCKHASH` was served, each with its block number, ascending: its
+    /// attempt's export, whichever of them a cache answered.
+    pub fn block_hash_reads(&self) -> &[(u64, B256)] {
+        &self.block_hash_reads
+    }
     /// The block the candidate ran for.
     pub const fn block(&self) -> BlockIdentity {
         self.block
@@ -245,6 +265,11 @@ pub struct BlockOutput {
     pub bucket_reads: BTreeSet<BucketId>,
     /// The SALT snapshot the block read its capacities from.
     pub salt_snapshot: SnapshotId,
+    /// Every block hash `BLOCKHASH` was served during the block, by block number
+    /// (`SATIN-WIT-014`): in a pre-block call and in every attempt of the session, discarded
+    /// candidates included, and of every export merged into it. Not what a cache holds: a hash an
+    /// earlier block read and this one did not is not in it.
+    pub block_hash_reads: BTreeMap<u64, B256>,
 }
 
 /// One block's execution over one `Evm` for the whole block.
@@ -261,6 +286,9 @@ pub struct BlockSession<'a> {
     bucket_reads: BTreeSet<BucketId>,
     /// The SALT snapshot the session reads, of the block's parent state.
     salt_snapshot: SnapshotId,
+    /// Every block hash `BLOCKHASH` was served in a pre-block call or an attempt of the session,
+    /// discarded candidates included, and of every export merged into it; emptied by a drain.
+    block_hash_reads: BTreeMap<u64, B256>,
     identity: BlockIdentity,
     parent_beacon_block_root: Option<B256>,
     activation: Activation,
@@ -297,6 +325,8 @@ impl<'a> BlockSession<'a> {
             pre_block_states: Vec::new(),
             bucket_reads: BTreeSet::new(),
             salt_snapshot,
+            // Empty when the block starts, whatever a cache under the session holds.
+            block_hash_reads: BTreeMap::new(),
             identity,
             parent_beacon_block_root,
             activation,
@@ -389,6 +419,69 @@ impl<'a> BlockSession<'a> {
         Ok(())
     }
 
+    /// Every block hash `BLOCKHASH` was served in a pre-block call or an attempt of the session —
+    /// discarded candidates, a candidate that failed after the read — and of every export merged
+    /// into it, by block number, since the session started or was last drained (`SATIN-WIT-014`).
+    /// Committing a candidate adds nothing to it.
+    pub const fn block_hash_reads(&self) -> &BTreeMap<u64, B256> {
+        &self.block_hash_reads
+    }
+
+    /// The block hashes the session's last attempt was served, ascending by block number: after a
+    /// candidate the candidate's own, after a failed one those served before it failed.
+    pub fn last_attempt_block_hash_reads(&self) -> Vec<(u64, B256)> {
+        let served = self.evm.ext().block_hashes.served().into_iter();
+        served
+            .map(|(number, hash)| {
+                // `BLOCKHASH` serves only a block before the session's own, whose number the
+                // header gives as a `u64`.
+                let number = u64::try_from(number).expect("a served block is before the block");
+                (number, hash)
+            })
+            .collect()
+    }
+
+    /// Hands the session's served block hashes over to the session that builds the block, and
+    /// empties them, as [`Self::drain_bucket_reads`] does the SALT lookups. Available after a
+    /// failure too.
+    pub fn drain_block_hash_reads(&mut self) -> BlockHashExport {
+        BlockHashExport {
+            block: self.identity,
+            simulated: self.simulation,
+            hashes: core::mem::take(&mut self.block_hash_reads),
+        }
+    }
+
+    /// Takes the block hashes another session of this block was served into this one's
+    /// ([`Self::drain_block_hash_reads`]). An export of another block or other rules, and one that
+    /// holds another hash for a number than this session was served, is refused whole and handed
+    /// back.
+    pub fn merge_block_hash_reads(
+        &mut self,
+        export: BlockHashExport,
+    ) -> Result<(), Box<RefusedBlockHashExport>> {
+        let reason = if export.block != self.identity || export.simulated != self.simulation {
+            Some(BlockHashMergeRefusal::Foreign {
+                block: self.identity,
+                simulated: self.simulation,
+            })
+        } else {
+            export.hashes.iter().find_map(|(number, merged)| {
+                let held = self.block_hash_reads.get(number).filter(|held| *held != merged)?;
+                Some(BlockHashMergeRefusal::Conflict {
+                    number: *number,
+                    held: *held,
+                    merged: *merged,
+                })
+            })
+        };
+        if let Some(reason) = reason {
+            return Err(Box::new(RefusedBlockHashExport { reason, export }));
+        }
+        self.block_hash_reads.extend(export.hashes);
+        Ok(())
+    }
+
     /// What the schedule decided for the block.
     pub const fn activation(&self) -> &Activation {
         &self.activation
@@ -421,16 +514,19 @@ impl<'a> BlockSession<'a> {
             limiter: self.limiter,
             bucket_reads: self.bucket_reads,
             salt_snapshot: self.salt_snapshot,
+            block_hash_reads: self.block_hash_reads,
         })
     }
 
     fn system_call(&mut self, target: Address, data: Bytes) -> Result<PendingState, BlockError> {
         self.evm.ext_mut().begin_system_call();
-        let executed = self
-            .evm
-            .system_call(SystemTx::new(target, data))
-            .map_err(|e| BlockError::system_call(target, e))?;
-        let TxResultWithState { result: r, pending_state, .. } = executed.detach();
+        let executed =
+            self.evm.system_call(SystemTx::new(target, data)).map(|executed| executed.detach());
+        // What the call's `BLOCKHASH` was served is the block's, as an attempt's is
+        // (`SATIN-WIT-014`).
+        self.block_hash_reads.extend(self.last_attempt_block_hash_reads());
+        let TxResultWithState { result: r, pending_state, .. } =
+            executed.map_err(|e| BlockError::system_call(target, e))?;
         if !r.status {
             return Err(BlockError::system_call_failed(target, r.stop));
         }
@@ -513,6 +609,7 @@ impl<'a> BlockSession<'a> {
         // An attempt reads its buckets afresh (`SATIN-STATE-006`), and exports only its own
         // lookups, also when it is refused before it runs.
         self.evm.ext_mut().salt.begin_attempt();
+        self.evm.ext_mut().block_hashes.begin_attempt();
         let env = tx.inner();
         let ty = env.ty();
         let is_deposit = env.is_deposit();
@@ -558,6 +655,9 @@ impl<'a> BlockSession<'a> {
         // outcome executed elsewhere adds no lookup here.
         let bucket_reads = self.evm.ext().salt.lookups();
         self.bucket_reads.extend(bucket_reads.iter().copied());
+        // So does every block hash it was served (`SATIN-WIT-014`, `SATIN-WIT-016`).
+        let block_hash_reads = self.last_attempt_block_hash_reads();
+        self.block_hash_reads.extend(block_hash_reads.iter().copied());
         let TxResultWithState { result, pending_state, .. } =
             executed.map_err(|e| CandidateError::from_execution(e, context))?;
         let ext = self.evm.ext();
@@ -583,6 +683,7 @@ impl<'a> BlockSession<'a> {
             gas,
             gas_used,
             bucket_reads,
+            block_hash_reads,
             block: self.identity,
             simulated: self.simulation,
         })

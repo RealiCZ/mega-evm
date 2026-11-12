@@ -190,6 +190,9 @@ pub struct Lite {
     /// SALT: the snapshot capacities are read from, and the multipliers of the running attempt,
     /// whose keys are its valid lookups.
     pub salt: crate::salt::SaltCache,
+    /// The block hashes `BLOCKHASH` was served in the running attempt, recorded where they are
+    /// served, above every cache (`SATIN-WIT-014`).
+    pub block_hashes: crate::block_hashes::BlockHashReads,
     /// The price an account-level creation charge (`CreateState`, `CodeDepositState`) was
     /// made at, for the destruction table; a slot's charge is re-priced through the transaction's
     /// SALT cache instead (Satin re-prices through `state_gas_price`). Was every state charge.
@@ -349,6 +352,7 @@ impl Lite {
         self.last_caller_remaining = 0;
         self.reservoir_left = 0;
         self.salt.begin_attempt();
+        self.block_hashes.begin_attempt();
         self.created_prices.clear();
         self.slot_records.clear();
         self.slot_undo.clear();

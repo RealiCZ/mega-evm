@@ -343,7 +343,7 @@ pub const fn wrap_table(mut c: OpcodeConfig<MegaTypes>) -> OpcodeConfig<MegaType
     >>(op::SLOTNUM, c.static_gas(op::SLOTNUM));
     c.set_instruction::<crate::Obs<
         Volatile<
-            instructions::blockhash<MegaTypes>,
+            crate::block_hashes::mega_blockhash,
             { crate::satin_ext::access::BLOCK_HASH },
             { op::BLOCKHASH },
         >,
