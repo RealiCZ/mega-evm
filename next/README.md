@@ -14,8 +14,9 @@ The existing engine in `crates/` (REX1–REX6, built on revm) is frozen: it keep
   It sits under `diff/shared` because CI's reference check runs on changes there.
   `diff/shared/blockdb.rs`, the recorded-block reader of both replay harnesses, is not part of it: both include it by `#[path]`, since it parses blocks with `serde_json`.
 - `reference` — its own workspace (separate lockfile): generates the reference outputs from the Satin implementation under review, mega-evm `4e39cfd6`, which stays reachable through `refs/pull/417/head` because the repository forbids force-pushes; the pin moves only when the reference itself changes, with `regen-reference.sh`.
-- `scripts` — CI setup: `fetch-evm2-fork.sh` checks the pinned evm2 fork out next to the repository, `install-zstd.sh`.
+- `scripts` — CI setup and gates: `fetch-evm2-fork.sh` checks the pinned evm2 fork out next to the repository, `install-zstd.sh` installs zstd, and `mega-eest-gate.sh` runs the pinned Mega EEST slice.
 - `evm2-fork.env`, [`evm2-fork.md`](evm2-fork.md) — the evm2 fork pin, and what each fork patch adds, why, and when it goes.
+- `mega-eest.env` — the Mega EEST repository and reviewed suite revision used by the conformance gate.
 
 ## Commands
 
@@ -29,6 +30,7 @@ MEGA_EVM2_CORPUS_DIR=<corpus> bash diff/scripts/gate.sh full   # the gates on th
 bash diff/scripts/controls.sh sample|full                      # negative controls
 bash diff/scripts/faults.sh                                    # fault injection
 bash diff/scripts/check-reference.sh sample                    # rebuild the reference, compare the sample
+bash scripts/mega-eest-gate.sh                                 # Mega EEST slice and negative control
 bash diff/scripts/rule-coverage.sh <rules.md>                  # which rule ids of the specification have a scenario
 bash diff/scripts/probe.sh diff/probe-examples.jsonl           # inputs of your own, on both sides
 cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads, plain and inspected
@@ -51,6 +53,7 @@ A configuration that schedules Satin must schedule the Mega ladder below it in n
 Simulations use the separately named `start_simulated_block` and `simulated_evm` with the switches of a `Simulation`.
 
 A block's pre-block sequence (`mega-evm2/src/block/pre_block.rs`, `SATIN-PBLK-003`) runs, each step committed to the session before the next:
+
 1. the EIP-2935 call;
 2. the EIP-4788 call (block zero makes neither, and its parent beacon block root must be zero);
 3. in the block in which Satin activates and no other, the check that the EIP-7997 factory holds its code hash;
@@ -98,7 +101,7 @@ The `mutants` job runs `scripts/mutants.sh` with cargo-mutants (pinned in the wo
 The oracle is `cargo test` over the engine crates and the harness with the sample gate's environment: the main scenarios, recorded-block replay and block execution (one synthetic run takes one reference file, so the fuzz batches are not part of it).
 A mutant is caught when any unit test or gate turns red; a survivor is a scenario the gates lack, or code no input reaches.
 On a pull request only the changed engine lines are mutated, and a survivor or timeout that `diff/mutants/suppressions.toml` does not list fails the job.
-The daily run mutates the full engine in eight shards and reports without failing.
+Pushes to `cz/feat/satin-evm2`, the daily run and manual runs mutate the full engine in eight shards and report survivors and timeouts without failing.
 Locally, `bash scripts/mutants.sh smoke` runs a fixed set (the mutants of `mega-evm2/src/satin_ext.rs`) and writes `mutants.out/outcomes.json` under `$OUT`; `scripts/mutants.sh pr <base>`, `shard <k>/<n>` and `full` are the modes CI uses.
 
 ## Comparing interpreter performance
@@ -192,17 +195,17 @@ Two things hold that path instead.
 First, the block gate holds the engine's own run of every recorded block under Satin's rules, the run a rerun replaces in the comparison, to figures pinned per block in `diff/data/block-satin.txt`: the transactions it included and refused, and a digest of the run — the keccak of each transaction's status and gas used, the block counters row and the post-state row — so a change of a recorded transaction's gas, of the block's counters or of its post-state is seen even when no inclusion changes; printed as `GATE block-satin blocks=<b> included=<i> refused=<r> pinned=<b> digests=<b> differ=0`, a block whose run differs from its counts or its digest, or that has no figure, fails the gate (the faults `block-satin-pinned` and `block-satin-digest` show it).
 Second, an engine test holds each decided change's own figures:
 
-| Class | What the differential cannot see | Engine test |
-| --- | --- | --- |
-| `reservoir_give_back` | the new rule's credits, shares and pools | `mega-evm2/tests/give_back.rs`, `migration_checks.rs`, `diff/tests/give_back.rs`, and the regular-gas invariant on every gate case |
-| `deposit_history` | a deposit's and a Mega System Transaction's history gas and bytes | `mega-evm2/tests/deposit_history.rs`, `system_origin.rs`; for recorded blocks, `GATE block-satin` |
-| `oracle_read_before_charge` | the read made and marked before `COLD_SLOAD_COST`, its warm base included | `mega-evm2/tests/oracle_reads.rs` (the mark at the compute before the 2,100, a read below the warm base, a looping caller stopped at the compute limit) |
-| `refusal_costs_nothing` | the gas a refused read keeps | `mega-evm2/tests/access_disabled_call.rs`, `access_disabled_delegate_read.rs` |
-| `mst_packing_budgets` | a Mega System Transaction held to the packing budgets (no gate case reaches them) | `mega-evm2/tests/mst_packing.rs` |
-| `system_contract_deployment` | each deployment's installed code, kept nonce, balance and storage, the registry's seeding and migration | `mega-evm2/tests/block_lifecycle.rs`, `pre_block_witness.rs`; for recorded blocks, `GATE block-satin` |
-| `once_per_block_resolution` | the resolution's own reads, and a transaction's cold first access to the registry | `mega-evm2/tests/block_lifecycle.rs`, `mandatory_read_errors.rs`; for recorded blocks, `GATE block-satin` |
-| `auth_preflight_reads` | the authorities a list too short to cross a limit loads | `mega-evm2/tests/authorization_preflight.rs` |
-| `modexp_formula_price` | ModExp's formula price charged before EIP-7823's bound | none in the engine: the evm2 fork runs upstream evm2's ModExp unchanged, and upstream's tests hold it |
+| Class                        | What the differential cannot see                                                                        | Engine test                                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reservoir_give_back`        | the new rule's credits, shares and pools                                                                | `mega-evm2/tests/give_back.rs`, `migration_checks.rs`, `diff/tests/give_back.rs`, and the regular-gas invariant on every gate case                      |
+| `deposit_history`            | a deposit's and a Mega System Transaction's history gas and bytes                                       | `mega-evm2/tests/deposit_history.rs`, `system_origin.rs`; for recorded blocks, `GATE block-satin`                                                       |
+| `oracle_read_before_charge`  | the read made and marked before `COLD_SLOAD_COST`, its warm base included                               | `mega-evm2/tests/oracle_reads.rs` (the mark at the compute before the 2,100, a read below the warm base, a looping caller stopped at the compute limit) |
+| `refusal_costs_nothing`      | the gas a refused read keeps                                                                            | `mega-evm2/tests/access_disabled_call.rs`, `access_disabled_delegate_read.rs`                                                                           |
+| `mst_packing_budgets`        | a Mega System Transaction held to the packing budgets (no gate case reaches them)                       | `mega-evm2/tests/mst_packing.rs`                                                                                                                        |
+| `system_contract_deployment` | each deployment's installed code, kept nonce, balance and storage, the registry's seeding and migration | `mega-evm2/tests/block_lifecycle.rs`, `pre_block_witness.rs`; for recorded blocks, `GATE block-satin`                                                   |
+| `once_per_block_resolution`  | the resolution's own reads, and a transaction's cold first access to the registry                       | `mega-evm2/tests/block_lifecycle.rs`, `mandatory_read_errors.rs`; for recorded blocks, `GATE block-satin`                                               |
+| `auth_preflight_reads`       | the authorities a list too short to cross a limit loads                                                 | `mega-evm2/tests/authorization_preflight.rs`                                                                                                            |
+| `modexp_formula_price`       | ModExp's formula price charged before EIP-7823's bound                                                  | none in the engine: the evm2 fork runs upstream evm2's ModExp unchanged, and upstream's tests hold it                                                   |
 
 The `class=` counts are pinned like the others: `MAIN_EXPECT`, `SAMPLE_FUZZ_CLASS` and `FULL_FUZZ_CLASS` in `diff/scripts/common.sh`, and for the replay gate `count_expected.py` (an applied transaction no entry lists whose reference recorded no frame) plus `SAMPLE_REPLAY_RERUN_CLASS` and `FULL_REPLAY_RERUN_CLASS` in `common.sh`, the transactions the replay gate's rerun takes, which `gate_inputs` moves from `match` to `class`.
 
@@ -251,3 +254,17 @@ When a gate gains a new kind of check, add a fault for it.
 
 `.github/workflows/next.yml` checks this workspace and does not build the root one; its header says which job runs when and what each runs.
 It checks the evm2 fork out at the pin in `evm2-fork.env`; [`evm2-fork.md`](evm2-fork.md) says how to move that pin.
+Pull requests retain the sample differential gate.
+Every push to `cz/feat/satin-evm2` matching the workflow's path filter also runs the `full` job: the full corpus gate followed by its negative controls.
+Set the repository variable `MEGA_EVM2_CORPUS_URL` on `RealiCZ/mega-evm` to a release asset URL of `RealiCZ/mega-evm2-corpus`, such as `https://github.com/RealiCZ/mega-evm2-corpus/releases/download/<tag>/<archive>`.
+The job falls back to a secret of the same name when the variable is empty.
+A missing URL fails integration pushes with an error; scheduled and manual runs retain the notice and successful skip.
+The schedule and manual trigger remain available, but GitHub requires the workflow on the default branch for those triggers to work.
+
+The `mega-eest` job runs on pull requests and pushes matching the same path filter.
+`scripts/mega-eest-gate.sh` clones the revision in `mega-eest.env` into a fresh temporary directory, links its vendor paths to this checkout and the adjacent evm2 fork, and builds only adapter (b) plus the suite's consumer with this checkout's toolchain.
+It runs every reviewed slice case and the deliberately wrong expectation, verifies the adapter's implementation and fork commits, and fails on any failed, unsupported, missing or errored case, or a negative control that does not fail at the expected field.
+The three summary lines report the implementation and suite commits, case totals, and the negative verdict.
+`MEGA_EEST_REPO` can override the clone source with another URL or a local repository; the suite revision remains pinned and the source checkout is only read.
+Build artifacts are cached under `${CARGO_TARGET_DIR:-next/target}/mega-eest`; the temporary clone and reports are removed on exit.
+The public suite needs no additional repository variable or secret.
