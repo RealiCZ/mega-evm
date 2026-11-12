@@ -15,19 +15,25 @@ name: next
 #             next/diff/scripts/**, next/scripts/**, next/rust-toolchain.toml, or
 #             this file.
 #             Runs next/diff/scripts/check-reference.sh sample.
-# full      — daily and workflow_dispatch. Downloads MEGA_EVM2_CORPUS_URL
+# full      — pushes to cz/feat/satin-evm2, daily and workflow_dispatch.
+#             Downloads MEGA_EVM2_CORPUS_URL
 #             (repository variable, else secret of the same name) and runs
-#             gate.sh full, then controls.sh full. Succeeds with a notice when
-#             the URL is unset.
+#             gate.sh full, then controls.sh full. A missing URL fails integration
+#             pushes; daily and manual runs succeed with a notice when it is unset.
+# mega-eest — every pull request and push that touches next/** or this file.
+#             Runs the reviewed Mega EEST slice and its wrong-expectation control
+#             on adapter (b), built from this checkout and the pinned evm2 fork.
+#             The suite revision is pinned in next/mega-eest.env.
 # coverage  — every pull request and push that touches next/** or this file, and daily.
 #             Runs next/scripts/coverage.sh (branch coverage of the engine crates under
 #             the unit tests and the sample gate) and uploads lcov.info to Codecov with
 #             the flag `next`. The upload never fails the job (a fork has no token).
 # mutants   — pull requests: cargo-mutants on the engine lines the pull request changes.
-#             Daily and workflow_dispatch: the full engine, sharded. The oracle is the
+#             Pushes to cz/feat/satin-evm2, daily and workflow_dispatch: the full
+#             engine, sharded. mutants-plan selects the shards. The oracle is the
 #             unit tests plus the sample gate (next/scripts/mutants.sh); a surviving or
 #             timed-out mutant that diff/mutants/suppressions.toml does not list fails
-#             the pull request run; the daily run reports and does not fail.
+#             the pull request run; the full-engine runs report and do not fail.
 
 on:
   pull_request:
@@ -168,7 +174,7 @@ jobs:
         run: bash next/diff/scripts/check-reference.sh sample
 
   full:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     defaults:
@@ -207,6 +213,10 @@ jobs:
             url="${CORPUS_URL_SECRET:-}"
           fi
           if [ -z "$url" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/cz/feat/satin-evm2" ]; then
+              echo "::error::MEGA_EVM2_CORPUS_URL must be set as a repository variable or secret for integration pushes."
+              exit 1
+            fi
             echo "NOTICE: MEGA_EVM2_CORPUS_URL is not set as a repository variable or secret. Skipping the full corpus gate."
             exit 0
           fi
@@ -244,6 +254,36 @@ jobs:
           MEGA_EVM2_CORPUS_DIR=$corpus bash next/diff/scripts/gate.sh full
           echo "Running controls.sh full on the downloaded corpus."
           MEGA_EVM2_CORPUS_DIR=$corpus bash next/diff/scripts/controls.sh full
+
+  mega-eest:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: mega-evm
+    steps:
+      - name: Checkout mega-evm
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mega-evm
+          persist-credentials: false
+
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
+
+      - name: Install the next/ toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          rust-src-dir: mega-evm/next
+          rustflags: ""
+          cache: true
+          cache-shared-key: next-mega-eest
+
+      - name: Run the Mega EEST slice and its negative control
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
+        run: bash next/scripts/mega-eest-gate.sh
 
   coverage:
     if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'schedule'
@@ -304,7 +344,7 @@ jobs:
           verbose: true
 
   mutants-plan:
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
     runs-on: ubuntu-24.04
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
@@ -378,7 +418,7 @@ jobs:
       - name: Score and gate
         # Fail closed: the scorer refuses a results directory that exists without
         # caught.txt and missed.txt, and an unsuppressed survivor or timeout fails.
-        # The daily run reports only.
+        # Full-engine runs (integration pushes, daily and manual) report only.
         run: |
           rc=0
           python3 -I scripts/mutation_gate.py report \
