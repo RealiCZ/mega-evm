@@ -164,6 +164,7 @@ mod tests {
         let mut reads = BlockHashReads::default();
         assert!(reads.is_empty());
         reads.record(Word::from(9), b);
+        assert!(!reads.is_empty());
         reads.record(Word::from(7), a);
         reads.record(Word::from(9), b);
         assert_eq!(reads.served(), [(Word::from(7), a), (Word::from(9), b)]);
