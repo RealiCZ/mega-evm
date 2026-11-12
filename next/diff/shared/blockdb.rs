@@ -123,6 +123,9 @@ pub struct Block {
     pub number: u64,
     pub chain_id: u64,
     pub header: Header,
+    /// The parent block's timestamp, as the recording holds it (`parent_timestamp`); `None` when
+    /// the recording has none.
+    pub parent_timestamp: Option<u64>,
     pub txs: Vec<Value>,
     pub receipts: Vec<Value>,
     pub db: BlockDb,
@@ -301,6 +304,7 @@ pub fn load_block(path: &str, set: &str) -> Block {
         number: v["number"].as_u64().expect("number"),
         chain_id: v["chain_id"].as_u64().expect("chain id"),
         header,
+        parent_timestamp: v.get("parent_timestamp").filter(|x| !x.is_null()).map(u64v),
         txs: v["txs"].as_array().expect("txs").clone(),
         receipts: v["receipts"].as_array().expect("receipts").clone(),
         db,

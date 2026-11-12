@@ -403,21 +403,6 @@ fn outcome_json(s: &Scenario, o: &MegaTransactionOutcome, rec: &WitnessRecord) -
     })
 }
 
-/// Commits a transaction's state the way a node's database does at the end of the transaction:
-/// an account the transaction touched and that is empty under EIP-161 (no balance, nonce or
-/// code) is deleted. The in-memory `CacheDB` instead keeps such an account as existing, so the
-/// next transaction of a block would see an account a node does not have. The accounts to delete
-/// are marked self-destructed, which `CacheDB` stores as not existing with its storage cleared;
-/// untouched and non-empty accounts commit as they are.
-pub fn commit_like_a_node<DB: DatabaseCommit>(db: &mut DB, mut state: revm::state::EvmState) {
-    for account in state.values_mut() {
-        if account.is_touched() && account.is_empty() {
-            account.mark_selfdestruct();
-        }
-    }
-    db.commit(state);
-}
-
 fn run_once(s: &Scenario, inspected: bool) -> (Value, Vec<Value>) {
     let record = Rc::new(RefCell::new(WitnessRecord::default()));
     let env = envs(s);
@@ -426,7 +411,9 @@ fn run_once(s: &Scenario, inspected: bool) -> (Value, Vec<Value>) {
     evm.set_inspector_enabled(inspected);
     record_start_ledger_settlements(evm.ctx_mut());
     // The transactions of the block that ran before `s`: each runs on this EVM and its outcome is
-    // committed; a refused one leaves nothing. What they changed is carried into the record.
+    // committed; a refused one leaves nothing. What they changed is carried into the record. The
+    // database commits as a node's does: an account a transaction touched and left empty under
+    // EIP-161 is removed (`MemoryDatabase`'s commit).
     let mut block_accounts = serde_json::Map::new();
     let mut block_storage = serde_json::Map::new();
     for p in &s.prior {
@@ -434,7 +421,7 @@ fn run_once(s: &Scenario, inspected: bool) -> (Value, Vec<Value>) {
             let (a, st) = changed(&o);
             block_accounts.extend(a);
             block_storage.extend(st);
-            commit_like_a_node(evm.ctx_mut().db_mut(), o.state.clone());
+            evm.ctx_mut().db_mut().commit(o.state.clone());
         }
         take_start_ledger_settlements(evm.ctx_mut());
         *evm.inspector_mut() = Frames::default();

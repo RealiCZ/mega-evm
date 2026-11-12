@@ -73,14 +73,13 @@ fn returned(gas_used: u64, deployed: Address, error: &[u8]) -> Vec<u8> {
 /// Whether `msg` is a keyless deployment the engine dispatches (`SATIN-ICPT-006`): a CALL of
 /// KeylessDeploy at depth 0 with `keylessDeploy`'s selector whose arguments decode as
 /// `(bytes, uint256)`; one whose arguments do not decode runs KeylessDeploy's bytecode, charged no
-/// overhead. Under the reference's rule (comparison only) the selector alone decides.
+/// overhead.
 pub fn is_dispatched(evm: &Evm<'_, MegaTypes>, msg: &Message<MegaTypes>) -> bool {
     msg.depth == 0 &&
         msg.call_target == KEYLESS &&
         msg.kind == MessageKind::Call &&
         evm.message_input(msg).get(..4) == Some(&selector()[..]) &&
-        (decode_call(evm.message_input(msg)).is_some() ||
-            crate::under_reference_rule(evm.ext(), crate::ReferenceRule::KeylessSelectorOnly))
+        decode_call(evm.message_input(msg)).is_some()
 }
 
 /// The `before` message hook at depth 0.
@@ -206,11 +205,9 @@ fn run(gas: &mut Gas, state: &mut InterpreterState<'_, '_, MegaTypes>) -> Result
         };
     }
     gas.spend(OVERHEAD)?;
-    // Only a call whose arguments decode is dispatched; the reference's rule dispatches by the
-    // selector alone (comparison only), and then refuses the rest here.
-    let Some((raw, override_gas)) = decode_call(state.input()) else {
-        refuse!(err("MalformedEncoding()", &[]))
-    };
+    // Only a call whose arguments decode is dispatched (`is_dispatched`).
+    let (raw, override_gas) =
+        decode_call(state.input()).expect("a dispatched call's arguments decode");
     let signed = match decode_tx(&raw) {
         Ok(s) => s,
         Err(e) => refuse!(e),

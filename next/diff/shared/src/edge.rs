@@ -45,8 +45,7 @@
 //!   back in the first frame, and the reservoir it returns unwinds the transaction's spill.
 //! - a creation transaction whose created address is the block beneficiary: a creation has no
 //!   recipient, so it is not detained from its start (its sender still is);
-//! - `SLOTNUM` returned as the output: it pushes zero, which the class `slotnum_zero` accepts until
-//!   the reference makes the same change.
+//! - `SLOTNUM` returned as the output: it pushes zero (`SATIN-BASE-005`).
 #![allow(dead_code)]
 use super::{
     A, Account, Asm, Auth, B, BELOW_CAP, BLOCK_GAS_LIMIT, D, EMPTY, IDENTITY, KEYLESS, Limits,

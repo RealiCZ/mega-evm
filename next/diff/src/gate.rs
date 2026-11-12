@@ -12,10 +12,9 @@
 //! Accepted differences are listed by case (`[[difference]]`, `[[replay_difference]]`) or, for a
 //! class the owner signed off whose shape the gate checks in full, enabled by name (`[[class]]`,
 //! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUP_STACK_LABEL`],
-//! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`SLOTNUM_ZERO`],
-//! [`RESERVOIR_GIVE_BACK`], [`DEPOSIT_HISTORY`], [`ORACLE_READ_BEFORE_CHARGE`],
-//! [`REFUSAL_COSTS_NOTHING`], [`KEYLESS_DECODED_DISPATCH`], [`HINT_WITH_VALUE`],
-//! [`MST_PACKING_BUDGETS`], [`ORACLE_NO_SERVICE`], [`SYSTEM_CONTRACT_DEPLOYMENT`]).
+//! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`RESERVOIR_GIVE_BACK`],
+//! [`DEPOSIT_HISTORY`], [`ORACLE_READ_BEFORE_CHARGE`], [`REFUSAL_COSTS_NOTHING`],
+//! [`MST_PACKING_BUDGETS`], [`SYSTEM_CONTRACT_DEPLOYMENT`], [`ONCE_PER_BLOCK_RESOLUTION`]).
 use mega_evm2::ReferenceRule;
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
@@ -198,14 +197,6 @@ pub const AUTH_PREFLIGHT_READS: &str = "auth_preflight_reads";
 /// inspected, has no difference from the reference at all ([`scenario_verdict`]).
 pub const MODEXP_FORMULA_PRICE: &str = "modexp_formula_price";
 
-/// `SLOTNUM` pushes zero in the engine, the reference's slot number in the reference (the other
-/// implementation has not made the decided change yet). What the pushed value changes is the
-/// program's to decide, so the shape is checked by running the case again on the engine with
-/// `SLOTNUM` pushing the block environment's slot number, as the reference does
-/// ([`ReferenceRule::SlotNumber`]): the case is of the class when that run, plain and inspected,
-/// has no difference from the reference at all ([`scenario_verdict`]).
-pub const SLOTNUM_ZERO: &str = "slotnum_zero";
-
 /// Every give-back of state and history gas credits a reservoir and never regular gas, and the
 /// state an opcode or a keyless deployment creates takes its legacy share from regular gas first
 /// (`SATIN-HIST-012`, `SATIN-POOL-014`, `SATIN-STATE-012`); the reference still credits a give-back
@@ -227,7 +218,8 @@ pub const SLOTNUM_ZERO: &str = "slotnum_zero";
 /// all. The block executor gate runs a block that differs again, whole, under this rule: the block
 /// is of the class when that run, plain and inspected, has no difference from any of the
 /// reference's rows (its transactions, its counters and its post-state). Neither runs a case
-/// again for the other three classes of [`RERUN_CLASSES`], and a case of one there differs.
+/// again for a class of [`RERUN_CLASSES`] that [`REPLAY_RERUN_CLASSES`] does not list, and a case
+/// of one there differs.
 pub const RESERVOIR_GIVE_BACK: &str = "reservoir_give_back";
 
 /// A deposit and a system-originated transaction pay history gas as any transaction does (their
@@ -257,28 +249,10 @@ pub const ORACLE_READ_BEFORE_CHARGE: &str = "oracle_read_before_charge";
 /// ([`ReferenceRule::RefusalAfterStaticGas`]).
 pub const REFUSAL_COSTS_NOTHING: &str = "refusal_costs_nothing";
 
-/// A `keylessDeploy` call is recognized only once its arguments decode; one whose arguments do not
-/// runs KeylessDeploy's bytecode and pays no overhead (`SATIN-ICPT-006`); the reference charges
-/// the overhead and answers `MalformedEncoding()`. Checked by running the case again with the
-/// reference's dispatch ([`ReferenceRule::KeylessSelectorOnly`]).
-pub const KEYLESS_DECODED_DISPATCH: &str = "keyless_decoded_dispatch";
-
-/// A `sendHint` call is admitted whether it carries value or not (`SATIN-ORCL-006`), a
-/// transaction's own forwarded its first frame's whole gas; the reference does not admit one that
-/// carries value. Checked by running the case again with the reference's
-/// condition ([`ReferenceRule::HintValueRefused`]).
-pub const HINT_WITH_VALUE: &str = "hint_with_value";
-
 /// A Mega System Transaction is held to the block's data-size, KV-update and state-growth budgets
 /// (`SATIN-BLK-007`); the reference exempts it. Only a block reaches it; checked by running the
 /// block again with the exemption ([`ReferenceRule::MstPackingExempt`]).
 pub const MST_PACKING_BUDGETS: &str = "mst_packing_budgets";
-
-/// The oracle service is asked for no read of a deposit, a Mega System Transaction or a system
-/// call, which push the slot's value on the chain (`SATIN-ORCL-005`); the reference asks it for a
-/// deposit's and a Mega System Transaction's reads. Checked by running the case again with the
-/// reference's rule ([`ReferenceRule::OracleAsksDepositsAndMsts`]).
-pub const ORACLE_NO_SERVICE: &str = "oracle_no_service";
 
 /// Every block deploys the system contracts before its transactions (`SATIN-SYSC-003`,
 /// `SATIN-REG-008`): a missing one is installed, one whose code differs has its code replaced, a
@@ -298,21 +272,17 @@ pub const SYSTEM_CONTRACT_DEPLOYMENT: &str = "system_contract_deployment";
 pub const ONCE_PER_BLOCK_RESOLUTION: &str = "once_per_block_resolution";
 
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 16] = [
+const CLASSES: [&str; 12] = [
     HALTED_FIRST_FRAME,
     INVALID_IMMEDIATE_LABEL,
     DUP_STACK_LABEL,
     AUTH_PREFLIGHT_READS,
     MODEXP_FORMULA_PRICE,
-    SLOTNUM_ZERO,
     RESERVOIR_GIVE_BACK,
     DEPOSIT_HISTORY,
     ORACLE_READ_BEFORE_CHARGE,
     REFUSAL_COSTS_NOTHING,
-    KEYLESS_DECODED_DISPATCH,
-    HINT_WITH_VALUE,
     MST_PACKING_BUDGETS,
-    ORACLE_NO_SERVICE,
     SYSTEM_CONTRACT_DEPLOYMENT,
     ONCE_PER_BLOCK_RESOLUTION,
 ];
@@ -581,16 +551,12 @@ pub fn candidate_fault(case: &str, plain: &mut Value, inspected: &mut Value) {
 /// The classes checked by running the case again on the engine under the reference's rule, each
 /// with that rule. The give-back rule comes last: a case that meets it and another class's change
 /// is that other class's ([`rerun_class`]).
-pub const RERUN_CLASSES: [(&str, ReferenceRule); 11] = [
-    (SLOTNUM_ZERO, ReferenceRule::SlotNumber),
+pub const RERUN_CLASSES: [(&str, ReferenceRule); 7] = [
     (AUTH_PREFLIGHT_READS, ReferenceRule::ShortListUnsimulated),
     (MODEXP_FORMULA_PRICE, ReferenceRule::ModexpBoundFirst),
     (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
     (ORACLE_READ_BEFORE_CHARGE, ReferenceRule::OracleColdSkip),
     (REFUSAL_COSTS_NOTHING, ReferenceRule::RefusalAfterStaticGas),
-    (KEYLESS_DECODED_DISPATCH, ReferenceRule::KeylessSelectorOnly),
-    (HINT_WITH_VALUE, ReferenceRule::HintValueRefused),
-    (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
     (ONCE_PER_BLOCK_RESOLUTION, ReferenceRule::RegistryReadPerTransaction),
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
@@ -599,9 +565,8 @@ pub const RERUN_CLASSES: [(&str, ReferenceRule); 11] = [
 /// rule, and the block executor gate by running a block again, each with that rule: those recorded
 /// blocks reach, and, for blocks, the packing budgets of a Mega System Transaction, which only a
 /// block has.
-pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 5] = [
+pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 4] = [
     (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
-    (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
     (MST_PACKING_BUDGETS, ReferenceRule::MstPackingExempt),
     (ONCE_PER_BLOCK_RESOLUTION, ReferenceRule::RegistryReadPerTransaction),
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
@@ -610,9 +575,8 @@ pub const REPLAY_RERUN_CLASSES: [(&str, ReferenceRule); 5] = [
 /// The classes the block executor gate checks by running a block again: those of
 /// [`REPLAY_RERUN_CLASSES`], and the system contracts' deployment, which only a block's pre-block
 /// sequence makes.
-pub const BLOCK_RERUN_CLASSES: [(&str, ReferenceRule); 6] = [
+pub const BLOCK_RERUN_CLASSES: [(&str, ReferenceRule); 5] = [
     (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
-    (ORACLE_NO_SERVICE, ReferenceRule::OracleAsksDepositsAndMsts),
     (MST_PACKING_BUDGETS, ReferenceRule::MstPackingExempt),
     (ONCE_PER_BLOCK_RESOLUTION, ReferenceRule::RegistryReadPerTransaction),
     (SYSTEM_CONTRACT_DEPLOYMENT, ReferenceRule::NoPreBlockDeployment),

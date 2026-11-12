@@ -134,8 +134,6 @@ pub fn hint_before(
         m.call_target != crate::ORACLE ||
         !matches!(m.kind, MessageKind::Call | MessageKind::StaticCall) ||
         !is_send_hint(evm.message_input(m)) ||
-        (!m.value.is_zero() &&
-            crate::under_reference_rule(evm.ext(), crate::ReferenceRule::HintValueRefused)) ||
         m.gas_limit == 0 ||
         (m.depth as usize).checked_sub(1).is_some_and(|c| refuses(&evm.ext().mechanisms, c))
     {

@@ -28,21 +28,21 @@ SAMPLE_FUZZ_BATCHES=(
   pairs:14:1..=330:330 blocks:15:1..=150:452
 )
 
-# The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, thirteen
-# of them listed differences and the rest of the differing ones accepted by a class
+# The counts of the main summary: the hand-written scenarios plus the default fuzz seeds, ten of
+# them listed differences and the rest of the differing ones accepted by a class
 # (`known-differences.toml`). This is the one place that states them. Adding a scenario or a known
 # difference means changing it here (and the data under `next/diff/data`, see `data/README.md`);
 # `gate-lib.sh`, `check-reference.sh` and `regen-reference.sh` read it.
-MAIN_EXPECT="total=4257 match=1904 known=10 class=2343"
+MAIN_EXPECT="total=4257 match=1917 known=10 class=2330"
 # The fuzz seeds the accepted classes take, summed over the batches of the sample and of the full
 # gate (mode 11's first-frame window, mode 14's pairs and mode 15's blocks, `halted_first_frame`;
 # mode 14's pairs, `modexp_formula_price`; mode 14's pairs and mode 4's seeds,
 # `auth_preflight_reads`; every mode's seeds that give state or history gas back or create state,
-# `reservoir_give_back`; every mode's deposits, `deposit_history`; the Oracle reads, refused reads,
-# keyless calls and hints of the generators, the classes of those decisions; the transactions that
-# read the registry, `once_per_block_resolution`); every other seed must match.
-SAMPLE_FUZZ_CLASS=2201
-FULL_FUZZ_CLASS=24956
+# `reservoir_give_back`; every mode's deposits, `deposit_history`; the Oracle reads and refused
+# reads of the generators, the classes of those decisions; the transactions that read the
+# registry, `once_per_block_resolution`); every other seed must match.
+SAMPLE_FUZZ_CLASS=2198
+FULL_FUZZ_CLASS=24865
 # The replay transactions the classes the replay gate runs again for take (`gate::REPLAY_RERUN_CLASSES`:
 # `reservoir_give_back`, and `deposit_history` for every recorded deposit), in the sample and in the
 # full gate. `count_expected.py` counts them among the applied transactions (`match`), as it counts
