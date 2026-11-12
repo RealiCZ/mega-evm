@@ -15,6 +15,30 @@ use evm2::{TxResult, registry::HandlerResult};
 use std::{sync::Arc, vec::Vec};
 
 /// The node's oracle service.
+///
+/// What a block builder's service must do, which the engine does not do for it:
+/// - **Interior mutability behind `&self`.** A hint may change the answers that follow it, and both
+///   calls take `&self`.
+/// - **One handle per block session.** The engine tells the service nothing about which execution
+///   asks or hints: `answer` is called at every read of every attempt (dropped and repeated ones
+///   included), and `hint` at every admitted hint of every execution. A handle that stays on its
+///   session's thread needs only a `Cell` or a `RefCell`; a `Mutex` or atomics are needed only for
+///   node state that several handles share behind it.
+/// - **The builder marks the attempts.** The builder makes each `execute_candidate` call, so it
+///   tells its handle where an attempt begins and ends.
+/// - **Answers pinned for a re-execution.** A candidate executed again after the Mega System
+///   Transaction that persists its values (see [`OracleObserver`]) must be answered the values it
+///   persisted: a service that answers, say, the time of each ask would answer a new value, ask for
+///   another Mega System Transaction, and never let the transaction in.
+/// - **Hints outside any attempt.** Hints also arrive from the pre-block system calls (during
+///   `start_block`, before the builder holds the session), from deposits and Mega System
+///   Transactions (whose reads are never answered), and again from every re-execution; the service
+///   must accept them.
+///
+/// The trait does not require `Send` or `Sync`, as [`crate::salt::SaltSnapshot`] does not: a
+/// session and its services are built on the thread that runs them, and a builder whose service is
+/// thread-safe clones its concrete `Arc` into each thread and turns it into an
+/// `Arc<dyn OracleService>` there. Bounds would shut out a single-threaded guest.
 pub trait OracleService {
     /// The service's value for the Oracle's `slot`, asked at every Oracle read that asks it, each
     /// time it is made (`SATIN-ORCL-002`), so two reads of one slot may be answered two values.
@@ -35,11 +59,30 @@ pub trait OracleService {
 /// An observer of the Oracle accesses of each execution: each attempt of a block session's
 /// transactions, each of its pre-block system calls, and each transaction a single transaction's
 /// EVM executes to an outcome.
+///
+/// **Pairing a record with a candidate.** A block session hands over an attempt's record during the
+/// [`execute_candidate`](crate::block::BlockSession::execute_candidate) call that ran it, once the
+/// attempt has ended and before the call returns: the record of a candidate is the one handed over
+/// during the call that returned it, and an attempt that returned an error is handed over as not
+/// executed. The index in the boundary does not identify a candidate: a candidate executed again,
+/// or another one executed before it is committed, carries the same index, and a session that
+/// executes for another one numbers by its own commits.
+///
+/// **One observer per session.** Connect each block session to its own observer (another
+/// `Arc`). The boundary carries no tag naming the session: an observer object is already one, and
+/// it can hold whatever the caller needs to know about its session; a tag would add a field to
+/// every boundary for the case an observer per session covers.
+///
+/// **Execute again after a Mega System Transaction.** A candidate executed before a Mega System
+/// Transaction that writes a slot it read must be executed again after it before it is committed:
+/// the commit checks the block, the room and the sender, not the Oracle slots the candidate read,
+/// and the candidate's reads, gas and state were computed over the slot's old value.
+///
+/// The trait does not require `Send` or `Sync` (see [`OracleService`]).
 pub trait OracleObserver {
     /// One execution's accesses, in execution order, handed over once it has ended, so that every
     /// write a revert took back is already gone. A block session hands over every attempt, a
-    /// candidate the builder then drops or executes again included: the attempt it commits is the
-    /// last one handed over at that index before the commit.
+    /// candidate the builder then drops or executes again included.
     fn observe(&self, execution: OracleExecution<'_>);
 }
 
@@ -56,25 +99,53 @@ pub struct OracleExecution<'a> {
 pub enum OracleBoundary {
     /// A block's pre-block system call to `target`.
     SystemCall { target: Address },
-    /// A transaction. `index` is its index in the block, the number of transactions the session
-    /// committed before it (a single transaction's EVM numbers from zero the transactions it
-    /// executed to an outcome). `executed` is whether it has an outcome — the block session's
-    /// candidate, which the block includes once it is committed — or none: refused, or failed with
-    /// an error, nothing of it included and none of its writes reported (the reads it made before
-    /// the error are kept). Only a block session hands over a transaction without an outcome; a
-    /// single transaction's EVM hands over none: its caller has the error.
+    /// A transaction. In a block session `index` is the number of transactions the executing
+    /// session had committed when the attempt began, the index the transaction takes if it is
+    /// committed next (a single transaction's EVM numbers from zero the transactions it executed
+    /// to an outcome). `executed` is whether the attempt returned a candidate — an outcome, which
+    /// the block includes once the builder commits it — or not: refused, or failed with an error,
+    /// nothing of it included and none of its writes reported (the reads it made before the error
+    /// are kept). Only a block session hands over a transaction without an outcome; a single
+    /// transaction's EVM hands over none: its caller has the error.
     Transaction { index: usize, executed: bool },
 }
 
 /// An access to the Oracle's storage.
+///
+/// Each read carries what a builder needs to decide it on its own (`SATIN-ORCL-012`,
+/// `SATIN-ORCL-013`), with no look at the writes:
+/// - a pushed read with `own`: `value` must equal `held`, or the transaction is left out; nothing
+///   is persisted for it (a node replaying the block pushes the transaction's own write there);
+/// - a pushed read without `own`: the slot must hold `value` before the transaction, so a served
+///   value that differs from `held` is persisted before it; all such reads of one slot must agree,
+///   or the transaction is left out;
+/// - a read that pushed nothing asks nothing of the slot's value.
+///
+/// The writes that stand are reported as well, in their place, for a builder that wants them; the
+/// reads do not depend on them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OracleAccess {
-    /// An `SLOAD` in the Oracle's own frame (`SATIN-ORCL-002`): the value it pushes, whether the
-    /// service gave that value, and whether it was pushed. A read whose frame cannot pay its cold
-    /// access, or is stopped at gas detention's crossing, is made and pushes nothing
-    /// (`SATIN-ORCL-004`): `pushed` is `false`, and `value` the value the read would have pushed.
-    /// A read is kept whatever its frame does afterwards.
-    Read { slot: U256, value: U256, served: bool, pushed: bool },
+    /// An `SLOAD` in the Oracle's own frame (`SATIN-ORCL-002`). A read whose frame cannot pay its
+    /// cold access, or is stopped at gas detention's crossing, is made and pushes nothing
+    /// (`SATIN-ORCL-004`). A read is kept whatever its frame does afterwards, with what it saw at
+    /// the moment it was made.
+    Read {
+        slot: U256,
+        /// The value the read pushed: the service's answer when it gave one, else `held`; for a
+        /// read that pushed nothing, the value it would have pushed.
+        value: U256,
+        /// The value the slot held at the read, through the journal: the value a node with no
+        /// service pushes there, a write of the execution's own in effect included.
+        held: U256,
+        /// Whether `held` is a write of this execution still in effect at the read: one whose
+        /// frame, and every frame above it, had not failed by then. Without one, `held` is the
+        /// value the slot held before the execution.
+        own: bool,
+        /// Whether the service gave `value` (also when it equals `held`).
+        served: bool,
+        /// Whether the read pushed a value: its cold access was paid.
+        pushed: bool,
+    },
     /// An `SSTORE` to the Oracle's storage that completed and stands, one that writes the value the
     /// slot holds included: one whose frame, or any frame above it, the transaction included,
     /// failed is not reported. A block's pre-block deployment of the Oracle is no execution and is
@@ -82,7 +153,8 @@ pub enum OracleAccess {
     Write { slot: U256, value: U256 },
 }
 
-/// The oracle service and observer an EVM is connected to; both absent by default.
+/// The oracle service and observer an EVM is connected to; both absent by default. Neither `Send`
+/// nor `Sync`, as the traits do not require it (see [`OracleService`]).
 #[derive(Clone, Default)]
 pub struct OracleServices {
     pub service: Option<Arc<dyn OracleService>>,
@@ -198,10 +270,15 @@ impl<S: OracleService> OracleService for RecordingOracle<S> {
 pub struct OracleState {
     services: OracleServices,
     accesses: Vec<OracleAccess>,
-    /// The index the next transaction's boundary carries.
+    /// The running execution's writes in effect, counted by slot (a slot without one has no
+    /// entry): exactly the writes in `accesses`, which a failed frame's undo takes out of both.
+    live: HashMap<U256, u32>,
+    /// The index the next transaction's boundary carries in a single transaction's EVM.
     index: usize,
-    /// A block session's attempt is running whose boundary is not delivered yet.
-    attempt: bool,
+    /// A block session hands its executions over itself, once each has ended
+    /// (`BlockSession::execute_candidate`); a single transaction's EVM hands each transaction over
+    /// at its outcome.
+    session: bool,
 }
 
 impl OracleState {
@@ -211,6 +288,11 @@ impl OracleState {
 
     pub const fn services(&self) -> &OracleServices {
         &self.services
+    }
+
+    /// The EVM is a block session's, which hands its executions over itself.
+    pub(crate) const fn hand_over_by_session(&mut self) {
+        self.session = true;
     }
 
     /// The service's answer for `slot`, `None` without a service.
@@ -236,10 +318,12 @@ impl OracleState {
         self.services.observer.is_some()
     }
 
+    /// Records a read of `slot` that pushed (or would have pushed) `value` over the slot's `held`.
     #[inline]
-    pub(crate) fn read(&mut self, slot: U256, value: U256, served: bool, pushed: bool) {
+    pub(crate) fn read(&mut self, slot: U256, value: U256, held: U256, served: bool, pushed: bool) {
         if self.observing() {
-            self.accesses.push(OracleAccess::Read { slot, value, served, pushed });
+            let own = self.live.contains_key(&slot);
+            self.accesses.push(OracleAccess::Read { slot, value, held, own, served, pushed });
         }
     }
 
@@ -247,6 +331,7 @@ impl OracleState {
     #[inline]
     pub(crate) fn write(&mut self, slot: U256, value: U256) {
         if self.observing() {
+            *self.live.entry(slot).or_default() += 1;
             self.accesses.push(OracleAccess::Write { slot, value });
         }
     }
@@ -265,46 +350,52 @@ impl OracleState {
         }
         let mut kept = mark;
         for i in mark..self.accesses.len() {
-            if matches!(self.accesses[i], OracleAccess::Read { .. }) {
-                self.accesses.swap(kept, i);
-                kept += 1;
+            match self.accesses[i] {
+                OracleAccess::Read { .. } => {
+                    self.accesses.swap(kept, i);
+                    kept += 1;
+                }
+                OracleAccess::Write { slot, .. } => {
+                    if let Some(n) = self.live.get_mut(&slot) {
+                        *n -= 1;
+                        if *n == 0 {
+                            self.live.remove(&slot);
+                        }
+                    }
+                }
             }
         }
         self.accesses.truncate(kept);
     }
 
-    /// A transaction or a system call begins: nothing of an earlier one is kept.
+    /// A transaction, a system call or a block session's attempt begins: nothing of an earlier one
+    /// is kept.
     pub(crate) fn begin(&mut self) {
         self.accesses.clear();
+        self.live.clear();
     }
 
-    /// A block session's attempt of the transaction at `index` begins.
-    pub(crate) fn begin_attempt(&mut self, index: usize) {
-        self.accesses.clear();
-        self.index = index;
-        self.attempt = true;
-    }
-
-    /// A block session's attempt has ended: an attempt whose transaction reached no outcome is
-    /// delivered as not executed, none of its writes standing (an executed one was delivered at its
-    /// end).
-    pub(crate) fn end_attempt(&mut self) {
-        if self.attempt {
+    /// A block session's attempt of the transaction at `index` has ended, `executed` when it
+    /// returned a candidate: handed over, an attempt without one with none of its writes.
+    pub(crate) fn end_attempt(&mut self, index: usize, executed: bool) {
+        if !executed {
             self.undo_writes(0);
-            let index = self.index;
-            self.deliver(OracleBoundary::Transaction { index, executed: false });
         }
+        self.deliver(OracleBoundary::Transaction { index, executed });
     }
 
-    /// A transaction's outcome is decided: a failed transaction's writes are all taken back, and
-    /// its accesses are delivered as executed.
+    /// A transaction's outcome is decided: a failed transaction's writes are all taken back. A
+    /// single transaction's EVM hands its accesses over now, as executed; a block session hands
+    /// them over once the attempt has ended ([`Self::end_attempt`]).
     pub(crate) fn end_transaction(&mut self, success: bool) {
         if !success {
             self.undo_writes(0);
         }
-        let index = self.index;
-        self.deliver(OracleBoundary::Transaction { index, executed: true });
-        self.index += 1;
+        if !self.session {
+            let index = self.index;
+            self.deliver(OracleBoundary::Transaction { index, executed: true });
+            self.index += 1;
+        }
     }
 
     /// A pre-block system call to `target` has ended (`success`: its frame succeeded).
@@ -316,17 +407,16 @@ impl OracleState {
     }
 
     fn deliver(&mut self, boundary: OracleBoundary) {
-        self.attempt = false;
         if let Some(observer) = &self.services.observer {
             observer.observe(OracleExecution { boundary, accesses: &self.accesses });
         }
-        self.accesses.clear();
+        self.begin();
     }
 }
 
-/// A transaction handler's result, its outcome decided: delivered to the observer as executed. A
-/// result without an outcome (an error) delivers nothing here; a block session delivers its
-/// attempt as not executed.
+/// A transaction handler's result, its outcome decided: a single transaction's EVM hands it over
+/// as executed. A result without an outcome (an error) is handed over by nothing here; a block
+/// session hands its attempt over as not executed.
 pub(crate) fn end_transaction(ext: &mut Lite, result: &HandlerResult<TxResult<MegaTypes>>) {
     if let Ok(r) = result {
         ext.oracle.end_transaction(r.status);

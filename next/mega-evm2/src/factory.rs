@@ -220,7 +220,10 @@ impl SatinFactory {
     /// value). Its live system address is resolved once, now, off the state it runs on, as a block
     /// resolves its own ([`Self::resolve_system_address`]), so a transaction is priced as in a
     /// block: none reads the registry for its classification. A caller that knows the block's
-    /// resolved address may set `Lite::system_address` instead.
+    /// resolved address may set `Lite::system_address` instead. A connected service is also handed
+    /// every hint the transaction admits, which an RPC call or an estimate pays nothing for: an RPC
+    /// caller that wants the service's answers without its hints wraps the service in an adapter
+    /// that keeps [`OracleService::hint`](crate::oracle::OracleService::hint)'s default.
     pub fn evm<'a>(
         &self,
         block: BlockEnv<MegaTypes>,

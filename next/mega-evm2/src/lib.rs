@@ -603,8 +603,8 @@ pub fn mega_sload(cx: _) -> Result {
         gas.spend(const { static_gas(op::SLOAD) } + additional_cold_cost)
     };
     // The observer sees the read whether or not its cold access was paid, a read that pushes
-    // nothing included (`OracleAccess::Read`).
-    state.host().ext_mut().oracle.read(key, value, answer.is_some(), charged.is_ok());
+    // nothing included, with the value the slot held (`OracleAccess::Read`).
+    state.host().ext_mut().oracle.read(key, value, load.value, answer.is_some(), charged.is_ok());
     charged?;
     stack.push(value)
 }

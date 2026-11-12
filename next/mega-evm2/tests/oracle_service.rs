@@ -100,8 +100,21 @@ impl Seen {
     }
 }
 
-fn read(value: u64, served: bool, pushed: bool) -> OracleAccess {
-    OracleAccess::Read { slot: U256::from(SLOT), value: U256::from(value), served, pushed }
+/// A read of `SLOT` that pushed (or would have pushed) `value` over the slot's `held`, which is
+/// not a write of the execution's own.
+fn read(value: u64, held: u64, served: bool, pushed: bool) -> OracleAccess {
+    let (slot, value, held) = (U256::from(SLOT), U256::from(value), U256::from(held));
+    OracleAccess::Read { slot, value, held, own: false, served, pushed }
+}
+
+/// `read` over a `held` that is a write of the execution's own in effect at the read.
+fn own(read: OracleAccess) -> OracleAccess {
+    match read {
+        OracleAccess::Read { slot, value, held, served, pushed, .. } => {
+            OracleAccess::Read { slot, value, held, own: true, served, pushed }
+        }
+        write => write,
+    }
 }
 
 fn write(value: u64) -> OracleAccess {
@@ -195,6 +208,30 @@ struct Call {
 
 fn oracle(input: Vec<u8>) -> Call {
     Call { to: ORACLE, value: 0, gas: None, input }
+}
+
+/// A call to `to` with no input.
+fn call_to(to: Address) -> Call {
+    Call { to, value: 0, gas: None, input: Vec::new() }
+}
+
+/// Code that makes one call of `op` (`STATICCALL` or `DELEGATECALL`, which carry no value) to `to`
+/// with `input`, copied from the code's tail to memory 0x400, and returns its success in word 0 and
+/// the first word of its return data in word 1.
+fn call_without_value(op: u8, to: Address, input: &[u8]) -> Vec<u8> {
+    const BODY: u8 = 49;
+    let len = (input.len() as u16).to_be_bytes();
+    // CODECOPY(0x400, BODY, len)
+    let mut code = vec![0x61, len[0], len[1], 0x61, 0x00, BODY, 0x61, 0x04, 0x00, 0x39];
+    // op(GAS, to, 0x400, len, 32, 32)
+    code.extend([0x60, 0x20, 0x60, 0x20, 0x61, len[0], len[1], 0x61, 0x04, 0x00, 0x73]);
+    code.extend_from_slice(to.as_slice());
+    code.extend([0x5a, op]);
+    // MSTORE(0, success); RETURN(0, 64)
+    code.extend([0x5f, 0x52, 0x60, 0x40, 0x5f, 0xf3]);
+    assert_eq!(code.len(), BODY as usize);
+    code.extend_from_slice(input);
+    code
 }
 
 #[derive(Clone, Copy)]
@@ -350,7 +387,7 @@ fn oracle_service_changing_answer_pushes_each_current_answer() {
     assert!(r.status, "{:?}", r.stop);
     assert_eq!((out(&r.output, 0), out(&r.output, 1)), (100, 101), "the values pushed");
     assert_eq!(service.calls(), [asked(Some(100)), asked(Some(101))]);
-    assert_eq!(seen.only(), [read(100, true, true), read(101, true, true)]);
+    assert_eq!(seen.only(), [read(100, ON_CHAIN, true, true), read(101, ON_CHAIN, true, true)]);
 }
 
 /// The Oracle's code for the warmth probe: reads slot 5 (when `read`) into word 0, then writes slot
@@ -381,7 +418,7 @@ fn oracle_service_none_falls_back_to_the_slot_and_leaves_it_warm() {
         if probe_reads {
             assert_eq!(out(&r.output, 0), ON_CHAIN, "the slot's value pushed");
             assert_eq!(service.calls(), [asked(None)]);
-            assert_eq!(seen.only(), [read(ON_CHAIN, false, true), write(ON_CHAIN)]);
+            assert_eq!(seen.only(), [read(ON_CHAIN, ON_CHAIN, false, true), write(ON_CHAIN)]);
         } else {
             assert_eq!(service.calls(), []);
         }
@@ -409,7 +446,7 @@ fn oracle_service_no_service_pushes_the_chains_values() {
         .map(|index| {
             (
                 OracleBoundary::Transaction { index, executed: true },
-                vec![read(ON_CHAIN, false, true)],
+                vec![read(ON_CHAIN, ON_CHAIN, false, true)],
             )
         })
         .collect::<Vec<_>>();
@@ -442,7 +479,7 @@ fn oracle_service_deposit_is_never_asked() {
     assert!(r.status, "{:?}", r.stop);
     assert_eq!(out(&r.output, 0), ON_CHAIN);
     assert_eq!(service.calls(), []);
-    assert_eq!(seen.only(), [read(ON_CHAIN, false, true)]);
+    assert_eq!(seen.only(), [read(ON_CHAIN, ON_CHAIN, false, true)]);
 }
 
 /// A Mega System Transaction's Oracle read asks the service nothing (`SATIN-ORCL-005`); the
@@ -460,7 +497,7 @@ fn oracle_service_mst_is_never_asked() {
     assert!(r.status, "{:?}", r.stop);
     assert_eq!(out(&r.output, 0), ON_CHAIN);
     assert_eq!(service.calls(), []);
-    assert_eq!(seen.only(), [read(ON_CHAIN, false, true)]);
+    assert_eq!(seen.only(), [read(ON_CHAIN, ON_CHAIN, false, true)]);
 }
 
 /// A block whose beacon-roots pre-block call reads the Oracle's slot 5 (`getSlot(5)`) and stores
@@ -509,7 +546,7 @@ fn oracle_service_system_call_is_never_asked() {
             (OracleBoundary::SystemCall { target: HISTORY_STORAGE }, vec![]),
             (
                 OracleBoundary::SystemCall { target: BEACON_ROOTS },
-                vec![read(ON_CHAIN, false, true)]
+                vec![read(ON_CHAIN, ON_CHAIN, false, true)]
             ),
         ]
     );
@@ -520,8 +557,27 @@ fn oracle_service_system_call_is_never_asked() {
     assert_eq!(service.calls(), [asked(Some(42))]);
     assert_eq!(
         seen.all()[2],
-        (OracleBoundary::Transaction { index: 0, executed: true }, vec![read(42, true, true)])
+        (
+            OracleBoundary::Transaction { index: 0, executed: true },
+            vec![read(42, ON_CHAIN, true, true)]
+        )
     );
+}
+
+/// The Oracle's code run by `DELEGATECALL` from another account reads that account's storage, in
+/// that account's frame: no Oracle read, so the service is not asked and the observer sees nothing.
+#[test]
+fn oracle_service_delegatecall_into_the_oracles_code_is_neither_asked_nor_observed() {
+    let service = answering(42);
+    let seen = Arc::new(Seen::default());
+    let mut state = db(Some(call_without_value(0xf4, ORACLE, &get_slot())));
+    state.insert_account_storage(&TOP, &U256::from(SLOT), &U256::from(77));
+    let mut evm = evm_with(state, Some(service.clone()), Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!((out(&r.output, 0), out(&r.output, 1)), (1, 77), "TOP's own slot");
+    assert_eq!(service.calls(), []);
+    assert_eq!(seen.only(), []);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -567,7 +623,7 @@ fn oracle_service_revert_keeps_the_hint_and_the_read() {
         let r = transact(&mut evm, &legacy(SENDER, 0, to, 0, Vec::new()));
         assert_eq!(r.status, nested, "nested {nested}");
         assert_eq!(service.calls(), [hinted(TOP, &[0xaa]), asked(Some(42))], "nested {nested}");
-        assert_eq!(seen.only(), [read(42, true, true)], "nested {nested}");
+        assert_eq!(seen.only(), [read(42, ON_CHAIN, true, true)], "nested {nested}");
     }
 }
 
@@ -584,7 +640,7 @@ fn oracle_service_out_of_gas_keeps_the_hint_and_the_read() {
     assert!(!r.status);
     assert!(r.stop.is_halt(), "{:?}", r.stop);
     assert_eq!(service.calls(), [hinted(TOP, &[0xaa]), asked(Some(42))]);
-    assert_eq!(seen.only(), [read(42, true, true)]);
+    assert_eq!(seen.only(), [read(42, ON_CHAIN, true, true)]);
 
     let service = answering(42);
     let seen = Arc::new(Seen::default());
@@ -595,7 +651,35 @@ fn oracle_service_out_of_gas_keeps_the_hint_and_the_read() {
     assert!(r.status, "{:?}", r.stop);
     assert_eq!(out(&r.output, 3), 0, "the read's call ran out of gas");
     assert_eq!(service.calls(), [hinted(TOP, &[0xaa]), asked(Some(42))]);
-    assert_eq!(seen.only(), [read(42, true, false)], "made, and pushed nothing");
+    assert_eq!(seen.only(), [read(42, ON_CHAIN, true, false)], "made, and pushed nothing");
+}
+
+/// A read that pushes nothing is made, asked and observed all the same (`SATIN-ORCL-004`): a
+/// `getSlot` whose frame reaches its `SLOAD` with about 1,000 of gas, over the warm base and short
+/// of the 2,100 cold access; and one stopped at gas detention's crossing, the Oracle's detention
+/// cap lowered to 1,000 so that the cold access crosses it in a frame with gas to spare.
+#[test]
+fn oracle_service_unpushed_read_short_of_the_cold_access_or_at_detention_is_observed() {
+    let service = answering(42);
+    let seen = Arc::new(Seen::default());
+    let short = Call { to: ORACLE, value: 0, gas: Some(1_250), input: get_slot() };
+    let top = caller(&[short], End::Return);
+    let mut evm = evm_with(db(Some(top)), Some(service.clone()), Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(out(&r.output, 1), 0, "the read's call ran out of gas");
+    assert_eq!(service.calls(), [asked(Some(42))]);
+    assert_eq!(seen.only(), [read(42, ON_CHAIN, true, false)]);
+
+    let service = answering(42);
+    let seen = Arc::new(Seen::default());
+    let mut evm = evm_with(db(None), Some(service.clone()), Some(seen.clone()));
+    evm.ext_mut().limits.oracle_cap = 1_000;
+    let r = transact(&mut evm, &legacy(SENDER, 0, ORACLE, 0, get_slot()));
+    assert!(!r.status, "stopped at the crossing");
+    assert!(r.tx_gas_used() < 100_000, "not out of the transaction's gas: {}", r.tx_gas_used());
+    assert_eq!(service.calls(), [asked(Some(42))]);
+    assert_eq!(seen.only(), [read(42, ON_CHAIN, true, false)]);
 }
 
 /// `sendHint(7, 64 × 0xab)`: 164 bytes, 474 with the body of the transaction whose own call it is.
@@ -662,6 +746,22 @@ fn oracle_service_malformed_hint_is_counted_and_not_delivered() {
     assert_eq!(service.calls(), []);
 }
 
+/// A `sendHint` made by `STATICCALL` is admitted, counted and handed over as one made by `CALL`
+/// (`SATIN-ORCL-006`).
+#[test]
+fn oracle_service_staticcall_hint_is_delivered() {
+    let service = answering(42);
+    let input = send_hint(&[0xaa]);
+    let len = input.len() as u64;
+    let top = call_without_value(0xfa, ORACLE, &input);
+    let mut evm = evm_with(db(Some(top)), Some(service.clone()), None);
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(out(&r.output, 0), 1, "the call succeeded");
+    assert_eq!(service.calls(), [hinted(TOP, &[0xaa])]);
+    assert_eq!(evm.ext().mechanisms.hint_bytes, len, "the hint counted");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Writes
 
@@ -684,7 +784,8 @@ fn oracle_service_standing_write_by_the_system_address_is_observed() {
 /// payload fails (`InvalidLength`), which reverts the system address's transaction; a `setSlot`
 /// from an account that is not the system address, which the Oracle's code reverts with
 /// `NotSystemAddress()`; and a write the system address's code makes in a frame that then reverts,
-/// between reads that stay, the one inside that frame pushing the write.
+/// between reads that stay: the one inside that frame pushed the write and says so (`own`), and
+/// the one after it sees the chain's value again, no write of the transaction's own in effect.
 #[test]
 fn oracle_service_standing_write_in_a_reverting_frame_is_not_observed() {
     let system = Address::with_last_byte(0x52);
@@ -721,7 +822,11 @@ fn oracle_service_standing_write_in_a_reverting_frame_is_not_observed() {
     assert_eq!(out(&r.output, 4), 0, "SYS reverted");
     assert_eq!(
         seen.only(),
-        [read(ON_CHAIN, false, true), read(8, false, true), read(ON_CHAIN, false, true)]
+        [
+            read(ON_CHAIN, ON_CHAIN, false, true),
+            own(read(8, 8, false, true)),
+            read(ON_CHAIN, ON_CHAIN, false, true)
+        ]
     );
 }
 
@@ -741,7 +846,7 @@ fn oracle_service_standing_write_before_a_read_is_observed_before_it() {
     let r =
         transact(&mut evm, &legacy(system, 0, ORACLE, 0, multi_call(&[set_slot(8), get_slot()])));
     assert!(r.status, "{:?}", r.stop);
-    assert_eq!(seen.only(), [write(8), read(8, false, true)]);
+    assert_eq!(seen.only(), [write(8), own(read(8, 8, false, true))]);
 
     let seen = Arc::new(Seen::default());
     let sys = caller(&[oracle(set_slot(8))], End::Return);
@@ -754,7 +859,7 @@ fn oracle_service_standing_write_before_a_read_is_observed_before_it() {
     let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
     assert!(r.status, "{:?}", r.stop);
     assert_eq!((out(&r.output, 0), out(&r.output, 2)), (7, 8));
-    assert_eq!(seen.only(), [read(7, true, true), write(8), read(8, true, true)]);
+    assert_eq!(seen.only(), [read(7, ON_CHAIN, true, true), write(8), own(read(8, 8, true, true))]);
 }
 
 /// A transaction that reads a slot, sends a hint that has the service fetch another value, and
@@ -771,7 +876,183 @@ fn oracle_service_two_values_for_one_slot_are_both_observed() {
     assert!(r.status, "{:?}", r.stop);
     assert_eq!((out(&r.output, 0), out(&r.output, 2)), (7, 9));
     assert_eq!(service.calls(), [asked(Some(7)), hinted(TOP, &word(9)), asked(Some(9))]);
-    assert_eq!(seen.only(), [read(7, true, true), read(9, true, true)]);
+    assert_eq!(seen.only(), [read(7, ON_CHAIN, true, true), read(9, ON_CHAIN, true, true)]);
+}
+
+/// A deposit that halts (a failed deposit) is handed over as executed, its reads kept and its
+/// writes taken back: the deposit calls `SYS`, the live system address, whose code writes 8, reads
+/// it and runs out of gas. The deposit's read asks nothing (`SATIN-ORCL-005`).
+#[test]
+fn oracle_service_halting_deposit_keeps_its_reads_and_no_write() {
+    let sys = caller(&[oracle(set_slot(8)), oracle(get_slot())], End::Loop);
+    let mut state = db(None);
+    state.insert_account_info(&SYS, contract(&sys));
+    with_registry(&mut state, SYS);
+    let service = answering(42);
+    let seen = Arc::new(Seen::default());
+    let mut evm = evm_with(state, Some(service.clone()), Some(seen.clone()));
+    let r = transact(&mut evm, &deposit(SYS, Vec::new()));
+    assert!(!r.status);
+    assert!(r.stop.is_halt(), "{:?}", r.stop);
+    assert_eq!(service.calls(), []);
+    assert_eq!(seen.only(), [own(read(8, 8, false, true))]);
+}
+
+/// A pre-block system call that fails is handed over with its reads and none of its writes, and
+/// fails the block: the beacon-roots call's code, which the registry names the live system address
+/// here, writes 8, reads it and reverts.
+#[test]
+fn oracle_service_failing_system_call_reports_no_write() {
+    let code = caller(&[oracle(set_slot(8)), oracle(get_slot())], End::Revert);
+    let mut state = db(None);
+    state.insert_account_info(&BEACON_ROOTS, contract(&code));
+    with_registry(&mut state, BEACON_ROOTS);
+    let seen = Arc::new(Seen::default());
+    let services = OracleServices { service: Some(answering(42)), observer: Some(seen.clone()) };
+    let input = common::block_input(1, 1_000, 30_000_000, Some(B256::repeat_byte(0x11)));
+    let services = BlockServices { oracle: services, ..common::services(B256::ZERO) };
+    let started = common::factory().start_block(&input, Db::new(state), services);
+    assert!(started.is_err(), "the failed call fails the block");
+    assert_eq!(
+        seen.all(),
+        [
+            (OracleBoundary::SystemCall { target: HISTORY_STORAGE }, vec![]),
+            (
+                OracleBoundary::SystemCall { target: BEACON_ROOTS },
+                vec![own(read(8, 8, false, true))]
+            ),
+        ]
+    );
+}
+
+/// A failed frame that mixed reads and writes keeps its reads, in their order, and none of its
+/// writes, and a write that stands after it is reported in its place: `SYS`, the live system
+/// address, runs a `multiCall` of `setSlot(8)`, `getSlot`, `setSlot(9)`, `getSlot` and a failing
+/// payload, then reads (the chain's value again), writes 10 and reads it.
+#[test]
+fn oracle_service_standing_write_after_a_failed_frame_keeps_the_order() {
+    let failing =
+        multi_call(&[set_slot(8), get_slot(), set_slot(9), get_slot(), set_slots_mismatched()]);
+    let sys = caller(
+        &[oracle(failing), oracle(get_slot()), oracle(set_slot(10)), oracle(get_slot())],
+        End::Return,
+    );
+    let mut state = db(None);
+    state.insert_account_info(&SYS, contract(&sys));
+    with_registry(&mut state, SYS);
+    let seen = Arc::new(Seen::default());
+    let mut evm = evm_with(state, None, Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, SYS, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(out(&r.output, 4), 0, "the multiCall failed");
+    assert_eq!(
+        seen.only(),
+        [
+            own(read(8, 8, false, true)),
+            own(read(9, 9, false, true)),
+            read(ON_CHAIN, ON_CHAIN, false, true),
+            write(10),
+            own(read(10, 10, false, true)),
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reads over the execution's own writes
+//
+// A read reports the value the slot held (`held`) and whether that value was a write of the
+// execution's own still in effect (`own`), so that a builder decides each read on its own, also
+// when a later failure takes the write back and the record no longer shows it.
+
+/// `TOP`: calls `SYS` and returns the second word `SYS` returned or reverted with, the value its
+/// `getSlot` pushed.
+fn top_returning_the_sys_read() -> Vec<u8> {
+    // CALL(GAS, SYS, 0, 0, 0, 0, 0) POP; RETURNDATACOPY(0, 32, 32); RETURN(0, 32)
+    let mut code = vec![0x5f, 0x5f, 0x5f, 0x5f, 0x5f, 0x73];
+    code.extend_from_slice(SYS.as_slice());
+    code.extend([0x5a, 0xf1, 0x50, 0x60, 0x20, 0x60, 0x20, 0x5f, 0x3e, 0x60, 0x20, 0x5f, 0xf3]);
+    code
+}
+
+/// Slot 5 at `on_chain`; `SYS`, the live system address, writes 8 to it, reads it and reverts with
+/// what it read; `TOP` runs `top` when given.
+fn own_write_state(top: Option<Vec<u8>>, on_chain: u64) -> InMemoryDB {
+    let sys = caller(&[oracle(set_slot(8)), oracle(get_slot())], End::Revert);
+    let mut state = db(top);
+    state.insert_account_storage(&ORACLE, &U256::from(SLOT), &U256::from(on_chain));
+    state.insert_account_info(&SYS, contract(&sys));
+    with_registry(&mut state, SYS);
+    state
+}
+
+/// A read over the transaction's own write keeps what it saw when a failed frame later takes the
+/// write back: `SYS` writes 8, reads (the service answers 42) and reverts, and `TOP` returns the
+/// 42. The record shows a served 42 over the transaction's own 8, which the builder's rule leaves
+/// out (`SATIN-ORCL-013`): a node replaying the block pushes the write there whatever was
+/// persisted before the transaction, as a replay over a slot already at 42 shows (it returns 8).
+#[test]
+fn oracle_service_own_write_a_failed_frame_takes_back_stays_in_the_read() {
+    let seen = Arc::new(Seen::default());
+    let state = own_write_state(Some(top_returning_the_sys_read()), ON_CHAIN);
+    let mut evm = evm_with(state, Some(answering(42)), Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(out(&r.output, 0), 42);
+    assert_eq!(seen.only(), [own(read(42, 8, true, true))], "no write: it did not stand");
+
+    let seen = Arc::new(Seen::default());
+    let state = own_write_state(Some(top_returning_the_sys_read()), 42);
+    let mut evm = evm_with(state, None, Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(out(&r.output, 0), 8, "the replay pushes the write, not 42");
+    assert_eq!(seen.only(), [own(read(8, 8, false, true))]);
+}
+
+/// The same with the transaction's own frame failing, a transaction the block includes all the
+/// same: the sender calls `SYS` directly, and its revert data carries the 42 the service answered
+/// over the transaction's own 8; a replay's carries the 8.
+#[test]
+fn oracle_service_own_write_the_failed_transaction_takes_back_stays_in_the_read() {
+    let seen = Arc::new(Seen::default());
+    let state = own_write_state(None, ON_CHAIN);
+    let mut evm = evm_with(state, Some(answering(42)), Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, SYS, 0, Vec::new()));
+    assert!(!r.status);
+    assert_eq!(out(&r.output, 1), 42);
+    assert_eq!(seen.only(), [own(read(42, 8, true, true))], "no write: it did not stand");
+
+    let mut evm = evm_with(own_write_state(None, 42), None, None);
+    let r = transact(&mut evm, &legacy(SENDER, 0, SYS, 0, Vec::new()));
+    assert!(!r.status);
+    assert_eq!(out(&r.output, 1), 8, "the replay's revert data carries the write, not 42");
+}
+
+/// Two values for one slot, the second over the transaction's own write in effect at its read and
+/// taken back afterwards: `TOP` reads 7 (served), then `SYS` writes 8, reads 8 (served) and
+/// reverts. Only the read without `own` asks the slot for a value before the transaction, so the
+/// builder persists 7 and keeps the transaction (`SATIN-ORCL-013` leaves it out only when no
+/// single value reproduces its reads); a replay over 7 with no service reproduces both reads.
+#[test]
+fn oracle_service_own_write_explains_the_second_of_two_values() {
+    let top = || caller(&[oracle(get_slot()), call_to(SYS)], End::Return);
+    let seen = Arc::new(Seen::default());
+    let state = own_write_state(Some(top()), ON_CHAIN);
+    let mut evm = evm_with(state, Some(recording(Ticking::new(7))), Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(seen.only(), [read(7, ON_CHAIN, true, true), own(read(8, 8, true, true))]);
+
+    let seen = Arc::new(Seen::default());
+    let mut evm = evm_with(own_write_state(Some(top()), 7), None, Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(out(&r.output, 0), 7);
+    assert_eq!(
+        seen.only(),
+        [read(7, 7, false, true), own(read(8, 8, false, true))],
+        "both reproduced"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -794,7 +1075,7 @@ fn oracle_service_observer_changes_no_outcome() {
     };
     let seen = Arc::new(Seen::default());
     assert_eq!(outcome(Some(seen.clone())), outcome(None));
-    assert_eq!(seen.only(), [read(42, true, true), read(42, true, true)]);
+    assert_eq!(seen.only(), [read(42, ON_CHAIN, true, true), read(42, ON_CHAIN, true, true)]);
 }
 
 /// A block session hands each attempt to the observer at its end, with the index the transaction
@@ -818,10 +1099,66 @@ fn oracle_service_block_session_delivers_every_attempt() {
     assert_eq!(
         after_pre_block,
         [
-            (OracleBoundary::Transaction { index: 0, executed: true }, vec![read(42, true, true)]),
+            (
+                OracleBoundary::Transaction { index: 0, executed: true },
+                vec![read(42, ON_CHAIN, true, true)]
+            ),
             (OracleBoundary::Transaction { index: 1, executed: false }, vec![]),
-            (OracleBoundary::Transaction { index: 1, executed: true }, vec![read(42, true, true)]),
-            (OracleBoundary::Transaction { index: 1, executed: true }, vec![read(42, true, true)]),
+            (
+                OracleBoundary::Transaction { index: 1, executed: true },
+                vec![read(42, ON_CHAIN, true, true)]
+            ),
+            (
+                OracleBoundary::Transaction { index: 1, executed: true },
+                vec![read(42, ON_CHAIN, true, true)]
+            ),
+        ]
+    );
+}
+
+/// The sequence a builder runs (see `OracleObserver`): a candidate's served read (42 over the
+/// chain's 3) asks for 42 to be persisted before it; the builder executes and commits the Mega
+/// System Transaction that writes it, then executes the candidate again, at the next index, where
+/// the read is served 42 over a slot that holds 42 and asks for nothing more.
+#[test]
+fn oracle_service_block_session_executes_again_after_the_persisting_mst() {
+    let system = Address::with_last_byte(0x52);
+    let mut state = db(None);
+    state.insert_account_info(&system, AccountInfo::default().with_balance(U256::from(1)));
+    with_registry(&mut state, system);
+    let seen = Arc::new(Seen::default());
+    let services = OracleServices { service: Some(answering(42)), observer: Some(seen.clone()) };
+    let input = common::block_input(1, 1_000, 30_000_000, Some(B256::repeat_byte(0x11)));
+    let services = BlockServices { oracle: services, ..common::services(B256::ZERO) };
+    let mut block =
+        common::factory().start_block(&input, Db::new(state), services).expect("the block starts");
+    let candidate = legacy(SENDER, 0, ORACLE, 0, get_slot());
+    block.execute_candidate(&candidate, &[]).expect("executed");
+    let mst = block
+        .execute_candidate(&legacy(system, 0, ORACLE, 0, set_slot(42)), &[])
+        .expect("executed");
+    assert!(mst.is_system_transaction());
+    block.commit_candidate(mst).expect("committed");
+    let again = block.execute_candidate(&candidate, &[]).expect("executed again");
+    assert_eq!(out(again.result().output.as_ref(), 0), 42);
+    block.commit_candidate(again).expect("committed");
+    let transactions = seen
+        .all()
+        .into_iter()
+        .filter(|(b, _)| matches!(b, OracleBoundary::Transaction { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        transactions,
+        [
+            (
+                OracleBoundary::Transaction { index: 0, executed: true },
+                vec![read(42, ON_CHAIN, true, true)]
+            ),
+            (OracleBoundary::Transaction { index: 0, executed: true }, vec![write(42)]),
+            (
+                OracleBoundary::Transaction { index: 1, executed: true },
+                vec![read(42, 42, true, true)]
+            ),
         ]
     );
 }
@@ -891,6 +1228,9 @@ fn oracle_service_attempt_failing_with_an_error_reports_no_write() {
     let last = seen.all().pop().expect("the attempt handed over");
     assert_eq!(
         last,
-        (OracleBoundary::Transaction { index: 0, executed: false }, vec![read(8, false, true)])
+        (
+            OracleBoundary::Transaction { index: 0, executed: false },
+            vec![own(read(8, 8, false, true))]
+        )
     );
 }
