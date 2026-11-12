@@ -19,6 +19,7 @@ use mega_evm2::{
     chain::{BootstrapInput, ChainConfig},
     factory::{BlockHeader, BlockInput, BlockServices, ParentContext, SatinFactory, Simulation},
     keyless,
+    oracle::{OracleAnswers, OracleServices, RecordingOracle},
 };
 use op_evm2::OpTxEnvelope;
 use std::sync::Arc;
@@ -259,9 +260,18 @@ pub fn services(parent_hash: B256) -> BlockServices<'static> {
 }
 
 /// A single transaction's Satin EVM over `database` in `block`, from the factory, at the minimum
-/// bucket everywhere.
+/// bucket everywhere, with no oracle service or observer.
 pub fn evm<'a>(block: BlockEnv<MegaTypes>, database: impl DynDatabase + 'a) -> Evm<'a, MegaTypes> {
-    factory().evm(block, database, minimum_salt(B256::ZERO)).expect("a Satin timestamp")
+    oracle_evm(block, database, OracleServices::default())
+}
+
+/// [`evm`] connected to `oracle`'s service and observer.
+pub fn oracle_evm<'a>(
+    block: BlockEnv<MegaTypes>,
+    database: impl DynDatabase + 'a,
+    oracle: OracleServices,
+) -> Evm<'a, MegaTypes> {
+    factory().evm(block, database, minimum_salt(B256::ZERO), oracle).expect("a Satin timestamp")
 }
 
 /// [`evm`] under a simulation's switches.
@@ -271,7 +281,13 @@ pub fn simulated_evm<'a>(
     simulation: &Simulation,
 ) -> Evm<'a, MegaTypes> {
     factory()
-        .simulated_evm(block, database, minimum_salt(B256::ZERO), simulation)
+        .simulated_evm(
+            block,
+            database,
+            minimum_salt(B256::ZERO),
+            OracleServices::default(),
+            simulation,
+        )
         .expect("a Satin timestamp")
 }
 
@@ -315,6 +331,14 @@ pub fn start_block<'a>(input: &BlockInput, database: impl DynDatabase + 'a) -> B
 /// A Satin EVM over `db` in a block at `m = 1` everywhere.
 pub fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
     evm(block(), Db::new(db))
+}
+
+/// [`satin_evm`] connected to an oracle service that answers nothing and records what it is asked
+/// and handed, which it returns.
+pub fn recorded_evm(db: InMemoryDB) -> (Evm<'static, MegaTypes>, Arc<RecordingOracle>) {
+    let service = Arc::new(RecordingOracle::new(OracleAnswers::default()));
+    let evm = oracle_evm(block(), Db::new(db), OracleServices::service(service.clone()));
+    (evm, service)
 }
 
 /// Runs a legacy transaction from [`SENDER`] of kind `to` moving `value` with `input` and gas

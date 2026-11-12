@@ -426,7 +426,11 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         // spill absorbs.
         host.ext_mut().reservoir_left = gas.result.gas.reservoir();
         settle_first_frame(host.ext_mut(), gas.result.stop.is_success());
-        <OpHandlerHooks as TxHandlerHooks<MegaTypes>>::settle_transaction(host, envelope, gas)
+        let result =
+            <OpHandlerHooks as TxHandlerHooks<MegaTypes>>::settle_transaction(host, envelope, gas);
+        // The transaction's outcome is decided: its Oracle accesses go to the observer.
+        crate::oracle::end_transaction(host.ext_mut(), &result);
+        result
     }
 }
 
@@ -702,10 +706,22 @@ fn execute_deposit(
     execute_deposit_inner(req.host, tx, prepared)
 }
 
+/// A deposit's or a Mega System Transaction's execution ([`execute_deposit_body`]), its Oracle
+/// accesses handed to the observer once its outcome is decided.
+fn execute_deposit_inner(
+    host: &mut Evm<'_, MegaTypes>,
+    tx: &TxDeposit,
+    prepared: PreparedDeposit,
+) -> HandlerResult<TxResult<MegaTypes>> {
+    let result = execute_deposit_body(host, tx, prepared);
+    crate::oracle::end_transaction(host.ext_mut(), &result);
+    result
+}
+
 /// op-evm2's `execute_deposit_tx` with the created caller's account state gas as initial state
 /// gas (Satin: "the account a deposit-like transaction creates for its caller is charged the
 /// account-creation state gas once"), SALT-priced at the caller's bucket.
-fn execute_deposit_inner(
+fn execute_deposit_body(
     host: &mut Evm<'_, MegaTypes>,
     tx: &TxDeposit,
     prepared: PreparedDeposit,

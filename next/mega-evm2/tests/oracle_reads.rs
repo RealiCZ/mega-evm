@@ -13,8 +13,13 @@ use evm2::{
     env::BlockEnv,
     evm::{AccountInfo, Db, InMemoryDB},
 };
-use mega_evm2::{MegaTypes, SEQUENCER_REGISTRY, tx::ORACLE};
+use mega_evm2::{
+    MegaTypes, SEQUENCER_REGISTRY,
+    oracle::{OracleAnswers, OracleServices},
+    tx::ORACLE,
+};
 use op_evm2::{OpTxEnvelope, TxDeposit};
+use std::sync::Arc;
 
 const SENDER: Address = Address::with_last_byte(0x50);
 const TOP: Address = Address::with_last_byte(0xa0);
@@ -33,9 +38,8 @@ fn satin_evm(db: InMemoryDB) -> Evm<'static, MegaTypes> {
         gas_limit: U256::from(30_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = common::evm(block, Db::new(db));
-    evm.ext_mut().cfg.oracle.insert(U256::from(5), U256::from(ANSWER));
-    evm
+    let answers = OracleAnswers::from_iter([(U256::from(5), U256::from(ANSWER))]);
+    common::oracle_evm(block, Db::new(db), OracleServices::service(Arc::new(answers)))
 }
 
 fn legacy(from: Address, to: Address, gas_limit: u64) -> Recovered<OpTxEnvelope> {

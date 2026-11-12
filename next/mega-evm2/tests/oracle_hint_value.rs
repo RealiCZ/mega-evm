@@ -57,7 +57,7 @@ fn hint_call(value: u8, gas: u16) -> (InMemoryDB, usize) {
 fn test_a_hint_with_value_is_admitted_forwarded_and_counted() {
     for value in [0u8, 1] {
         let (db, len) = hint_call(value, 50_000);
-        let mut evm = satin_evm(db);
+        let (mut evm, service) = recorded_evm(db);
         let r = run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000);
         assert!(r.success, "{value}");
         let oracle_frame = r.frame(1);
@@ -67,11 +67,11 @@ fn test_a_hint_with_value_is_admitted_forwarded_and_counted() {
             evm2::interpreter::InstrStop::Revert
         };
         assert_eq!(oracle_frame.stop, Some(expected), "{value}");
-        let m = &evm.ext().mechanisms;
-        assert_eq!(m.hint_bytes, len as u64, "the hint's bytes, value {value}");
-        assert_eq!(m.hints.len(), 1, "the hint forwarded, value {value}");
-        assert_eq!(m.hints[0].1, B256::repeat_byte(0x11));
-        assert_eq!(m.hints[0].2.as_ref(), &[0xaa]);
+        assert_eq!(evm.ext().mechanisms.hint_bytes, len as u64, "the hint's bytes, value {value}");
+        let hints = service.hints();
+        assert_eq!(hints.len(), 1, "the hint forwarded, value {value}");
+        assert_eq!(hints[0].1, B256::repeat_byte(0x11));
+        assert_eq!(hints[0].2.as_ref(), &[0xaa]);
     }
 }
 
@@ -82,20 +82,19 @@ fn test_a_hint_with_value_is_admitted_forwarded_and_counted() {
 #[test]
 fn test_a_value_hint_requesting_no_gas_starts_on_the_stipend_and_is_admitted() {
     let (db, len) = hint_call(0, 0);
-    let mut evm = satin_evm(db);
+    let (mut evm, service) = recorded_evm(db);
     let r = run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000);
     assert!(r.success);
-    let m = &evm.ext().mechanisms;
-    assert_eq!(m.hint_bytes, 0, "no hint counted without value");
-    assert!(m.hints.is_empty(), "no hint forwarded without value");
+    assert_eq!(evm.ext().mechanisms.hint_bytes, 0, "no hint counted without value");
+    assert!(service.hints().is_empty(), "no hint forwarded without value");
 
     let (db, len_v) = hint_call(1, 0);
-    let mut evm = satin_evm(db);
+    let (mut evm, service) = recorded_evm(db);
     let r = run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000);
     assert!(r.success);
-    let m = &evm.ext().mechanisms;
-    assert_eq!(m.hint_bytes, len_v as u64, "the hint counted on the stipend alone");
-    assert_eq!(m.hints.len(), 1, "the hint forwarded");
+    let hint_bytes = evm.ext().mechanisms.hint_bytes;
+    assert_eq!(hint_bytes, len_v as u64, "the hint counted on the stipend alone");
+    assert_eq!(service.hints().len(), 1, "the hint forwarded");
     assert_eq!(len, len_v);
 }
 
@@ -139,7 +138,7 @@ fn top_hint(
     let mut db = InMemoryDB::default();
     db.insert_account_info(&SENDER, AccountInfo::default().with_balance(U256::from(10)));
     db.insert_account_info(&ORACLE, oracle);
-    let mut evm = satin_evm(db);
+    let (mut evm, service) = recorded_evm(db);
     if let Some(limit) = data_limit {
         evm.ext_mut().limits.tx[0] = limit;
     }
@@ -181,7 +180,7 @@ fn top_hint(
         output: result.output.clone(),
         frame_gas: frames.iter().find(|f| f.depth == 0).expect("the first frame").gas_limit,
         data_size: ext.usage(result.status)[0],
-        hints: ext.mechanisms.hints.len(),
+        hints: service.hints().len(),
         hint_bytes: ext.mechanisms.hint_bytes,
         stop: ext.top_stop,
     }
@@ -266,9 +265,9 @@ fn test_a_transactions_own_value_hint_over_the_data_size_limit_is_stopped() {
 }
 
 /// A `sendHint` from a contract's memory: the call's input is a range of the caller's memory, and
-/// the hint the engine keeps is a copy of the bytes the caller passed, on the plain and the
-/// inspected path alike, after the caller overwrites the input and grows its memory into a new
-/// allocation.
+/// the oracle service is handed the bytes the caller passed, as the call is made, on the plain and
+/// the inspected path alike; the copy a recording service keeps is still those bytes after the
+/// caller overwrites the input and grows its memory into a new allocation.
 #[test]
 fn test_a_hint_keeps_the_callers_bytes_after_the_caller_overwrites_and_grows_its_memory() {
     let input = send_hint();
@@ -293,7 +292,7 @@ fn test_a_hint_keeps_the_callers_bytes_after_the_caller_overwrites_and_grows_its
         let mut db = InMemoryDB::default();
         db.insert_account_info(&TOP, contract(&code));
         db.insert_account_info(&ORACLE, contract(&[op::STOP]));
-        let mut evm = satin_evm(db);
+        let (mut evm, service) = recorded_evm(db);
         let success = if inspected {
             run_on(&mut evm, TxKind::Call(TOP), U256::ZERO, Bytes::new(), 1_000_000).success
         } else {
@@ -311,11 +310,11 @@ fn test_a_hint_keeps_the_callers_bytes_after_the_caller_overwrites_and_grows_its
             evm.transact(&tx).expect("the transaction runs").commit().status
         };
         assert!(success, "inspected={inspected}");
-        let m = &evm.ext().mechanisms;
-        assert_eq!(m.hint_bytes, input.len() as u64, "inspected={inspected}");
-        assert_eq!(m.hints.len(), 1, "inspected={inspected}");
-        assert_eq!(m.hints[0].0, TOP, "inspected={inspected}");
-        assert_eq!(m.hints[0].1, B256::repeat_byte(0x11), "inspected={inspected}");
-        assert_eq!(m.hints[0].2.as_ref(), &[0xaa], "inspected={inspected}");
+        assert_eq!(evm.ext().mechanisms.hint_bytes, input.len() as u64, "inspected={inspected}");
+        let hints = service.hints();
+        assert_eq!(hints.len(), 1, "inspected={inspected}");
+        assert_eq!(hints[0].0, TOP, "inspected={inspected}");
+        assert_eq!(hints[0].1, B256::repeat_byte(0x11), "inspected={inspected}");
+        assert_eq!(hints[0].2.as_ref(), &[0xaa], "inspected={inspected}");
     }
 }

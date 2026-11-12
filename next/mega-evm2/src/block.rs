@@ -426,11 +426,12 @@ impl<'a> BlockSession<'a> {
 
     fn system_call(&mut self, target: Address, data: Bytes) -> Result<PendingState, BlockError> {
         self.evm.ext_mut().begin_system_call();
-        let executed = self
-            .evm
-            .system_call(SystemTx::new(target, data))
-            .map_err(|e| BlockError::system_call(target, e))?;
-        let TxResultWithState { result: r, pending_state, .. } = executed.detach();
+        let executed = self.evm.system_call(SystemTx::new(target, data)).map(|e| e.detach());
+        // The call's Oracle accesses go to the observer once it has ended, whatever its result.
+        let success = executed.as_ref().is_ok_and(|e| e.result.status);
+        self.evm.ext_mut().oracle.end_system_call(target, success);
+        let TxResultWithState { result: r, pending_state, .. } =
+            executed.map_err(|e| BlockError::system_call(target, e))?;
         if !r.status {
             return Err(BlockError::system_call_failed(target, r.stop));
         }
@@ -501,8 +502,13 @@ impl<'a> BlockSession<'a> {
         tx: &Recovered<OpTxEnvelope>,
         encoded: &[u8],
     ) -> Result<Candidate, CandidateError> {
-        self.check_fault()?;
-        self.run(tx, encoded).map_err(|e| self.decide(e))
+        // The attempt's Oracle accesses go to the observer at its end: at the transaction's
+        // outcome, or here as not executed when it reached none.
+        let index = self.receipts.len();
+        self.evm.ext_mut().oracle.begin_attempt(index);
+        let candidate = self.check_fault().and_then(|()| self.run(tx, encoded));
+        self.evm.ext_mut().oracle.end_attempt();
+        candidate.map_err(|e| self.decide(e))
     }
 
     fn run(

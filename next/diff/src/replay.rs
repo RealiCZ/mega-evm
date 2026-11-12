@@ -28,6 +28,7 @@ use mega_evm2::{
     chain::{BootstrapInput, ChainConfig},
     factory::{BlockHeader, BlockInput, BlockServices, ParentContext, SatinFactory, Simulation},
     ledger::*,
+    oracle::OracleServices,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit};
 use serde_json::{Map, Value, json};
@@ -189,8 +190,12 @@ pub fn new_evm_under(
     let db = evm2::evm::Db::new(db);
     let salt = minimum_salt(h);
     let mut evm = match simulation_under(rules) {
-        None => factory.evm(block_env(h), db, salt),
-        Some(simulation) => factory.simulated_evm(block_env(h), db, salt, &simulation),
+        // A recorded block replays as a validator does: no oracle service, every Oracle read
+        // pushing the slot's value.
+        None => factory.evm(block_env(h), db, salt, OracleServices::default()),
+        Some(simulation) => {
+            factory.simulated_evm(block_env(h), db, salt, OracleServices::default(), &simulation)
+        }
     }
     .expect("a Satin block");
     // The harness's fixture switch: off, evm2 skips the storage read of an account the database

@@ -14,14 +14,19 @@ use evm2::{
     inspector::Inspector,
     interpreter::{InstrStop, Interpreter, Message, MessageKind, MessageResult, Word},
 };
-use mega_evm2::{MegaTypes, ledger::*, salt::*};
+use mega_evm2::{
+    MegaTypes,
+    ledger::*,
+    oracle::{OracleAnswers, OracleServices, RecordingOracle},
+    salt::*,
+};
 use op_evm2::{OpTxEnvelope, TxDeposit};
 use scenarios::{Scenario, record, record::hex};
 
 // The scenarios' SALT unit is the engine's minimum bucket.
 const _: () = assert!(scenarios::MIN_BUCKET == MIN_BUCKET_SIZE);
 use serde_json::{Map, Value, json};
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::Arc};
 
 /// Satin's transaction limits and detention cap, which a scenario's own `limits` override.
 pub const DEFAULT_LIMITS: [u64; 3] = mega_evm2::TxLimits::SATIN.tx;
@@ -306,17 +311,24 @@ pub fn db(s: &Scenario) -> InMemoryDB {
     db
 }
 
+/// The scenario's EVM, its oracle service answering the scenario's Oracle answers.
 pub fn evm(s: &Scenario, reads: Rc<RefCell<Reads>>) -> Evm<'static, MegaTypes> {
-    evm_under(s, reads, &[])
+    evm_under(s, reads, &[], OracleServices::service(Arc::new(answers(s))))
+}
+
+/// The scenario's oracle service answers, by slot.
+fn answers(s: &Scenario) -> OracleAnswers {
+    s.oracle.iter().map(|(k, v)| (U256::from(*k), U256::from(*v))).collect()
 }
 
 /// [`evm`] with the engine under the reference's `rules`: the version
 /// [`mega_evm2::satin_version_under`] builds (the give-back rule is the version's), and
-/// `Lite::reference_rules` all of them.
+/// `Lite::reference_rules` all of them; connected to `oracle`.
 fn evm_under(
     s: &Scenario,
     reads: Rc<RefCell<Reads>>,
     rules: &[ReferenceRule],
+    oracle: OracleServices,
 ) -> Evm<'static, MegaTypes> {
     // The node's simulation switches (`Scenario::skip_nonce_check`, `skip_eip3607`), and a
     // scenario's own limits: a test's explicit override of Satin's (`TxLimits::SATIN`), as the
@@ -357,15 +369,11 @@ fn evm_under(
     }
     // The scenarios sign for the chain id of Satin's version as the engine defines it.
     let mut evm = crate::replay::factory(mega_evm2::satin_version().chain_id)
-        .simulated_evm(block, database, std::sync::Arc::new(salt), &simulation)
+        .simulated_evm(block, database, Arc::new(salt), oracle, &simulation)
         .expect("a Satin block");
     // The harness's fixture switch: off, evm2 skips the storage read of an account the database
     // lacks (the factory has it read, as revm does).
     evm.state_mut().set_read_absent_storage(!mega_evm2::off("absent_storage_read"));
-    let ext = evm.ext_mut();
-    for (k, v) in &s.oracle {
-        ext.cfg.oracle.insert(U256::from(*k), U256::from(*v));
-    }
     evm
 }
 
@@ -488,7 +496,9 @@ pub fn runs_under(s: &Scenario, rules: &[ReferenceRule]) -> (Value, Value) {
 
 fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
     let reads = Rc::new(RefCell::new(Reads::default()));
-    let mut evm = evm_under(s, reads.clone(), rules);
+    // The service records the hints it is handed, which the outcome lists.
+    let service = Arc::new(RecordingOracle::new(answers(s)));
+    let mut evm = evm_under(s, reads.clone(), rules, OracleServices::service(service.clone()));
     let mut block_accounts = Map::new();
     let mut block_storage = Map::new();
     // A run under Satin's rule is checked for the regular-gas invariant, every transaction of it;
@@ -517,6 +527,8 @@ fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
     if inspected {
         evm.set_inspector(Frames::default());
     }
+    // The outcome lists the hints of its own transaction, not of those before it.
+    service.clear();
     // The read set is what the database served from the EVM's construction on: the transaction's
     // own reads and its EVM's one resolution of the live system address (the registry's account
     // and slot 0, which the reference's transaction reads as it is classified). Only a block's
@@ -567,8 +579,8 @@ fn run_with(s: &Scenario, inspected: bool, rules: &[ReferenceRule]) -> Value {
         (
             "hints",
             json!(
-                ext.mechanisms
-                    .hints
+                service
+                    .hints()
                     .iter()
                     .map(|(f, t, d)| json!([format!("{f}"), format!("{t}"), hex(d)]))
                     .collect::<Vec<_>>()

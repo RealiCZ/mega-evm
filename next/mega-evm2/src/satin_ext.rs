@@ -1,8 +1,8 @@
 //! Per-transaction state of EIP-7702 authorities, keyless deployment, `MegaAccessControl` and
-//! Oracle hints, kept apart from `ledger.rs` so a rewrite of the ledger's internals merges with
-//! one field (`Lite::mechanisms`).
+//! the count of Oracle hints, kept apart from `ledger.rs` so a rewrite of the ledger's internals
+//! merges with one field (`Lite::mechanisms`).
 
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{Address, U256};
 
 /// A string error for refusals evm2's `HandlerError` has no variant for (Satin's
 /// `InvalidTransaction::Str`).
@@ -36,8 +36,8 @@ pub struct MechanismState {
     pub pre_frame_stop: Option<(u8, u64)>,
     /// `MegaAccessControl`: the shallowest frame depth whose volatile-data access is off.
     pub disabled_from: Option<usize>,
-    /// Oracle hints forwarded to the service (payload bytes counted on the transaction).
-    pub hints: Vec<(Address, alloy_primitives::B256, Bytes)>,
+    /// The bytes of the Oracle hints the transaction admitted, counted on it (each hint is handed
+    /// to the oracle service as it is admitted; the engine keeps none).
     pub hint_bytes: u64,
     /// Keyless deployment in flight: the call's bookkeeping between its start and its answer.
     pub keyless: Option<Keyless>,
@@ -64,9 +64,7 @@ pub struct MechanismState {
 
 impl MechanismState {
     pub fn reset(&mut self) {
-        let mut hints = core::mem::take(&mut self.hints);
-        hints.clear();
-        *self = Self { hints, ..Self::default() };
+        *self = Self::default();
     }
 }
 
@@ -172,15 +170,16 @@ pub fn is_send_hint(input: &[u8]) -> bool {
     input.get(..4) == Some(&sel("sendHint(bytes32,bytes)")[..])
 }
 
-/// alloy's ABI decode of `sendHint(bytes32 topic, bytes data)`.
-pub fn decode_hint(input: &[u8]) -> Option<(alloy_primitives::B256, Bytes)> {
+/// alloy's ABI decode of `sendHint(bytes32 topic, bytes data)`: the topic, and the data as a range
+/// of `input`.
+pub fn decode_hint(input: &[u8]) -> Option<(alloy_primitives::B256, &[u8])> {
     let body = input.get(4..)?;
     let topic = alloy_primitives::B256::from_slice(body.get(..32)?);
     let offset: usize = U256::from_be_slice(body.get(32..64)?).try_into().ok()?;
     let len: usize =
         U256::from_be_slice(body.get(offset..offset.checked_add(32)?)?).try_into().ok()?;
     let start = offset.checked_add(32)?;
-    Some((topic, Bytes::copy_from_slice(body.get(start..start.checked_add(len)?)?)))
+    Some((topic, body.get(start..start.checked_add(len)?)?))
 }
 
 /// `refuses` for the running frame.

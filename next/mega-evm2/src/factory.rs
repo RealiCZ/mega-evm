@@ -15,16 +15,23 @@
 //! session's snapshot must be of the block's parent ([`SnapshotId::parent_hash`]): the same height
 //! under another parent is another snapshot.
 //!
+//! Every EVM is connected to the oracle service and the Oracle observer its caller gives it
+//! ([`OracleServices`], `BlockServices::oracle` for a block session, an argument of
+//! [`SatinFactory::evm`] and [`SatinFactory::simulated_evm`] for a single transaction), each
+//! optional: without a service every Oracle read pushes the slot's value on the chain, as a node
+//! that validates or replays a block reads it.
+//!
 //! Simulations — a tool's or a test's counterfactual run — use the separately named entry points
 //! ([`SatinFactory::start_simulated_block`], [`SatinFactory::simulated_evm`]) with the switches of
 //! a [`Simulation`]; a session reports whether it is one ([`BlockSession::is_simulation`]). The
 //! consensus entry points take no switch.
 
 use crate::{
-    Cfg, MegaSpec, MegaTypes, SEQUENCER_REGISTRY, TxLimits,
+    MegaSpec, MegaTypes, SEQUENCER_REGISTRY, TxLimits,
     block::BlockSession,
     chain::{Activation, ChainConfig, Engine, Fork, ProtocolParams},
     error::{BlockError, BlockIdentity, ErrorContext, InputError, Phase},
+    oracle::{OracleServices, OracleState},
     salt::{SaltCache, SaltSnapshot},
     system_contracts::RegistryRead,
 };
@@ -72,18 +79,20 @@ pub struct BlockServices<'a> {
     /// to several sessions of a block; a node that runs them on several threads keeps its own
     /// thread-safe snapshot in an `Arc` and gives each session a clone of it.
     pub salt: Arc<dyn SaltSnapshot>,
-    /// The node's environment: the Oracle service's answers.
-    pub environment: Cfg,
+    /// The oracle service the block's Oracle reads ask and its hints are handed to, and the
+    /// observer of each transaction's and pre-block system call's Oracle accesses; neither by
+    /// default (a validator's or a replaying node's block).
+    pub oracle: OracleServices,
     /// An inspector that observes the whole block, its pre-block calls included. It observes; it
     /// does not change what the block executes.
     pub inspector: Option<Box<dyn Inspector<MegaTypes> + 'a>>,
 }
 
 impl BlockServices<'_> {
-    /// The services of a block over the SALT snapshot `salt`, with an empty environment and no
-    /// inspector.
+    /// The services of a block over the SALT snapshot `salt`, with no oracle service, no Oracle
+    /// observer and no inspector.
     pub fn new(salt: Arc<dyn SaltSnapshot>) -> Self {
-        Self { salt, environment: Cfg::default(), inspector: None }
+        Self { salt, oracle: OracleServices::default(), inspector: None }
     }
 }
 
@@ -176,8 +185,7 @@ impl SatinFactory {
             slot_num: U256::ZERO,
             ..BlockEnv::<MegaTypes>::default()
         };
-        let mut evm = self.build(block, database, services.salt, simulation);
-        evm.ext_mut().cfg = services.environment;
+        let mut evm = self.build(block, database, services.salt, services.oracle, simulation);
         if let Some(inspector) = services.inspector {
             evm.set_boxed_inspector(inspector);
             // The inspector observes the whole block, its pre-block calls included.
@@ -207,21 +215,23 @@ impl SatinFactory {
     /// A single transaction's EVM in the block environment `block`, under Satin's rules: for a
     /// transaction executed outside a block session (a call, an estimate). It reads SALT from
     /// `salt`, which the caller binds to the state `database` reads (the environment carries no
-    /// parent to check it against); its environment (`Lite::cfg`) starts empty. Its live system
-    /// address is resolved once, now, off the state it runs on, as a block resolves its own
-    /// ([`Self::resolve_system_address`]), so a transaction is priced as in a block: none reads the
-    /// registry for its classification. A caller that knows the block's resolved address may set
-    /// `Lite::system_address` instead.
+    /// parent to check it against), and is connected to `oracle`'s service and observer, when it
+    /// names them (`OracleServices::default()`: neither, every Oracle read pushing the slot's
+    /// value). Its live system address is resolved once, now, off the state it runs on, as a block
+    /// resolves its own ([`Self::resolve_system_address`]), so a transaction is priced as in a
+    /// block: none reads the registry for its classification. A caller that knows the block's
+    /// resolved address may set `Lite::system_address` instead.
     pub fn evm<'a>(
         &self,
         block: BlockEnv<MegaTypes>,
         database: impl DynDatabase + 'a,
         salt: Arc<dyn SaltSnapshot>,
+        oracle: OracleServices,
     ) -> Result<Evm<'a, MegaTypes>, BlockError> {
         let timestamp = u64::try_from(block.timestamp)
             .map_err(|_| BlockError::input(InputError::TimestampTooLarge))?;
         self.check_timestamp(timestamp)?;
-        let mut evm = self.build(block, database, salt, None);
+        let mut evm = self.build(block, database, salt, oracle, None);
         Self::resolve_system_address(&mut evm)?;
         Ok(evm)
     }
@@ -232,12 +242,13 @@ impl SatinFactory {
         block: BlockEnv<MegaTypes>,
         database: impl DynDatabase + 'a,
         salt: Arc<dyn SaltSnapshot>,
+        oracle: OracleServices,
         simulation: &Simulation,
     ) -> Result<Evm<'a, MegaTypes>, BlockError> {
         let timestamp = u64::try_from(block.timestamp)
             .map_err(|_| BlockError::input(InputError::TimestampTooLarge))?;
         self.check_timestamp(timestamp)?;
-        let mut evm = self.build(block, database, salt, Some(simulation));
+        let mut evm = self.build(block, database, salt, oracle, Some(simulation));
         Self::resolve_system_address(&mut evm)?;
         Ok(evm)
     }
@@ -323,13 +334,14 @@ impl SatinFactory {
         Ok(self.config.activation(h.timestamp, parent_timestamp))
     }
 
-    /// An EVM with what the spec fixes installed, reading SALT from `salt`, plus a simulation's
-    /// switches.
+    /// An EVM with what the spec fixes installed, reading SALT from `salt`, connected to
+    /// `oracle`, plus a simulation's switches.
     fn build<'a>(
         &self,
         block: BlockEnv<MegaTypes>,
         database: impl DynDatabase + 'a,
         salt: Arc<dyn SaltSnapshot>,
+        oracle: OracleServices,
         simulation: Option<&Simulation>,
     ) -> Evm<'a, MegaTypes> {
         #[cfg(feature = "compare")]
@@ -360,6 +372,7 @@ impl SatinFactory {
         evm.state_mut().set_read_absent_storage(true);
         let ext = evm.ext_mut();
         ext.salt = SaltCache::new(salt);
+        ext.oracle = OracleState::new(oracle);
         ext.limits = simulation.and_then(|s| s.limits).unwrap_or(TxLimits::SATIN);
         #[cfg(feature = "compare")]
         if let Some(s) = simulation {

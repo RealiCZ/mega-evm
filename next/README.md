@@ -73,6 +73,21 @@ The harness and the engine tests run every recorded block and every scenario on 
 Each attempt (one execution of a transaction) reads a bucket at its first state charge there, refuses a capacity below 256, and keeps `floor(capacity / 256)` for every later charge and give-back in the bucket, across frame reverts, until the next attempt; a system-originated transaction and a system call price at `m = 1` and read no capacity.
 Errors are typed (`mega_evm2::error`): each block-level error carries its phase, its context and what it decides about the block; a session that meets one that decides the block executes nothing after it and cannot finish.
 
+## The Oracle seam
+
+Every EVM is connected to the node's oracle service and an Oracle observer its caller gives it (`mega_evm2::oracle::OracleServices`): `BlockServices::oracle` for a block session, an argument of `SatinFactory::evm` and `simulated_evm` for a single transaction.
+Both are optional and separate: a node that validates or replays a block, or answers an RPC call, connects neither, and every Oracle read then pushes the slot's value on the chain; a builder may observe without a service.
+`OracleService` is synchronous and infallible.
+Its `answer(slot)` is asked at every Oracle read that asks it, each time, so two reads of one slot may push two values; `None`, a failed service's answer included, pushes the slot's value (`SATIN-ORCL-002`).
+No read of a pre-block system call, a deposit or a Mega System Transaction asks it (`SATIN-ORCL-005`).
+Its `hint(from, topic, data)` is called as an admitted `sendHint` is counted, before the call's frame start (`SATIN-ORCL-006`, `SATIN-ORCL-007`, `SATIN-ICPT-007`): a hint made before a read reaches the service before that read asks.
+An admitted input that does not decode is counted and reaches no service; the engine keeps no hint.
+`OracleObserver::observe` is handed, once per execution and in execution order, every Oracle read (its slot, the value it pushes, whether the service gave it, and whether it was pushed: a read whose frame cannot pay its cold access is made and pushes nothing) and every write to the Oracle's storage that stands, with the execution's boundary: a pre-block system call, or a transaction with its index in the block and whether it has an outcome.
+A transaction is handed over at its outcome, a block session's attempt without one as not executed; reads are kept whatever their frame does afterwards, and a write whose frame, or any frame above it, fails is never reported.
+The observer changes nothing the engine executes, and no outcome, receipt or block carries what it saw; nothing is recorded without one.
+The block builder persists from it the values the service gave (`SATIN-ORCL-012`) and leaves out a transaction whose reads of one slot no single value written before it reproduces (`SATIN-ORCL-013`).
+`OracleAnswers` answers from fixed values (the differential scenarios' answers), and `RecordingOracle` records every call it passes on (the harness lists a scenario's hints from it); both are for tests and tools.
+
 ## State and witness exports
 
 `BlockSession::pre_block_states` retains each complete pre-block state in commit order, including read-only and absent-account entries.
@@ -204,7 +219,7 @@ Second, an engine test holds each decided change's own figures:
 | `keyless_decoded_dispatch` | a call whose arguments do not decode running the bytecode | `mega-evm2/tests/keyless_abi_offset.rs` |
 | `hint_with_value` | a value hint's admission, its forwarded gas and its data size | `mega-evm2/tests/oracle_hint_value.rs` (a value `CALL` that requests no gas starting on its stipend, a transaction's own call at 1, 2,300 and 2,301 of gas, legacy and deposit, and the data-size stop) |
 | `mst_packing_budgets` | a Mega System Transaction held to the packing budgets (no gate case reaches them) | `mega-evm2/tests/mst_packing.rs` |
-| `oracle_no_service` | a deposit's and a Mega System Transaction's reads unserved | `mega-evm2/tests/oracle_reads.rs`, `system_call_oracle.rs` |
+| `oracle_no_service` | a deposit's and a Mega System Transaction's reads unserved | `mega-evm2/tests/oracle_reads.rs`, `system_call_oracle.rs`, `oracle_service.rs` |
 | `system_contract_deployment` | each deployment's installed code, kept nonce, balance and storage, the registry's seeding and migration | `mega-evm2/tests/block_lifecycle.rs`, `pre_block_witness.rs`; for recorded blocks, `GATE block-satin` |
 | `once_per_block_resolution` | the resolution's own reads, and a transaction's cold first access to the registry | `mega-evm2/tests/block_lifecycle.rs`, `mandatory_read_errors.rs`; for recorded blocks, `GATE block-satin` |
 | `auth_preflight_reads` | the authorities a list too short to cross a limit loads | `mega-evm2/tests/authorization_preflight.rs` |

@@ -9,12 +9,13 @@ use evm2::{
     evm::{AccountInfo, Db, InMemoryDB},
 };
 use mega_evm2::{
-    Cfg,
     block::{BEACON_ROOTS, BlockSession},
     factory::BlockServices,
+    oracle::{OracleAnswers, OracleServices},
     system_contracts::ORACLE_CODE,
     tx::ORACLE,
 };
+use std::sync::Arc;
 
 /// The Oracle's slot 1 on the chain, and the service's answer for it.
 const ON_CHAIN: u64 = 5;
@@ -41,10 +42,10 @@ fn block() -> BlockSession<'static> {
         &BEACON_ROOTS,
         AccountInfo::default().with_code(Bytecode::new_legacy(Bytes::from(caller))),
     );
-    let mut environment = Cfg::default();
-    environment.oracle.insert(U256::from(1), U256::from(ANSWER));
+    let answers = OracleAnswers::from_iter([(U256::from(1), U256::from(ANSWER))]);
+    let oracle = OracleServices::service(Arc::new(answers));
     let input = common::block_input(1, 1_000, 30_000_000, Some(B256::repeat_byte(0x11)));
-    let services = BlockServices { environment, ..common::services(B256::ZERO) };
+    let services = BlockServices { oracle, ..common::services(B256::ZERO) };
     common::factory().start_block(&input, Db::new(db), services).expect("pre-block calls")
 }
 
