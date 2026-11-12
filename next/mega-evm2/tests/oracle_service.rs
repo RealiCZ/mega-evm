@@ -11,9 +11,10 @@ use alloy_consensus::{TxLegacy, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256, hex, keccak256};
 use common::{SENDER, TOP, contract};
 use evm2::{
-    Evm, TxResult,
+    DatabaseError, Evm, TxResult,
     bytecode::Bytecode,
-    evm::{AccountInfo, Db, InMemoryDB},
+    evm::{AccountInfo, Database, Db, InMemoryDB},
+    interpreter::Word,
 };
 use mega_evm2::{
     MegaTypes, SEQUENCER_REGISTRY,
@@ -417,6 +418,17 @@ fn oracle_service_no_service_pushes_the_chains_values() {
     let mut evm = evm_with(db(Some(top())), Some(answering(42)), None);
     let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
     assert_eq!(out(&r.output, 0), 42, "the control: the service's value");
+
+    // A hint with no service is admitted and counted all the same (`SATIN-ORCL-009`); nothing
+    // receives it.
+    let hint = send_hint(&[0xaa]);
+    let len = hint.len() as u64;
+    let top = caller(&[oracle(hint), oracle(get_slot())], End::Return);
+    let mut evm = evm_with(db(Some(top)), None, None);
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(evm.ext().mechanisms.hint_bytes, len, "the hint counted");
+    assert_eq!(out(&r.output, 1), ON_CHAIN);
 }
 
 /// A deposit's Oracle read asks the service nothing and pushes the chain's value
@@ -811,5 +823,74 @@ fn oracle_service_block_session_delivers_every_attempt() {
             (OracleBoundary::Transaction { index: 1, executed: true }, vec![read(42, true, true)]),
             (OracleBoundary::Transaction { index: 1, executed: true }, vec![read(42, true, true)]),
         ]
+    );
+}
+
+/// An account whose read the database cannot serve.
+const BROKEN: Address = Address::with_last_byte(0xdd);
+
+#[derive(Debug)]
+struct Unavailable;
+
+impl core::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("account unavailable")
+    }
+}
+
+impl std::error::Error for Unavailable {}
+
+/// A database that fails every read of [`BROKEN`]'s account and serves the rest from `inner`.
+#[derive(Debug)]
+struct Broken(InMemoryDB);
+
+impl Database for Broken {
+    type Error = DatabaseError;
+
+    fn get_account(&mut self, address: &Address) -> Result<Option<AccountInfo>, Self::Error> {
+        if *address == BROKEN {
+            return Err(DatabaseError::new(Unavailable, true));
+        }
+        self.0.get_account(address)
+    }
+
+    fn get_code_by_hash(&mut self, code_hash: &B256) -> Result<Bytecode, Self::Error> {
+        self.0.get_code_by_hash(code_hash)
+    }
+
+    fn get_storage(&mut self, address: &Address, key: &Word) -> Result<Word, Self::Error> {
+        self.0.get_storage(address, key)
+    }
+
+    fn get_block_hash(&mut self, number: &Word) -> Result<B256, Self::Error> {
+        self.0.get_block_hash(number)
+    }
+}
+
+/// An attempt that fails with an error reaches no outcome: the block session hands it over as not
+/// executed, with the reads it made and none of its writes, though the system address's code had
+/// written 8 in a frame that returned before the error (a database that cannot serve the next
+/// account the transaction calls).
+#[test]
+fn oracle_service_attempt_failing_with_an_error_reports_no_write() {
+    let sys = caller(&[oracle(set_slot(8))], End::Return);
+    let call = |to| Call { to, value: 0, gas: None, input: Vec::new() };
+    let top = caller(&[call(SYS), oracle(get_slot()), call(BROKEN)], End::Return);
+    let mut state = db(Some(top));
+    state.insert_account_info(&SYS, contract(&sys));
+    with_registry(&mut state, SYS);
+    let seen = Arc::new(Seen::default());
+    let oracle = OracleServices { service: None, observer: Some(seen.clone()) };
+    let input = common::block_input(1, 1_000, 30_000_000, Some(B256::repeat_byte(0x11)));
+    let services = BlockServices { oracle, ..common::services(B256::ZERO) };
+    let mut block = common::factory()
+        .start_block(&input, Db::new(Broken(state)), services)
+        .expect("the block starts");
+    let error = block.execute_candidate(&legacy(SENDER, 0, TOP, 0, Vec::new()), &[]);
+    assert!(error.is_err(), "the read of the broken account fails the attempt");
+    let last = seen.all().pop().expect("the attempt handed over");
+    assert_eq!(
+        last,
+        (OracleBoundary::Transaction { index: 0, executed: false }, vec![read(8, false, true)])
     );
 }

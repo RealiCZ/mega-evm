@@ -32,11 +32,14 @@ pub trait OracleService {
     }
 }
 
-/// An observer of the Oracle accesses of each execution: every transaction the EVM runs and every
-/// pre-block system call of a block session.
+/// An observer of the Oracle accesses of each execution: each attempt of a block session's
+/// transactions, each of its pre-block system calls, and each transaction a single transaction's
+/// EVM executes to an outcome.
 pub trait OracleObserver {
     /// One execution's accesses, in execution order, handed over once it has ended, so that every
-    /// write a revert took back is already gone.
+    /// write a revert took back is already gone. A block session hands over every attempt, a
+    /// candidate the builder then drops or executes again included: the attempt it commits is the
+    /// last one handed over at that index before the commit.
     fn observe(&self, execution: OracleExecution<'_>);
 }
 
@@ -54,10 +57,12 @@ pub enum OracleBoundary {
     /// A block's pre-block system call to `target`.
     SystemCall { target: Address },
     /// A transaction. `index` is its index in the block, the number of transactions the session
-    /// committed before it (a single transaction's EVM numbers the transactions it executed from
-    /// zero). `executed` is whether it has an outcome — the block session's candidate, which the
-    /// block includes once it is committed — or none: refused, or failed with an error, nothing of
-    /// it included (the reads it made before the error are kept).
+    /// committed before it (a single transaction's EVM numbers from zero the transactions it
+    /// executed to an outcome). `executed` is whether it has an outcome — the block session's
+    /// candidate, which the block includes once it is committed — or none: refused, or failed with
+    /// an error, nothing of it included and none of its writes reported (the reads it made before
+    /// the error are kept). Only a block session hands over a transaction without an outcome; a
+    /// single transaction's EVM hands over none: its caller has the error.
     Transaction { index: usize, executed: bool },
 }
 
@@ -70,8 +75,10 @@ pub enum OracleAccess {
     /// (`SATIN-ORCL-004`): `pushed` is `false`, and `value` the value the read would have pushed.
     /// A read is kept whatever its frame does afterwards.
     Read { slot: U256, value: U256, served: bool, pushed: bool },
-    /// An `SSTORE` to the Oracle's storage that stands: one whose frame, or any frame above it, the
-    /// transaction included, failed is not reported.
+    /// An `SSTORE` to the Oracle's storage that completed and stands, one that writes the value the
+    /// slot holds included: one whose frame, or any frame above it, the transaction included,
+    /// failed is not reported. A block's pre-block deployment of the Oracle is no execution and is
+    /// not reported.
     Write { slot: U256, value: U256 },
 }
 
@@ -279,9 +286,11 @@ impl OracleState {
     }
 
     /// A block session's attempt has ended: an attempt whose transaction reached no outcome is
-    /// delivered as not executed (an executed one was delivered at its end).
+    /// delivered as not executed, none of its writes standing (an executed one was delivered at its
+    /// end).
     pub(crate) fn end_attempt(&mut self) {
         if self.attempt {
+            self.undo_writes(0);
             let index = self.index;
             self.deliver(OracleBoundary::Transaction { index, executed: false });
         }
