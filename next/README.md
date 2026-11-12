@@ -39,6 +39,7 @@ cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads
 `gate.sh` prints one `GATE` line per gate (synthetic main scenarios, fuzz batches, engine replay and block executor on recorded blocks) and compares it with the expected counts.
 Every gate script refuses to run when a `MEGA_EVM2_*` variable other than `MEGA_EVM2_CORPUS_DIR` is set, so an inherited selection cannot narrow an official run; a direct `cargo test -p mega-evm2-diff` with such a variable prints `PARTIAL GATE` lines and is for debugging.
 Each script extracts its inputs afresh into its own directory under `<target>/mega-evm2-diff/`, so different scripts can run at the same time; do not run one script twice at once on the same cargo target.
+Building the reference (`check-reference.sh`, `regen-reference.sh`, `probe.sh`, `bench-blocks.sh`, `bench-engine.sh`) needs Foundry's `forge` on the path: its mega-evm dependency compiles the system contracts in its build script; CI's `reference` job installs it.
 
 ## Chain configuration, factory and block session
 

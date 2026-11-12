@@ -14,7 +14,9 @@ name: next
 #             reads: next/reference/**, next/diff/data/**, next/diff/shared/**,
 #             next/diff/scripts/**, next/scripts/**, next/rust-toolchain.toml, or
 #             this file.
-#             Runs next/diff/scripts/check-reference.sh sample.
+#             Runs next/diff/scripts/check-reference.sh sample. It installs Foundry:
+#             the reference's mega-evm dependency builds its system contracts with
+#             forge. No other job builds next/reference.
 # full      — pushes to cz/feat/satin-evm2, daily and workflow_dispatch.
 #             Downloads MEGA_EVM2_CORPUS_URL
 #             (repository variable, else secret of the same name) and runs
@@ -168,6 +170,12 @@ jobs:
       - name: Install zstd
         if: github.event_name == 'schedule' || steps.pr.outputs.run == 'true' || steps.push.outputs.run == 'true'
         run: bash next/scripts/install-zstd.sh
+
+      # The reference depends on mega-evm, whose crates/system-contracts build script compiles the
+      # system contracts with forge and fails without it.
+      - name: Install Foundry
+        if: github.event_name == 'schedule' || steps.pr.outputs.run == 'true' || steps.push.outputs.run == 'true'
+        uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
 
       - name: Regenerate the sample reference outputs
         if: github.event_name == 'schedule' || steps.pr.outputs.run == 'true' || steps.push.outputs.run == 'true'
