@@ -36,9 +36,8 @@ fn run(block: &blockdb::Block, txs: &[Recovered<MegaTxEnvelope>]) -> (Duration, 
         block.header.parent_beacon_block_root,
         Default::default(),
         BlockLimits::default(),
-    )
-    .with_no_user_tx_activation_block(false)
-    .with_satin_activation_block(false);
+        block.parent_timestamp,
+    );
     let mut state = State::builder().with_database(SatinDb(db)).with_bundle_update().build();
     let evm = factory.create_evm(&mut state, EvmEnv::new(cfg, block_env(block)));
     let mut executor =

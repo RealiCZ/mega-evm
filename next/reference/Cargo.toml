@@ -16,11 +16,14 @@ publish = false
 autobenches = false
 
 [dependencies]
-# The Satin implementation under review: mega-evm at PR #409 (5e3f30ad), the head of that pull
-# request. It has no tag and needs none: refs/pull/409/head keeps it reachable because the
-# repository forbids force-pushes. The pin moves only when the reference itself changes; run
+# The Satin implementation under review: mega-evm at PR #417 (4e39cfd6), the head of that pull
+# request, which builds on PR #409 (5e3f30ad) with the rules for SLOTNUM, a value-bearing
+# sendHint, the oracle service and KeylessDeploy's recognition, the activation-block rules derived
+# from the parent's timestamp, and a test database that applies EIP-161 on commit. It has no tag
+# and needs none: refs/pull/417/head keeps it reachable because the repository forbids
+# force-pushes. The pin moves only when the reference itself changes; run
 # diff/scripts/regen-reference.sh then.
-mega-evm = { git = "https://github.com/megaeth-labs/mega-evm", rev = "5e3f30ad4692f3815105dea1368f789f032ddd2b", features = ["test-utils"] }
+mega-evm = { git = "https://github.com/megaeth-labs/mega-evm", rev = "4e39cfd657c18ad6f49fcdf3fc37189a6564d14b", features = ["test-utils"] }
 
 # The shared scenarios and outcome record (`next/diff/shared`).
 mega-evm2-scenarios = { path = "../diff/shared" }

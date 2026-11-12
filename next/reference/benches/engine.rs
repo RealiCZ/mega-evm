@@ -150,9 +150,8 @@ fn run_block(b: blockdb::Block, raws: &[Bytes], inspected: bool) -> usize {
         b.header.parent_beacon_block_root,
         Default::default(),
         BlockLimits::default(),
-    )
-    .with_no_user_tx_activation_block(false)
-    .with_satin_activation_block(false);
+        b.parent_timestamp,
+    );
     let db = Rc::new(RefCell::new(b.db));
     let mut state = State::builder().with_database(SatinDb(db)).with_bundle_update().build();
     let mut evm =

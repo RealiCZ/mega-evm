@@ -13,7 +13,7 @@ The existing engine in `crates/` (REX1–REX6, built on revm) is frozen: it keep
   It depends on `alloy-primitives` only; `diff` and `reference` depend on it by path.
   It sits under `diff/shared` because CI's reference check runs on changes there.
   `diff/shared/blockdb.rs`, the recorded-block reader of both replay harnesses, is not part of it: both include it by `#[path]`, since it parses blocks with `serde_json`.
-- `reference` — its own workspace (separate lockfile): generates the reference outputs from the Satin implementation under review, mega-evm `5e3f30ad`, which stays reachable through `refs/pull/409/head` because the repository forbids force-pushes; the pin moves only when the reference itself changes, with `regen-reference.sh`.
+- `reference` — its own workspace (separate lockfile): generates the reference outputs from the Satin implementation under review, mega-evm `4e39cfd6`, which stays reachable through `refs/pull/417/head` because the repository forbids force-pushes; the pin moves only when the reference itself changes, with `regen-reference.sh`.
 - `scripts` — CI setup: `fetch-evm2-fork.sh` checks the pinned evm2 fork out next to the repository, `install-zstd.sh`.
 - `evm2-fork.env`, [`evm2-fork.md`](evm2-fork.md) — the evm2 fork pin, and what each fork patch adds, why, and when it goes.
 

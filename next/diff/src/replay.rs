@@ -146,10 +146,10 @@ pub fn simulation_under(rules: &[ReferenceRule]) -> Option<Simulation> {
         .then(|| Simulation { reference_rules: rules.to_vec(), ..Simulation::default() })
 }
 
-/// The recorded block's input: its header and its parent. The recording does not carry the
-/// parent's timestamp; on [`gate_chain`], where every fork is active from genesis, no parent
-/// timestamp changes what the block's activation is, and the second before the block is used (the
-/// genesis timestamp, zero, for block 1's parent; block zero has none).
+/// The recorded block's input: its header and its parent. On [`gate_chain`], where every fork is
+/// active from genesis, no parent timestamp changes what the block's activation is, so the second
+/// before the block is used (the genesis timestamp, zero, for block 1's parent; block zero has
+/// none), not the recording's `parent_timestamp` (`blockdb::Block::parent_timestamp`).
 pub fn block_input(h: &Header) -> BlockInput {
     BlockInput {
         header: BlockHeader {

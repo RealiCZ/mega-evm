@@ -2,8 +2,9 @@
 //! built as `mega-evme replay` builds it for a Satin block: revm `State` with bundle update over
 //! the block's state, `MegaEvmFactory` with mega-evme's external environments
 //! (`TestExternalEnvs<Infallible, AHashBucketHasher>`, no capacities), the chain's schedule with
-//! Satin from genesis, `BlockLimits::default()` (a validator's), the block's own gas limit; then
-//! `apply_pre_execution_changes`, and per transaction `run_transaction` and
+//! Satin from genesis, the recorded parent block's timestamp (from which the executor decides the
+//! activation-block rules), `BlockLimits::default()` (a validator's), the block's own gas limit;
+//! then `apply_pre_execution_changes`, and per transaction `run_transaction` and
 //! `commit_transaction_outcome`, a refusal recorded and skipped.
 //!
 //! Writes one JSON line per transaction (status, gas, usage, the receipt's 2718 bytes, the state
@@ -79,9 +80,8 @@ fn run_block(
         h.parent_beacon_block_root,
         Default::default(),
         BlockLimits::default(),
-    )
-    .with_no_user_tx_activation_block(false)
-    .with_satin_activation_block(false);
+        b.parent_timestamp,
+    );
     let mut state =
         State::builder().with_database(SatinDb(db.clone())).with_bundle_update().build();
     let (mut included, mut refused) = (0, 0);
