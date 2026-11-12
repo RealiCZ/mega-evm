@@ -14,7 +14,8 @@
 #   JOBS              parallel mutants (default: half the CPUs)
 #   SUPPRESS          suppressions file (default: next/diff/mutants/suppressions.toml)
 #
-# The warm build goes to next/target (ignored by git); the oracle inputs, scratch and OUT use CARGO_TARGET_DIR.
+# The warm build goes to next/target (ignored by git); the oracle inputs and OUT use CARGO_TARGET_DIR.
+# The scratch directory is a new one under TMPDIR, removed at exit.
 #
 # Exit status: 0 when the run completed, whatever the outcomes (cargo-mutants exits 2 for
 # missed and 3 for timed-out mutants); scoring them is mutation_gate.py's job. Any other
@@ -105,10 +106,12 @@ esac
 
 # cargo-mutants builds in a copy of next/ under $TMPDIR, where the relative path dependency
 # on the evm2 fork (`../../evm2`) would resolve beside $TMPDIR. A scratch $TMPDIR with a link
-# to the fork one level up makes it resolve to the same checkout.
-scratch=$target/mutants-scratch
-rm -rf "$scratch"
-mkdir -p "$scratch/tmp"
+# to the fork one level up makes it resolve to the same checkout. The scratch directory is
+# made under the caller's TMPDIR, outside next/: the copy includes next/target (`copy_target`),
+# so a scratch directory under it (CARGO_TARGET_DIR unset) would be copied into itself.
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/mega-evm2-mutants.XXXXXX")
+trap 'rm -rf "$scratch"' EXIT
+mkdir "$scratch/tmp"
 ln -s "$(cd "$next/../../evm2" && pwd -P)" "$scratch/evm2"
 export TMPDIR=$scratch/tmp
 
