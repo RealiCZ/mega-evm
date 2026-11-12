@@ -20,6 +20,7 @@ use mega_evm2::{
     MegaTypes, SEQUENCER_REGISTRY,
     block::{BEACON_ROOTS, HISTORY_STORAGE},
     factory::BlockServices,
+    keyless::KEYLESS,
     oracle::{
         OracleAccess, OracleAnswers, OracleBoundary, OracleCall, OracleExecution, OracleObserver,
         OracleService, OracleServices, RecordingOracle,
@@ -28,9 +29,12 @@ use mega_evm2::{
     tx::ORACLE,
 };
 use op_evm2::{OpTxEnvelope, TxDeposit};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 const SLOT: u64 = 5;
@@ -73,6 +77,21 @@ impl OracleService for Fetching {
 
     fn hint(&self, _: Address, _: B256, data: &[u8]) {
         *self.0.lock().unwrap() = U256::from_be_slice(data);
+    }
+}
+
+/// Answers each ask with the next of its values, nothing once they run out.
+struct InTurn(Mutex<VecDeque<u64>>);
+
+impl InTurn {
+    fn new(values: &[u64]) -> Self {
+        Self(Mutex::new(values.iter().copied().collect()))
+    }
+}
+
+impl OracleService for InTurn {
+    fn answer(&self, _: U256) -> Option<U256> {
+        self.0.lock().unwrap().pop_front().map(U256::from)
     }
 }
 
@@ -974,15 +993,19 @@ fn top_returning_the_sys_read() -> Vec<u8> {
     code
 }
 
-/// Slot 5 at `on_chain`; `SYS`, the live system address, writes 8 to it, reads it and reverts with
-/// what it read; `TOP` runs `top` when given.
-fn own_write_state(top: Option<Vec<u8>>, on_chain: u64) -> InMemoryDB {
-    let sys = caller(&[oracle(set_slot(8)), oracle(get_slot())], End::Revert);
+/// Slot 5 at `on_chain`; `SYS`, the live system address, runs `sys`; `TOP` runs `top` when given.
+fn system_state(sys: &[u8], top: Option<Vec<u8>>, on_chain: u64) -> InMemoryDB {
     let mut state = db(top);
     state.insert_account_storage(&ORACLE, &U256::from(SLOT), &U256::from(on_chain));
-    state.insert_account_info(&SYS, contract(&sys));
+    state.insert_account_info(&SYS, contract(sys));
     with_registry(&mut state, SYS);
     state
+}
+
+/// [`system_state`] with `SYS` writing 8 to the slot, reading it and reverting with what it read.
+fn own_write_state(top: Option<Vec<u8>>, on_chain: u64) -> InMemoryDB {
+    let sys = caller(&[oracle(set_slot(8)), oracle(get_slot())], End::Revert);
+    system_state(&sys, top, on_chain)
 }
 
 /// A read over the transaction's own write keeps what it saw when a failed frame later takes the
@@ -1053,6 +1076,243 @@ fn oracle_service_own_write_explains_the_second_of_two_values() {
         [read(7, 7, false, true), own(read(8, 8, false, true))],
         "both reproduced"
     );
+}
+
+/// `SYS`'s code: writes 8, runs a `multiCall` that writes 9, reads it and fails, reads again, and
+/// returns or reverts as `end` says, with the read in word 2 and the `multiCall`'s success in
+/// word 4.
+fn sys_over_a_later_write_taken_back(end: End) -> Vec<u8> {
+    let failing = multi_call(&[set_slot(9), get_slot(), set_slots_mismatched()]);
+    caller(&[oracle(set_slot(8)), oracle(failing), oracle(get_slot())], end)
+}
+
+/// A later write to a slot that a failed frame takes back leaves the execution's earlier write in
+/// effect: `SYS` writes 8, its `multiCall` writes 9, reads it (the service answers 9) and fails,
+/// and `SYS` reads again. That read is over the execution's own 8 whatever the service answers, so
+/// a served 42 is left out by the builder's rule (`SATIN-ORCL-013`): a replay pushes the write,
+/// over 42 persisted before the transaction as well. A served 8, the matching control, needs
+/// nothing persisted, and a replay over the chain's value reproduces every read. The write of 8
+/// stands and is reported, the one of 9 is not.
+#[test]
+fn oracle_service_own_write_stays_in_effect_when_a_later_one_is_taken_back() {
+    let sys = sys_over_a_later_write_taken_back(End::Return);
+    for (answer, persisted) in [(42, 42), (8, ON_CHAIN)] {
+        let service = recording(InTurn::new(&[9, answer]));
+        let seen = Arc::new(Seen::default());
+        let state = system_state(&sys, None, ON_CHAIN);
+        let mut evm = evm_with(state, Some(service.clone()), Some(seen.clone()));
+        let r = transact(&mut evm, &legacy(SENDER, 0, SYS, 0, Vec::new()));
+        assert!(r.status, "{:?}", r.stop);
+        assert_eq!(out(&r.output, 4), 0, "the multiCall failed");
+        assert_eq!(out(&r.output, 2), answer);
+        assert_eq!(service.calls(), [asked(Some(9)), asked(Some(answer))]);
+        assert_eq!(
+            seen.only(),
+            [write(8), own(read(9, 9, true, true)), own(read(answer, 8, true, true))],
+            "answered {answer}"
+        );
+
+        let seen = Arc::new(Seen::default());
+        let mut evm = evm_with(system_state(&sys, None, persisted), None, Some(seen.clone()));
+        let r = transact(&mut evm, &legacy(SENDER, 0, SYS, 0, Vec::new()));
+        assert!(r.status, "{:?}", r.stop);
+        assert_eq!(out(&r.output, 2), 8, "the replay over {persisted} pushes the write");
+        assert_eq!(
+            seen.only(),
+            [write(8), own(read(9, 9, false, true)), own(read(8, 8, false, true))]
+        );
+    }
+}
+
+/// The same `SYS` reverting at its end, called by `TOP`, which reads afterwards: the frame that
+/// fails now takes back the write of 8, the last one of the slot in effect, and `TOP`'s read is
+/// over the chain's value, no write of the execution's own (the service answers 9, 8, then 7).
+/// The builder persists 7 and keeps the transaction; a replay over 7 reproduces every read.
+#[test]
+fn oracle_service_own_write_the_enclosing_frame_takes_back_leaves_none_in_effect() {
+    let sys = sys_over_a_later_write_taken_back(End::Revert);
+    let top = || caller(&[call_to(SYS), oracle(get_slot())], End::Return);
+    let service = recording(InTurn::new(&[9, 8, 7]));
+    let seen = Arc::new(Seen::default());
+    let state = system_state(&sys, Some(top()), ON_CHAIN);
+    let mut evm = evm_with(state, Some(service.clone()), Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!((out(&r.output, 2), out(&r.output, 1)), (0, 7), "SYS reverted; TOP read 7");
+    assert_eq!(
+        seen.only(),
+        [own(read(9, 9, true, true)), own(read(8, 8, true, true)), read(7, ON_CHAIN, true, true)],
+        "no write: none stood"
+    );
+
+    let seen = Arc::new(Seen::default());
+    let mut evm = evm_with(system_state(&sys, Some(top()), 7), None, Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!(out(&r.output, 1), 7);
+    assert_eq!(
+        seen.only(),
+        [own(read(9, 9, false, true)), own(read(8, 8, false, true)), read(7, 7, false, true)],
+        "every read reproduced"
+    );
+}
+
+/// A contract that creates with the init code its code carries.
+const FACTORY: Address = Address::with_last_byte(0xc1);
+
+/// How the init code [`init_calling_sys`] makes ends, after its call.
+#[derive(Clone, Copy, Debug)]
+enum Constructor {
+    /// `REVERT`.
+    Reverts,
+    /// Returns code that begins with `0xEF`, which the code deposit refuses (EIP-3541).
+    DepositsEf,
+    /// Returns the code `0x00`.
+    Deploys,
+    /// Returns no code, which a keyless deployment refuses.
+    DepositsNothing,
+}
+
+/// Init code that calls `SYS` with no input and then ends as `end` says.
+fn init_calling_sys(end: Constructor) -> Vec<u8> {
+    // CALL(GAS, SYS, 0, 0, 0, 0, 0) POP
+    let mut code = vec![0x5f, 0x5f, 0x5f, 0x5f, 0x5f, 0x73];
+    code.extend_from_slice(SYS.as_slice());
+    code.extend([0x5a, 0xf1, 0x50]);
+    code.extend(match end {
+        // REVERT(0, 0)
+        Constructor::Reverts => vec![0x5f, 0x5f, 0xfd],
+        // MSTORE8(0, 0xef) RETURN(0, 1)
+        Constructor::DepositsEf => vec![0x60, 0xef, 0x5f, 0x53, 0x60, 0x01, 0x5f, 0xf3],
+        // RETURN(0, 1)
+        Constructor::Deploys => vec![0x60, 0x01, 0x5f, 0xf3],
+        // RETURN(0, 0)
+        Constructor::DepositsNothing => vec![0x5f, 0x5f, 0xf3],
+    });
+    code
+}
+
+/// [`FACTORY`]'s code: `CREATE` with `init`, then return or revert with the created address (zero
+/// when the creation failed) in word 0.
+fn creating(init: &[u8], end: End) -> Vec<u8> {
+    const BODY: u8 = 19;
+    let len = (init.len() as u16).to_be_bytes();
+    // CODECOPY(0, BODY, len) CREATE(0, 0, len) MSTORE(0, created)
+    let mut code = vec![0x61, len[0], len[1], 0x60, BODY, 0x5f, 0x39];
+    code.extend([0x61, len[0], len[1], 0x5f, 0x5f, 0xf0, 0x5f, 0x52]);
+    // RETURN(0, 32) or REVERT(0, 32)
+    code.extend([0x60, 0x20, 0x5f, if matches!(end, End::Revert) { 0xfd } else { 0xf3 }]);
+    assert_eq!(code.len(), BODY as usize);
+    code.extend_from_slice(init);
+    code
+}
+
+/// `TOP` reads the slot, calls [`FACTORY`] running `factory`, whose creation runs a constructor
+/// that calls `SYS`, which writes 8 and reads it; then `TOP` reads again. The creation or
+/// `FACTORY` fails, taking the write back. The service answers 7, then `middle` (the read over
+/// the write), then 7: the record shows the reads of 7 over the chain's value and the read over
+/// the execution's own 8, without the write. A served 8 there needs nothing persisted, so the
+/// builder persists 7 and keeps the transaction; a served 42 leaves it out (`SATIN-ORCL-013`). A
+/// replay over 7 with no service pushes 7, 8 and 7. Returns `FACTORY`'s word and success.
+fn assert_creation_takes_back_the_own_write(factory: &[u8]) -> (Address, u64) {
+    let sys = caller(&[oracle(set_slot(8)), oracle(get_slot())], End::Return);
+    let top = || caller(&[oracle(get_slot()), call_to(FACTORY), oracle(get_slot())], End::Return);
+    let state = |on_chain| {
+        let mut state = system_state(&sys, Some(top()), on_chain);
+        state.insert_account_info(&FACTORY, contract(factory));
+        state
+    };
+    let mut factory_end = None;
+    for middle in [8, 42] {
+        let service = recording(InTurn::new(&[7, middle, 7]));
+        let seen = Arc::new(Seen::default());
+        let mut evm = evm_with(state(ON_CHAIN), Some(service.clone()), Some(seen.clone()));
+        let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+        assert!(r.status, "{:?}", r.stop);
+        assert_eq!((out(&r.output, 0), out(&r.output, 2)), (7, 7));
+        assert_eq!(service.calls(), [asked(Some(7)), asked(Some(middle)), asked(Some(7))]);
+        assert_eq!(
+            seen.only(),
+            [
+                read(7, ON_CHAIN, true, true),
+                own(read(middle, 8, true, true)),
+                read(7, ON_CHAIN, true, true)
+            ],
+            "answered {middle}; no write: it did not stand"
+        );
+        let created = Address::from_word(B256::from_slice(&r.output[32..64]));
+        factory_end = Some((created, out(&r.output, 4)));
+    }
+
+    let seen = Arc::new(Seen::default());
+    let mut evm = evm_with(state(7), None, Some(seen.clone()));
+    let r = transact(&mut evm, &legacy(SENDER, 0, TOP, 0, Vec::new()));
+    assert!(r.status, "{:?}", r.stop);
+    assert_eq!((out(&r.output, 0), out(&r.output, 2)), (7, 7));
+    assert_eq!(
+        seen.only(),
+        [read(7, 7, false, true), own(read(8, 8, false, true)), read(7, 7, false, true)],
+        "every read reproduced"
+    );
+    factory_end.unwrap()
+}
+
+/// A constructor that fails takes back the write its call made: one that reverts, and one whose
+/// code the deposit refuses after its init code ran to the end. `CREATE` pushes zero, and
+/// `FACTORY` returns.
+#[test]
+fn oracle_service_own_write_a_failed_constructor_takes_back_stays_in_the_read() {
+    for end in [Constructor::Reverts, Constructor::DepositsEf] {
+        let factory = creating(&init_calling_sys(end), End::Return);
+        let (created, factory_succeeded) = assert_creation_takes_back_the_own_write(&factory);
+        assert_eq!((created, factory_succeeded), (Address::ZERO, 1), "{end:?}: no creation");
+    }
+}
+
+/// A creation that succeeds, its write standing with it, is taken back by its caller's revert:
+/// `FACTORY` creates and then reverts with the address it created.
+#[test]
+fn oracle_service_own_write_of_a_creation_its_caller_takes_back_stays_in_the_read() {
+    let factory = creating(&init_calling_sys(Constructor::Deploys), End::Revert);
+    let (created, factory_succeeded) = assert_creation_takes_back_the_own_write(&factory);
+    assert_eq!((created, factory_succeeded), (FACTORY.create(1), 0), "created, then taken back");
+}
+
+/// A keyless deployment whose constructor fails takes back the write its call made: one that
+/// reverts (answered `ExecutionReverted`), and one that returns no code, which the deployment's
+/// code deposit refuses (`EmptyCodeDeployed`). The constructor's call has `SYS` write 8 and read
+/// it: a served 8 needs nothing persisted, a served 42 leaves the transaction out, as a replay
+/// over 42 with no service pushes the write.
+#[test]
+fn oracle_service_own_write_a_failed_keyless_creation_takes_back_stays_in_the_read() {
+    let sys = caller(&[oracle(set_slot(8)), oracle(get_slot())], End::Return);
+    let cases = [
+        (Constructor::Reverts, "ExecutionReverted(uint64,bytes)"),
+        (Constructor::DepositsNothing, "EmptyCodeDeployed(uint64)"),
+    ];
+    for (end, error) in cases {
+        let (raw, _) = common::keyless_tx(&init_calling_sys(end));
+        let input = common::keyless_deploy(&raw, 300_000).to_vec();
+        for answer in [8, 42] {
+            let seen = Arc::new(Seen::default());
+            let state = system_state(&sys, None, ON_CHAIN);
+            let mut evm = evm_with(state, Some(answering(answer)), Some(seen.clone()));
+            let r = transact(&mut evm, &legacy(SENDER, 0, KEYLESS, 0, input.clone()));
+            assert!(r.status, "{:?}", r.stop);
+            assert_eq!(common::error_data(&r.output)[..4], selector(error), "{end:?}");
+            assert_eq!(
+                seen.only(),
+                [own(read(answer, 8, true, true))],
+                "{end:?} answered {answer}; no write: it did not stand"
+            );
+        }
+
+        let seen = Arc::new(Seen::default());
+        let mut evm = evm_with(system_state(&sys, None, 42), None, Some(seen.clone()));
+        let r = transact(&mut evm, &legacy(SENDER, 0, KEYLESS, 0, input));
+        assert!(r.status, "{:?}", r.stop);
+        assert_eq!(seen.only(), [own(read(8, 8, false, true))], "{end:?}: the replay");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
