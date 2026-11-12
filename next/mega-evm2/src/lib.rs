@@ -14,6 +14,8 @@
 //! - transaction handlers (body history, first frame, settlement, deposits, L1 fee): `tx.rs`;
 //! - EIP-7702 transactions: `eip7702.rs`; keyless deployment: `keyless.rs`;
 //! - per-transaction state of volatile-access control, hints and authorities: `satin_ext.rs`;
+//! - the Oracle seam (the node's oracle service, an observer of the Oracle's reads and writes):
+//!   `oracle.rs`;
 //! - block execution (the block session; its pre-block sequence in `block/pre_block.rs`):
 //!   `block.rs`; the system contracts it deploys: `system_contracts.rs`;
 //! - the chain configuration (schedule, activation, bootstrap, the fixed protocol values):
@@ -32,6 +34,7 @@ pub mod factory;
 pub mod intercept;
 pub mod keyless;
 pub mod ledger;
+pub mod oracle;
 #[cfg(feature = "compare")]
 pub mod regular_check;
 pub mod salt;
@@ -580,19 +583,27 @@ pub fn mega_sload(cx: _) -> Result {
         .map_err(|error| state.fail(error))?;
     let ext = state.host().ext();
     let unserved = ext.mechanisms.system_call || ext.is_deposit;
-    let answer = if unserved { None } else { ext.cfg.oracle.get(&key).copied() };
+    let answer = if unserved { None } else { ext.oracle.answer(key) };
     if !unserved {
         state.host().ext_mut().oracle_reads += 1;
     }
+    let value = answer.unwrap_or(load.value);
     let cap = state.host().ext().detention.oracle_cap;
-    if cold_skip {
-        gas.spend(additional_cold_cost)?;
-        detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+    let charged = if cold_skip {
+        let paid = gas.spend(additional_cold_cost);
+        if paid.is_ok() {
+            detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
+        }
+        paid
     } else {
         detention::commit_read(state.host().ext_mut(), gas.tracker_mut(), cap, 0);
-        gas.spend(const { static_gas(op::SLOAD) } + additional_cold_cost)?;
-    }
-    stack.push(answer.unwrap_or(load.value))
+        gas.spend(const { static_gas(op::SLOAD) } + additional_cold_cost)
+    };
+    // The observer sees the read whether or not its cold access was paid, a read that pushes
+    // nothing included, with the value the slot held (`OracleAccess::Read`).
+    state.host().ext_mut().oracle.read(key, value, load.value, answer.is_some(), charged.is_ok());
+    charged?;
+    stack.push(value)
 }
 
 /// Whether Satin refuses the load of `address`'s account at `site` in a frame whose volatile
@@ -789,6 +800,10 @@ pub fn mega_sstore(cx: _, [key, value]: [Word]) -> Result {
     })?;
     if let Some(s) = written {
         sstore_completed(cx.gas, cx.state, key, s)?;
+        // A write to the Oracle's storage, observed until a frame it is in fails.
+        if cx.state.host().ext().oracle.observing() && cx.state.message().destination == ORACLE {
+            cx.state.host().ext_mut().oracle.write(*key, s.new_value);
+        }
     }
     detention::after_sstore(cx.gas, cx.state)
 }

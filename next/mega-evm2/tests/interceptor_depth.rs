@@ -13,7 +13,12 @@ use evm2::{
     evm::{Db, InMemoryDB},
     interpreter::{InstrStop, Message, MessageKind},
 };
-use mega_evm2::{MegaTypes, ORACLE, StartHooks, intercept::LIMIT_CONTROL};
+use mega_evm2::{
+    MegaTypes, ORACLE, StartHooks,
+    intercept::LIMIT_CONTROL,
+    oracle::{OracleAnswers, OracleServices, RecordingOracle},
+};
+use std::sync::Arc;
 
 const SENDER: Address = Address::with_last_byte(0x50);
 const CALLER: Address = Address::with_last_byte(0xa0);
@@ -22,13 +27,18 @@ const ACCESS_CONTROL: Address =
     Address::new([0x63, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x04]);
 
 fn satin_evm() -> Evm<'static, MegaTypes> {
+    satin_evm_with(OracleServices::default())
+}
+
+/// The EVM of [`satin_evm`] connected to `oracle`.
+fn satin_evm_with(oracle: OracleServices) -> Evm<'static, MegaTypes> {
     let block = BlockEnv::<MegaTypes> {
         number: U256::from(1),
         timestamp: U256::from(1_000),
         gas_limit: U256::from(30_000_000u64),
         ..BlockEnv::<MegaTypes>::default()
     };
-    let mut evm = common::evm(block, Db::new(InMemoryDB::default()));
+    let mut evm = common::oracle_evm(block, Db::new(InMemoryDB::default()), oracle);
     evm.ext_mut().begin_tx(SENDER, 310, true, false);
     evm
 }
@@ -85,19 +95,20 @@ fn test_a_call_past_the_depth_limit_reaches_no_interceptor() {
 
 #[test]
 fn test_a_hint_past_the_depth_limit_is_not_counted() {
-    let mut evm = satin_evm();
+    let service = Arc::new(RecordingOracle::new(OracleAnswers::default()));
+    let mut evm = satin_evm_with(OracleServices::service(service.clone()));
     let deepest = evm.initial_call_depth() + evm2::constants::CALL_DEPTH_LIMIT;
     let mut past = call(ORACLE, send_hint(), deepest + 1);
     let answer = <StartHooks as MessageHooks<MegaTypes>>::before(&mut evm, &mut past)
         .expect("no execution error");
     assert!(answer.is_none());
     assert_eq!(evm.ext().mechanisms.hint_bytes, 0, "a hint past the limit was counted");
-    assert!(evm.ext().mechanisms.hints.is_empty(), "a hint past the limit was forwarded");
+    assert!(service.hints().is_empty(), "a hint past the limit was forwarded");
     // The same hint within the limit is counted and forwarded.
     let mut within = call(ORACLE, send_hint(), deepest);
     let answer = <StartHooks as MessageHooks<MegaTypes>>::before(&mut evm, &mut within)
         .expect("no execution error");
     assert!(answer.is_none(), "a hint runs the Oracle's bytecode");
     assert_eq!(evm.ext().mechanisms.hint_bytes, send_hint().len() as u64);
-    assert_eq!(evm.ext().mechanisms.hints.len(), 1);
+    assert_eq!(service.hints().len(), 1);
 }

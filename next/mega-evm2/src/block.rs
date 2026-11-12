@@ -316,6 +316,9 @@ impl<'a> BlockSession<'a> {
         limits: TxLimits,
         simulation: bool,
     ) -> Result<Self, BlockError> {
+        let mut evm = evm;
+        // The session hands each execution's Oracle accesses over itself, once it has ended.
+        evm.ext_mut().oracle.hand_over_by_session();
         let block_gas_limit = evm.block().gas_limit.saturating_to();
         let mut session = Self {
             evm,
@@ -525,6 +528,9 @@ impl<'a> BlockSession<'a> {
         // What the call's `BLOCKHASH` was served is the block's, as an attempt's is
         // (`SATIN-WIT-014`).
         self.block_hash_reads.extend(self.last_attempt_block_hash_reads());
+        // The call's Oracle accesses go to the observer once it has ended, whatever its result.
+        let success = executed.as_ref().is_ok_and(|e| e.result.status);
+        self.evm.ext_mut().oracle.end_system_call(target, success);
         let TxResultWithState { result: r, pending_state, .. } =
             executed.map_err(|e| BlockError::system_call(target, e))?;
         if !r.status {
@@ -591,14 +597,22 @@ impl<'a> BlockSession<'a> {
         error
     }
 
-    /// Runs `tx` (its 2718 bytes `encoded`) against the block's rules; nothing is committed.
+    /// Runs `tx` (its 2718 bytes `encoded`) against the block's rules; nothing is committed. The
+    /// attempt's Oracle accesses are handed to the session's observer before this returns, as the
+    /// record of the candidate it returns (see [`crate::oracle::OracleObserver`]).
     pub fn execute_candidate(
         &mut self,
         tx: &Recovered<OpTxEnvelope>,
         encoded: &[u8],
     ) -> Result<Candidate, CandidateError> {
-        self.check_fault()?;
-        self.run(tx, encoded).map_err(|e| self.decide(e))
+        // The attempt's Oracle accesses go to the observer once it has ended, during this call:
+        // executed when it returned a candidate, not executed (none of its writes) when it did
+        // not. The index is the number of transactions this session has committed.
+        let index = self.receipts.len();
+        self.evm.ext_mut().oracle.begin();
+        let candidate = self.check_fault().and_then(|()| self.run(tx, encoded));
+        self.evm.ext_mut().oracle.end_attempt(index, candidate.is_ok());
+        candidate.map_err(|e| self.decide(e))
     }
 
     fn run(

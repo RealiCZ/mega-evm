@@ -593,12 +593,14 @@ mod catches {
             state_root: alloy_primitives::B256::ZERO,
         }));
         match version {
-            Version::Satin => factory.evm(block, Db::new(db), salt).expect("a Satin block"),
+            Version::Satin => {
+                factory.evm(block, Db::new(db), salt, Default::default()).expect("a Satin block")
+            }
             Version::Under(rules) => {
                 let simulation =
                     Simulation { reference_rules: rules.to_vec(), ..Simulation::default() };
                 let mut evm = factory
-                    .simulated_evm(block, Db::new(db), salt, &simulation)
+                    .simulated_evm(block, Db::new(db), salt, Default::default(), &simulation)
                     .expect("a Satin block");
                 evm.ext_mut().reference_rules.clear();
                 evm

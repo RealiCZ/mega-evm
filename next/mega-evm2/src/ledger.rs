@@ -41,14 +41,6 @@ pub const SEQUENCER_REGISTRY: Address =
 /// The registry slot that holds `_currentSystemAddress`: slot 0, fixed by the protocol.
 pub const REGISTRY_SLOT: U256 = U256::ZERO;
 
-/// What the node supplies beside the SALT snapshot (`Lite::salt`), persisting across
-/// transactions: the Oracle service's answers.
-#[derive(Clone, Debug, Default)]
-pub struct Cfg {
-    /// The oracle service's answers by slot (Satin `OracleEnv::get_oracle_storage`).
-    pub oracle: HashMap<U256, U256>,
-}
-
 /// The per-transaction limits and gas detention's caps a transaction runs under (Satin
 /// `ProtocolLimits::for_spec(SATIN).tx_runtime_limits`). They are protocol values, not
 /// configuration: [`TxLimits::SATIN`] is the default, and the block executor installs it whatever
@@ -96,6 +88,9 @@ pub struct Entry {
     /// destroyed accounts); a failed frame rolls the logs back to these marks.
     pub slot_mark: usize,
     pub destroyed_mark: usize,
+    /// Where this frame begins in the transaction's observed Oracle accesses; a failed frame takes
+    /// back the writes recorded from there (`OracleState::undo_writes`).
+    pub oracle_mark: usize,
 }
 
 /// A start's accounts (a call's caller and target, or a creation's created account) as they stood
@@ -152,7 +147,9 @@ pub struct Settlement {
 /// traces).
 #[derive(Clone, Debug, Default)]
 pub struct Lite {
-    pub cfg: Cfg,
+    /// The oracle service and observer the EVM is connected to, kept across transactions, and the
+    /// running execution's observed accesses (`oracle.rs`).
+    pub oracle: crate::oracle::OracleState,
     /// The live system address every transaction is classified against, resolved once and kept
     /// across transactions (`SATIN-REG-002`): by a block's pre-block sequence, after its other
     /// steps; by the factory for a single transaction's EVM, off the state it runs on. `None`: no
@@ -363,6 +360,7 @@ impl Lite {
         self.failed_deposit = false;
         self.top_started = false;
         self.oracle_reads = 0;
+        self.oracle.begin();
         self.tx_start_pending = None;
         self.deposit_loan = DepositLoan::default();
         self.exempt = false;
@@ -506,6 +504,7 @@ impl Lite {
         });
         let depth = self.frames.len();
         let (slot_mark, destroyed_mark) = (self.slot_undo.len(), self.destroyed.len());
+        let oracle_mark = self.oracle.mark();
         self.frames.push(Entry {
             budget,
             start_charge,
@@ -515,6 +514,7 @@ impl Lite {
             allowance,
             slot_mark,
             destroyed_mark,
+            oracle_mark,
             ..Entry::default()
         });
     }
@@ -529,7 +529,8 @@ impl Lite {
             parent.hist += child.hist;
             parent.hbytes += child.hbytes;
         } else {
-            // The frame's draws go with it, and its slot records and destructions are undone.
+            // The frame's draws go with it, and its slot records, destructions and Oracle writes
+            // are undone.
             for i in 0..3 {
                 self.frames_net[i] -= child.net[i];
             }
@@ -545,6 +546,7 @@ impl Lite {
                 }
             }
             self.destroyed.truncate(child.destroyed_mark);
+            self.oracle.undo_writes(child.oracle_mark);
         }
         #[cfg(feature = "compare")]
         {

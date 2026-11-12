@@ -76,6 +76,31 @@ The harness and the engine tests run every recorded block and every scenario on 
 Each attempt (one execution of a transaction) reads a bucket at its first state charge there, refuses a capacity below 256, and keeps `floor(capacity / 256)` for every later charge and give-back in the bucket, across frame reverts, until the next attempt; a system-originated transaction and a system call price at `m = 1` and read no capacity.
 Errors are typed (`mega_evm2::error`): each block-level error carries its phase, its context and what it decides about the block; a session that meets one that decides the block executes nothing after it and cannot finish.
 
+## The Oracle seam
+
+Every EVM is connected to the node's oracle service and an Oracle observer its caller gives it (`mega_evm2::oracle::OracleServices`): `BlockServices::oracle` for a block session, an argument of `SatinFactory::evm` and `simulated_evm` for a single transaction.
+Both are optional and separate: a node that validates or replays a block, or answers an RPC call, connects neither, and every Oracle read then pushes the slot's value on the chain; a builder may observe without a service.
+`OracleService` is synchronous and infallible.
+Its `answer(slot)` is asked at every Oracle read that asks it, each time, so two reads of one slot may push two values; `None`, a failed service's answer included, pushes the slot's value (`SATIN-ORCL-002`).
+No read of a pre-block system call, a deposit or a Mega System Transaction asks it (`SATIN-ORCL-005`).
+Its `hint(from, topic, data)` is called as an admitted `sendHint` is counted, before the call's frame start (`SATIN-ORCL-006`, `SATIN-ORCL-007`, `SATIN-ICPT-007`): a hint made before a read reaches the service before that read asks.
+An admitted input that does not decode is counted and reaches no service; the engine keeps no hint.
+`OracleObserver::observe` is handed each execution's Oracle accesses in execution order, with the execution's boundary: a pre-block system call, or a transaction with an index and whether it has an outcome.
+Each read carries its slot, the value it pushed, the value the slot held through the journal (`held`, what a node with no service pushes there), whether that value is a write of the execution's own still in effect at the read (`own`), whether the service gave the value, and whether it was pushed (a read whose frame cannot pay its cold access is made and pushes nothing).
+Each completed `SSTORE` to the Oracle's storage that stands is reported in its place, one writing the value the slot holds included.
+Reads are kept whatever their frame does afterwards, with what they saw when they were made, and a write whose frame, or any frame above it, fails is never reported; a block's pre-block deployment of the Oracle is no execution and is not reported.
+The builder decides each read on its own, with no look at the writes: a pushed read with `own` must have `value` equal to `held`, or the transaction is left out, and nothing is persisted for it; for the pushed reads without `own` the slot must hold `value` before the transaction, so a served value that differs from `held` is persisted before it (`SATIN-ORCL-012`), and those of one slot must all agree, or the transaction is left out (`SATIN-ORCL-013`); a read that pushed nothing asks nothing.
+A single transaction's EVM hands a transaction over at its outcome and hands over none without one, its caller having the error.
+A block session hands each attempt over during the `execute_candidate` call that ran it, once the attempt has ended: as executed when the call returns a candidate, which makes it that candidate's record, and as not executed, with none of its writes, when the call returns an error.
+Its index is the number of transactions the executing session had committed, so it does not identify a candidate: a candidate executed again, or one executed before another is committed, carries the same index.
+Connect each session to its own observer: the boundary names no session, because an observer object can already carry whatever its caller needs to know about its session.
+A candidate executed before a Mega System Transaction that writes a slot it read must be executed again after it before it is committed: the commit does not check the Oracle slots a candidate read.
+The observer changes nothing the engine executes, and no outcome, receipt or block carries what it saw; nothing is recorded without one.
+A builder's service has duties the engine does not take on, listed on `OracleService`: interior mutability behind `&self`, since a hint can change later answers; one handle per session, which the builder tells where each attempt begins and ends, since the engine says nothing about which execution asks; answers pinned for a re-execution, so the values a Mega System Transaction persisted are answered again; and acceptance of hints that arrive outside any attempt (pre-block system calls, deposits, Mega System Transactions, re-executions).
+Neither trait requires `Send` or `Sync`, as `SaltSnapshot` does not: a session and its services are built on the thread that runs them.
+An RPC call that connects the node's service also hands it the call's hints, which pay nothing; a caller that wants answers without hints wraps its service in an adapter that keeps the default `hint`.
+`OracleAnswers` answers from fixed values (the differential scenarios' answers), and `RecordingOracle` records every call it passes on (the harness lists a scenario's hints from it); both are for tests and tools.
+
 ## State and witness exports
 
 `BlockSession::pre_block_states` retains each complete pre-block state in commit order, including read-only and absent-account entries.

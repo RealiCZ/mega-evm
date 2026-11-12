@@ -235,7 +235,7 @@ fn chain_config_refuses_a_block_the_legacy_engine_executes() {
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(99), ..BlockEnv::<MegaTypes>::default() };
     let error = factory
-        .evm(env, Db::new(db()), salt())
+        .evm(env, Db::new(db()), salt(), Default::default())
         .map(drop)
         .expect_err("no Satin EVM before satinTime");
     assert_eq!(
@@ -318,7 +318,10 @@ fn chain_config_fails_explicitly_under_a_fork_without_rules() {
     assert_eq!(error, InputError::UnsupportedFork { fork: Fork::Lagoon, timestamp: 200 });
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(250), ..BlockEnv::<MegaTypes>::default() };
-    assert!(factory.evm(env, Db::new(db()), salt()).is_err(), "no single-transaction EVM either");
+    assert!(
+        factory.evm(env, Db::new(db()), salt(), Default::default()).is_err(),
+        "no single-transaction EVM either"
+    );
     // A timestamp past the largest `u64` is refused, not saturated into a Satin timestamp; the
     // largest `u64` itself is one.
     let satin = self::factory(1, 0, 0, &[]);
@@ -326,12 +329,24 @@ fn chain_config_fails_explicitly_under_a_fork_without_rules() {
         timestamp: U256::from(u64::MAX),
         ..BlockEnv::<MegaTypes>::default()
     };
-    satin.evm(largest, Db::new(db()), salt()).map(drop).expect("the largest timestamp");
+    satin
+        .evm(largest, Db::new(db()), salt(), Default::default())
+        .map(drop)
+        .expect("the largest timestamp");
     let past = BlockEnv::<MegaTypes> { timestamp: largest.timestamp + U256::from(1), ..largest };
-    assert_eq!(input_error(satin.evm(past, Db::new(db()), salt())), InputError::TimestampTooLarge);
+    assert_eq!(
+        input_error(satin.evm(past, Db::new(db()), salt(), Default::default())),
+        InputError::TimestampTooLarge
+    );
     let simulation = mega_evm2::factory::Simulation::default();
     assert_eq!(
-        input_error(satin.simulated_evm(past, Db::new(db()), salt(), &simulation)),
+        input_error(satin.simulated_evm(
+            past,
+            Db::new(db()),
+            salt(),
+            Default::default(),
+            &simulation
+        )),
         InputError::TimestampTooLarge
     );
 }
@@ -385,6 +400,9 @@ fn chain_config_factory_installs_the_configured_chain_id() {
     assert!(out.result().status, "{:?}", out.result());
     let env =
         BlockEnv::<MegaTypes> { timestamp: U256::from(10), ..BlockEnv::<MegaTypes>::default() };
-    assert_eq!(factory.evm(env, Db::new(db()), salt()).unwrap().version().chain_id, 4326);
+    assert_eq!(
+        factory.evm(env, Db::new(db()), salt(), Default::default()).unwrap().version().chain_id,
+        4326
+    );
     assert_eq!(factory.protocol().chain_id, 4326);
 }

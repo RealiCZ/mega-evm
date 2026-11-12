@@ -210,7 +210,9 @@ impl SaltSnapshot for Failing {
 
 /// A single transaction's EVM over [`db`] reading `salt`.
 fn evm(salt: Arc<dyn SaltSnapshot>) -> Evm<'static, MegaTypes> {
-    common::factory().evm(common::block(), Db::new(db()), salt).expect("a Satin timestamp")
+    common::factory()
+        .evm(common::block(), Db::new(db()), salt, Default::default())
+        .expect("a Satin timestamp")
 }
 
 /// A legacy call from `from` to `to`, `from`'s first transaction in [`db`].

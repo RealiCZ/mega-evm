@@ -121,10 +121,12 @@ pub fn answer_before(
 /// The Oracle's `sendHint` (Satin `system/oracle.rs`), from the `before` message hook: a hint
 /// from a frame whose access is on, whose message starts with some gas (a value call's
 /// stipend included, as in Rex6), is counted on the transaction (data size,
-/// never history, no frame budget) and forwarded, whether the call carries value or not
-/// (`SATIN-ORCL-006`); one that would cross the transaction's data-size limit answers its call
-/// with the stop. The bytecode runs otherwise, and after an admitted hint too (a call with value
-/// then reverts in the bytecode's non-payable method, its hint counted all the same).
+/// never history, no frame budget) and forwarded to the oracle service (`Lite::oracle`), whether
+/// the call carries value or not, before the frame start checks the caller's funds
+/// (`SATIN-ORCL-006`, `SATIN-ICPT-007`); one that would cross the transaction's data-size limit
+/// answers its call with the stop. The bytecode runs otherwise, and after an admitted hint too (a
+/// call with value then reverts in the bytecode's non-payable method, its hint counted all the
+/// same).
 pub fn hint_before(
     evm: &mut Evm<'_, MegaTypes>,
     m: &Message<MegaTypes>,
@@ -159,9 +161,14 @@ pub fn hint_before(
     }
     ext.tx_net[0] += bytes as i64;
     ext.mechanisms.hint_bytes += bytes;
-    // `decode_hint` copies the data it keeps out of the input.
-    if let Some((topic, data)) = decode_hint(evm.message_input(m)) {
-        evm.ext_mut().mechanisms.hints.push((m.caller, topic, data));
+    // Counted, then handed to the service now, before the call returns: its topic, its data (a
+    // range of the input, which the service copies if it keeps it) and the address of the frame
+    // that made the call (`SATIN-ORCL-007`). An input that does not decode reaches no service
+    // (`SATIN-ORCL-009`); without a service nothing is decoded.
+    if ext.oracle.takes_hints() &&
+        let Some((topic, data)) = decode_hint(evm.message_input(m))
+    {
+        evm.ext().oracle.hint(m.caller, topic, data);
     }
     None
 }
