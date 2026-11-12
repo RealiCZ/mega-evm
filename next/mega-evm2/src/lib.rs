@@ -7,6 +7,7 @@
 //! - start ledger, pools, stops, history ledger: `ledger.rs`;
 //! - SALT's mapping, the node's capacity snapshot, the per-attempt multiplier cache and the lookup
 //!   exports: `salt.rs`;
+//! - `BLOCKHASH`, and the record and exports of the hashes it is served: `block_hashes.rs`;
 //! - withheld-gas detention (side ledger, read and drawn through the fork's gas reserve),
 //!   code-deposit and precompile sites: `detention.rs`;
 //! - interceptors (`MegaLimitControl`, `MegaAccessControl`, the Oracle's hints): `intercept.rs`;
@@ -22,6 +23,7 @@
 #![allow(missing_docs)]
 
 pub mod block;
+pub mod block_hashes;
 pub mod chain;
 pub mod detention;
 pub mod eip7702;
@@ -40,7 +42,7 @@ mod system_code;
 pub mod system_contracts;
 pub mod tx;
 
-pub use crate::{ledger::*, salt::*};
+pub use crate::{block_hashes::*, ledger::*, salt::*};
 
 use alloy_primitives::{Address, Bytes, U256};
 use evm2::{
