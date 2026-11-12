@@ -234,8 +234,6 @@ pub struct Lite {
 /// `compare` feature the engine never runs under one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReferenceRule {
-    /// `SLOTNUM` pushes the block environment's slot number instead of zero.
-    SlotNumber,
     /// An EIP-7702 list too short to cross the transaction's KV or state-growth limit is applied
     /// without the simulation, which then loads none of its authorities.
     ShortListUnsimulated,
@@ -261,17 +259,9 @@ pub enum ReferenceRule {
     /// A refused volatile read is refused after the opcode's static gas, an account opcode's at
     /// its load once its body's charges are made, and the opcode's operands checked first.
     RefusalAfterStaticGas,
-    /// A `keylessDeploy` call is recognized by its selector alone: one whose arguments do not
-    /// decode is charged the overhead and answered `MalformedEncoding()`.
-    KeylessSelectorOnly,
-    /// A `sendHint` call that carries value is not admitted: it runs the Oracle's bytecode.
-    HintValueRefused,
     /// A Mega System Transaction is not held to the block's data-size, KV-update and
     /// state-growth budgets.
     MstPackingExempt,
-    /// Only a system call asks the oracle service nothing: a deposit's and a Mega System
-    /// Transaction's Oracle reads ask it.
-    OracleAsksDepositsAndMsts,
     /// The pre-block sequence deploys no system contract: neither the five flat contracts nor the
     /// SequencerRegistry are installed, replaced or migrated, whatever their addresses hold.
     NoPreBlockDeployment,

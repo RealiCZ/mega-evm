@@ -99,11 +99,9 @@ pub fn all() -> Vec<Scenario> {
 }
 
 /// A give-back the other implementation credits to regular gas, in a frame that also reads
-/// `SLOTNUM`, which pushes zero where the other implementation pushes the slot number
-/// (`SATIN-BASE-005`): A returns its `SLOTNUM` (word 0) and what a call of B costs it (word 1), B
-/// writing a fresh slot from regular gas and reverting, which gives the slot's charges back into
-/// B's reservoir. Neither difference alone accounts for the case; the gate's run under both
-/// reference rules does (`gate::scenario_verdict`).
+/// `SLOTNUM`, which pushes zero (`SATIN-BASE-005`): A returns its `SLOTNUM` (word 0) and what a
+/// call of B costs it (word 1), B writing a fresh slot from regular gas and reverting, which gives
+/// the slot's charges back into B's reservoir.
 fn combined() -> Vec<Scenario> {
     let a = Asm::new().op(op::SLOTNUM).push(0).op(op::MSTORE);
     let a = measure(a, call_all(Asm::new(), B, 0), 1);

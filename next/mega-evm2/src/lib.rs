@@ -492,12 +492,8 @@ fn kzg100k(
 /// SLOTNUM (EIP-7843) pushes zero in every block: MegaETH has no slot, so the block environment's
 /// slot number is not read. It stays a volatile read (the `Volatile` wrapper of `wrap_table`).
 #[instruction(EvmTypes = MegaTypes)]
-pub fn mega_slotnum(cx: _) -> Result<out> {
-    *out = if under_reference_rule(cx.state.host().ext(), ReferenceRule::SlotNumber) {
-        cx.state.host().block().slot_num
-    } else {
-        Word::ZERO
-    };
+pub fn mega_slotnum(_cx: _) -> Result<out> {
+    *out = Word::ZERO;
 }
 
 /// Whether the engine runs under the implementation under review's rule `rule` instead of its own
@@ -581,8 +577,7 @@ pub fn mega_sload(cx: _) -> Result {
     let load = evm2::interpreter::Host::sload(state.host(), &destination, &key, false)
         .map_err(|error| state.fail(error))?;
     let ext = state.host().ext();
-    let unserved = ext.mechanisms.system_call ||
-        (ext.is_deposit && !under_reference_rule(ext, ReferenceRule::OracleAsksDepositsAndMsts));
+    let unserved = ext.mechanisms.system_call || ext.is_deposit;
     let answer = if unserved { None } else { ext.cfg.oracle.get(&key).copied() };
     if !unserved {
         state.host().ext_mut().oracle_reads += 1;

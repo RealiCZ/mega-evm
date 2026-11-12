@@ -344,28 +344,23 @@ DUPN = "edge_dupn_deeper_than_stack"
 PREFLIGHT = "e17_authority_charges_out_of_gas"
 MODEXP_LABEL = "edge_modexp_huge_lengths_forward_below_formula"
 MODEXP_PRICE = "edge_modexp_over_bound_detained_allowance_above_500"
-SLOTNUM = "p6_slotnum"
 GIVE_BACK = "gb_t3_slot_m1"
 # A recorded transaction of the class `reservoir_give_back` in the sample (`d4`, block 2045117,
 # index 1): a reentrancy lock's record given back, which the replay gate checks by its rerun.
 GIVE_BACK_REPLAY = "0x178b4f22d82d3cf6278bfa7879d59a4573dc74b360bdd4e71174512a3c51bf35"
 
 
-# The case of the main set that only the run under two reference rules at once accepts (the
-# give-back rule and `SLOTNUM`'s), and a row of the sample's blocks: the give-back class's recorded
-# transaction (`d4`, block 2045117, row 1).
+# A case of the main set the give-back rule's run accepts, whose frame also reads `SLOTNUM`, and a
+# row of the sample's blocks: the give-back class's recorded transaction (`d4`, block 2045117, row
+# 1).
 COMBINED = "gb_combined_slotnum_reverted_child"
 BLOCK_ROW = "d4:2045117:1"
 
-# A case of each class of the owner's decisions of 2026-11-09 (the `par` scenarios), and one only
-# the run under two of their rules at once accepts: a deposit that pays history gas and reads the
-# Oracle without asking the service.
+# A case of each class of the owner's decisions of 2026-11-09 (the `par` scenarios), and a deposit
+# that pays history gas and reads the Oracle, its read pushing the slot's value on the chain.
 DEP_HISTORY = "par_dep_returns"
 ORACLE_MARK = "par_orcl_read_short_of_cold_access"
 REFUSAL = "par_refused_extcodecopy_1mib"
-KEYLESS_DECODE = "par_keyless_undecodable_arguments"
-HINT_VALUE = "par_hint_with_value"
-HINT_VALUE_NO_GAS = "par_hint_with_value_no_gas"
 ORACLE_DEPOSIT = "par_orcl_dep_read_on_chain"
 # The Oracle read whose frame pays the warm base but not the rest of the cold access: the
 # reference, charging the warm base first, runs out of gas before it loads the slot.
@@ -378,11 +373,6 @@ ORACLE_SLOT_5 = "0x6342000000000000000000000000000000000001:0x5"
 ORACLE_BELOW_WARM_BASE = "par_orcl_read_below_warm_base"
 ORACLE_CROSSING = "q56_det_oracle_read_crosses"
 ORACLE_LOOP = "par_orcl_real_read_below_warm_base_then_loop"
-# A transaction's own value `sendHint`: legacy, a deposit (which the deposit history's class takes
-# first) and one over the data-size limit, each admitted only by the hint's class.
-HINT_TOP = "par_hint_top_value_frame_2300"
-HINT_TOP_DEPOSIT = "par_hint_top_value_deposit_frame_2300"
-HINT_TOP_STOP = "par_hint_top_value_over_data_limit"
 
 
 def is_deposit_tx(r):
@@ -479,8 +469,6 @@ FAULTS = [
     ("modexp-price-class-other-gas", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, scen_edit(M, named(MODEXP_PRICE, bumped("gas_used")))),
     ("modexp-price-class-other-frame", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, scen_edit(M, named(MODEXP_PRICE, lambda o: o["frames"][1].update(status="revert")))),
     ("modexp-price-class-not-enabled", "main", r'^DIFFER %s \["gas_used", "regular", "frame 0 ' % MODEXP_PRICE, known_toml(lambda t: drop_class(t, "modexp_formula_price"))),
-    ("slotnum-class-other-field", "main", r'^DIFFER %s \[.*"logs"' % SLOTNUM, scen_edit(M, named(SLOTNUM, lambda o: o["logs"].append({"address": "0x00000000000000000000000000000000000000bb", "topics": [], "data": "0x"})))),
-    ("slotnum-class-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % SLOTNUM, known_toml(lambda t: drop_class(t, "slotnum_zero"))),
     ("giveback-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % GIVE_BACK, scen_edit(M, named(GIVE_BACK, bumped("gas_used")))),
     ("giveback-class-other-frame", "main", r'^DIFFER %s \[' % GIVE_BACK, scen_edit(M, named(GIVE_BACK, lambda o: o["frames"][1].update(status="halt")))),
     ("giveback-class-not-enabled", "main", r'^DIFFER %s \[' % GIVE_BACK, known_toml(lambda t: drop_class(t, "reservoir_give_back"))),
@@ -488,7 +476,7 @@ FAULTS = [
     ("main-giveback-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % GIVE_BACK, candidate(GIVE_BACK, "inspected", "gas_used", "bump")),
     ("main-giveback-candidate-field", "main", r'^DIFFER %s \[.*"record_fields:Engine:' % GIVE_BACK, candidate(GIVE_BACK, "plain", "ledger", "drop")),
     ("main-combined-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % COMBINED, candidate(COMBINED, "inspected", "gas_used", "bump")),
-    # main: the classes of the decisions of 2026-11-09 take exactly their change, alone or two at once, only while the file enables them
+    # main: the classes of the decisions of 2026-11-09 take exactly their change, only while the file enables them
     ("deposit-history-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % DEP_HISTORY, scen_edit(M, named(DEP_HISTORY, bumped("data_size")))),
     ("deposit-history-class-not-enabled", "main", r'^DIFFER %s \[.*"history"' % DEP_HISTORY, known_toml(lambda t: drop_class(t, "deposit_history"))),
     ("oracle-mark-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % ORACLE_MARK, scen_edit(M, named(ORACLE_MARK, bumped("gas_used")))),
@@ -499,16 +487,7 @@ FAULTS = [
     ("oracle-warm-base-class-reference-loads", "main", r'^DIFFER %s \[.*"reads"' % ORACLE_WARM_BASE, scen_edit(M, named(ORACLE_WARM_BASE, loads_slot(ORACLE_SLOT_5)))),
     ("refusal-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % REFUSAL, scen_edit(M, named(REFUSAL, bumped("data_size")))),
     ("refusal-class-not-enabled", "main", r'^DIFFER %s \[.*"gas_used"' % REFUSAL, known_toml(lambda t: drop_class(t, "refusal_costs_nothing"))),
-    ("keyless-decode-class-other-field", "main", r'^DIFFER %s \[.*"data_size"' % KEYLESS_DECODE, scen_edit(M, named(KEYLESS_DECODE, bumped("data_size")))),
-    ("keyless-decode-class-not-enabled", "main", r'^DIFFER %s \[.*"output"' % KEYLESS_DECODE, known_toml(lambda t: drop_class(t, "keyless_decoded_dispatch"))),
-    ("hint-value-class-other-field", "main", r'^DIFFER %s \[.*"gas_used"' % HINT_VALUE, scen_edit(M, named(HINT_VALUE, bumped("gas_used")))),
-    ("hint-value-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_VALUE, known_toml(lambda t: drop_class(t, "hint_with_value"))),
-    ("hint-value-no-gas-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_VALUE_NO_GAS, known_toml(lambda t: drop_class(t, "hint_with_value"))),
-    ("hint-value-top-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_TOP, known_toml(lambda t: drop_class(t, "hint_with_value"))),
-    ("hint-value-top-deposit-class-not-enabled", "main", r'^DIFFER %s \[.*"data_size"' % HINT_TOP_DEPOSIT, known_toml(lambda t: drop_class(t, "hint_with_value"))),
-    ("hint-value-top-stop-class-not-enabled", "main", r'^DIFFER %s \[.*"limit_exceeded"' % HINT_TOP_STOP, known_toml(lambda t: drop_class(t, "hint_with_value"))),
     ("oracle-service-combined-other-field", "main", r'^DIFFER %s \[.*"kv"' % ORACLE_DEPOSIT, scen_edit(M, named(ORACLE_DEPOSIT, bumped("kv")))),
-    ("oracle-service-combined-not-enabled", "main", r'^DIFFER %s \[.*"storage"' % ORACLE_DEPOSIT, known_toml(lambda t: drop_class(t, "oracle_no_service"))),
     ("main-par-combined-candidate-inspected", "main", r'^DIFFER %s \[.*"candidate_inspected:gas_used"' % ORACLE_DEPOSIT, candidate(ORACLE_DEPOSIT, "inspected", "gas_used", "bump")),
     # fuzz
     ("fuzz-gas-used", "fuzz", diff("gas_used"), scen_field(F, "gas_used", ok)),

@@ -107,8 +107,8 @@ class = "frame count 0 vs 1, halted level-0 frame in the runtime gas phase"
 why = "evm2 #871 reports a first frame whose runtime gas phase runs out of gas to the inspector as one halted level-0 frame (go-ethereum's haltTopFrame); the reference opens no frame. Outcome, gas, state and read set are equal."
 signoff = "owner sign-off 2026-11-05"
 
-# The owner's decisions of 2026-11-08 change both implementations in three places; the engine has
-# made each change and the reference (the other implementation) has not yet. Until it does, the
+# The owner's decisions of 2026-11-08 change both implementations; the engine has made each change
+# and the reference (the other implementation) has not yet made two of them. Until it does, the
 # gates accept exactly the difference each change makes, and nothing else: a case is of a class
 # only when the engine, run again under the reference's rule, has no difference from the reference
 # at all (`gate::scenario_verdict`). Each class goes once the reference makes the change.
@@ -129,12 +129,6 @@ name = "modexp_formula_price"
 why = "SATIN-PCMP-007 and SATIN-DET-023: ModExp checks EIP-7823's bound after its whole formula price is charged, and an over-bound input is priced by its formula. The other implementation still checks the bound first and has not made this change yet; an over-bound input is then labelled PrecompileOOG against PrecompileError when its gas lies between the two prices, and a detained call whose two prices straddle its allowance or forward is decided the other way. A case is of this class only when the engine, run again with the bound checked first, has no difference from the reference at all."
 signoff = "owner decision 2026-11-08 (SATIN-PCMP-007)"
 
-# SLOTNUM pushes zero in every block.
-[[class]]
-name = "slotnum_zero"
-why = "SATIN-BASE-005: SLOTNUM pushes zero. The other implementation still pushes its block environment's slot number and has not made this change yet; a case is of this class only when the engine, run again with SLOTNUM pushing that slot number, has no difference from the reference at all."
-signoff = "owner decision 2026-11-08 (SATIN-BASE-005)"
-
 # Every give-back of state and history gas credits a reservoir, never regular gas, and a fresh
 # slot, a new account and a creation's account take a flat legacy share from regular gas first.
 [[class]]
@@ -142,12 +136,12 @@ name = "reservoir_give_back"
 why = "SATIN-HIST-012, SATIN-POOL-014 and SATIN-STATE-012: every give-back of state or history gas (a refill, the destruction table, a start's charge given back, a failed frame's rollback) credits a reservoir and never regular gas, and a fresh slot, a new account and a creation's account take a flat legacy share from regular gas first. The other implementation still credits a give-back to regular gas first, up to the state gas that gas paid, returns a failed frame's spill to its regular gas, and draws every state charge from the reservoir first, and has not made this change yet; what that moves (GAS, forwards, which charge runs out of gas, the split of the gas left between the pools, detention's compute, a keyless deployment's gasUsed) is the program's to decide. A case is of this class only when the engine, run again under EIP-8037's give-back rule without legacy shares, has no difference from the reference at all; a case that also meets another enabled class's change is that class's when the run under both rules has none."
 signoff = "owner decision 2026-11-09 (SATIN-POOL-014)"
 
-# The owner's later decisions of the same day that restore Rex6's rules for system contracts and blocks,
-# and one generalizing the Oracle's no-service rule, change both implementations; the engine has
-# made each change and the reference has not yet. Each class is checked as the ones above: a case
-# is of it only when the engine, run again under the reference's rule, has no difference from the
-# reference at all, alone or, for a case that meets two or three of the decided changes, under all
-# their rules. Each class goes once the reference makes the change.
+# The owner's later decisions of the same day that restore Rex6's rules for system contracts and
+# blocks change both implementations; the engine has made each change and the reference has not
+# yet. Each class is checked as the ones above: a case is of it only when the engine, run again
+# under the reference's rule, has no difference from the reference at all, alone or, for a case
+# that meets two or three of the decided changes, under all their rules. Each class goes once the
+# reference makes the change.
 
 # Deposits and system-originated transactions pay history gas; a failed deposit reports its body
 # and calldata as history bytes.
@@ -168,29 +162,11 @@ name = "refusal_costs_nothing"
 why = "SATIN-MAC-003, SATIN-MAC-004 and SATIN-MAC-007: in a frame whose volatile-data access is off, a refused read reverts on the gas the frame held when the opcode was reached, before its static gas and before its body charges or checks anything; an opcode volatile whatever its operands is refused before its operands, a BLOCKHASH on an empty stack included; a call target's EIP-7702 delegate is read for the check. The other implementation still charges the static gas first and refuses an account read where its body loads the beneficiary, after its earlier charges, and has not made this change yet. A case is of this class only when the engine, run again with that order, has no difference from the reference at all."
 signoff = "owner decision 2026-11-09 (SATIN-MAC-003)"
 
-# A keyless deployment is recognized only once its arguments decode.
-[[class]]
-name = "keyless_decoded_dispatch"
-why = "SATIN-ICPT-006 and SATIN-KEY-005 step 3: a keylessDeploy call is dispatched only once its arguments decode as (bytes, uint256); one whose arguments do not runs KeylessDeploy's bytecode and pays no dispatch overhead. The other implementation still dispatches by the selector alone, charging the overhead and answering MalformedEncoding(), and has not made this change yet. A case is of this class only when the engine, run again with that dispatch, has no difference from the reference at all."
-signoff = "owner decision 2026-11-09 (SATIN-ICPT-006)"
-
-# A sendHint is admitted whether it carries value or not.
-[[class]]
-name = "hint_with_value"
-why = "SATIN-ORCL-006 and SATIN-ICPT-003: a sendHint call forwarded some gas from a frame whose access is on is admitted, forwarded and counted whether it carries value or not; the gas is the message's gas limit as the frame starts, so a value CALL's stipend counts (a value CALL requesting no gas is admitted) and a transaction's own sendHint, which has none, is judged on its first frame's whole gas. The other implementation still refuses a hint that carries value and has not made this change yet. A case is of this class only when the engine, run again with that condition, has no difference from the reference at all."
-signoff = "owner decision 2026-11-09 (SATIN-ORCL-006)"
-
 # A Mega System Transaction is held to the block's packing budgets.
 [[class]]
 name = "mst_packing_budgets"
 why = "SATIN-BLK-003, SATIN-BLK-006, SATIN-BLK-007 and SATIN-MST-009: a Mega System Transaction is held to the block's data-size, KV-update and state-growth budgets and to building policy as any other non-deposit transaction is; deposits stay exempt. The other implementation still exempts it and has not made this change yet. A recorded block is of this class only when the engine, run again with the exemption, has no difference from the reference at all."
 signoff = "owner decision 2026-11-09 (SATIN-BLK-007)"
-
-# No Oracle read of a deposit, a Mega System Transaction or a system call asks the service.
-[[class]]
-name = "oracle_no_service"
-why = "SATIN-ORCL-005: during a system call, a deposit or a Mega System Transaction the oracle service is asked nothing; an Oracle read pushes the slot's value on the chain and is loaded, priced and marked as any Oracle read. The other implementation still asks the service for a deposit's and a Mega System Transaction's reads and has not made this change yet. A case is of this class only when the engine, run again with those reads asking the service, has no difference from the reference at all."
-signoff = "owner decision 2026-11-09 (SATIN-ORCL-005)"
 
 # Every block deploys the system contracts before its transactions.
 [[class]]
