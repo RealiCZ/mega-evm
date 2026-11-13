@@ -365,7 +365,7 @@ jobs:
 
   mutants:
     name: mutants (${{ github.event_name == 'pull_request' && 'pr' || 'push' }})
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/cz/feat/satin-evm2' || github.ref == 'refs/heads/cz/ci/mutants-iterate'))
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     defaults:
@@ -438,7 +438,7 @@ jobs:
             if [ -n "${BEFORE//0/}" ]; then
               git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" "$BEFORE" || true
             fi
-            bash next/scripts/mutants.sh push "$BEFORE"
+            bash next/scripts/mutants.sh push 2d537bf66f46d378cf9ea8a98faa6080aef8a36c
           fi
 
       - name: Show the linker of the test binaries
@@ -482,7 +482,7 @@ jobs:
           overwrite: true
 
   mutants-plan:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/cz/feat/satin-evm2' || github.ref == 'refs/heads/cz/ci/mutants-iterate'))
     runs-on: ubuntu-24.04
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
@@ -565,7 +565,7 @@ jobs:
           set -euo pipefail
           # Every shard starts from the same results, so they split what is left the same way.
           # End before the job limit (330 minutes), leaving 20 for the steps after this one.
-          MUTANTS_ITERATE=1 MUTANTS_BUDGET=$((JOB_START + (330 - 20) * 60 - $(date +%s))) \
+          MUTANTS_ITERATE=1 MUTANTS_BUDGET=$((JOB_START + 75 * 60 - $(date +%s))) \
             bash next/scripts/mutants.sh shard "$SHARD"
 
       - name: Show the linker of the test binaries
@@ -645,4 +645,94 @@ jobs:
         with:
           name: next-mutants-full
           path: mega-evm/next/target/mutants-out/mutants.out
+          overwrite: true
+
+  mutants-bench:
+    name: mutants-bench (${{ matrix.leg }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/cz/ci/mutants-iterate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: release
+            profile: release
+            rustflags: ""
+            opt: ""
+          - leg: release-mold
+            profile: release
+            rustflags: -C link-arg=-fuse-ld=mold
+            opt: ""
+          - leg: mutants-o3-mold
+            profile: mutants
+            rustflags: -C link-arg=-fuse-ld=mold
+            opt: "3"
+          - leg: mutants-o2-mold
+            profile: mutants
+            rustflags: -C link-arg=-fuse-ld=mold
+            opt: "2"
+          - leg: mutants-o1-mold
+            profile: mutants
+            rustflags: -C link-arg=-fuse-ld=mold
+            opt: "1"
+    defaults:
+      run:
+        working-directory: mega-evm
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - name: Record the job's start
+        working-directory: .
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Checkout mega-evm
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mega-evm
+          persist-credentials: false
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
+      - name: Install the next/ toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          rust-src-dir: mega-evm/next
+          rustflags: ""
+          cache: true
+          cache-shared-key: next-mutants-bench-${{ matrix.leg }}
+      - name: Install mold
+        uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+        with:
+          make-default: false
+      - name: Install zstd
+        run: bash next/scripts/install-zstd.sh
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+      - name: Run shard 5/8, fresh, cut by a budget
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
+          OUT: ${{ github.workspace }}/mega-evm/next/target/mutants-out
+          MUTANTS_PROFILE: ${{ matrix.profile }}
+          OPT: ${{ matrix.opt }}
+        run: |
+          set -euo pipefail
+          if [ -n "$OPT" ]; then export CARGO_PROFILE_MUTANTS_OPT_LEVEL=$OPT; fi
+          echo "RUSTFLAGS=${RUSTFLAGS:-} MUTANTS_PROFILE=$MUTANTS_PROFILE CARGO_PROFILE_MUTANTS_OPT_LEVEL=${CARGO_PROFILE_MUTANTS_OPT_LEVEL:-}"
+          MUTANTS_BUDGET=$((JOB_START + 120 * 60 - $(date +%s))) bash next/scripts/mutants.sh shard 5/8
+      - name: Show the linker of the test binaries
+        if: always()
+        run: |
+          bin=$(find next/target/*/deps -maxdepth 1 -type f -perm -u+x -name 'mega_evm2-*' 2>/dev/null | head -1)
+          if [ -n "$bin" ]; then echo "$bin"; readelf -p .comment "$bin" | grep -iE 'mold|lld|GNU ld' || true; fi
+      - name: Timing
+        if: always()
+        run: python3 -I next/scripts/mutants-ledger.py timing --results next/target/mutants-out/mutants.out || true
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-mutants-bench-${{ matrix.leg }}
+          path: mega-evm/next/target/mutants-out/mutants.out
+          if-no-files-found: ignore
           overwrite: true
