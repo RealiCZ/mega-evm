@@ -10,9 +10,18 @@ Two subcommands:
 
   report      --results <mutants.out dir> [--suppressions <toml>]
               [--comment <path>] [--summary <path>]
+              [--scope <label>] [--require-complete]
         Read the run outcomes, apply line-scoped suppressions, compute the
         mutation score, write a Markdown report, and exit non-zero if any
         unsuppressed survivor remains (the "no new survivors" gate).
+
+        A results directory of a carried-over run (cargo-mutants --iterate)
+        also lists the mutants an earlier run caught or found unviable in
+        previously_caught.txt; previously_unviable.txt, when present, names
+        the unviable part of it. Those count as caught and unviable. When
+        mutants.json lists mutants the run never reached (it was stopped, for
+        example at a time budget), the report says how many, and
+        --require-complete makes that exit 2.
 
 The gate is intended to run diff-scoped (cargo mutants --in-diff), so every
 mutant it sees lives on a line the PR changed; an unsuppressed survivor there is
@@ -21,6 +30,7 @@ a test gap the PR introduced.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import tomllib
@@ -59,6 +69,27 @@ def read_lines(path: Path) -> list[str]:
     if not path.exists():
         return []
     return [ln.strip() for ln in path.read_text().splitlines() if ln.strip()]
+
+
+def carried_over(results: Path) -> tuple[list[str], list[str]]:
+    """(caught, unviable) mutants an earlier run settled, for a carried-over run.
+
+    cargo-mutants --iterate writes them all to previously_caught.txt, caught and unviable
+    alike; previously_unviable.txt (written by next/scripts/mutants.sh) names the unviable
+    ones. Without it, every carried-over mutant counts as caught."""
+    prev = read_lines(results / "previously_caught.txt")
+    unviable = set(read_lines(results / "previously_unviable.txt"))
+    return [m for m in prev if m not in unviable], [m for m in prev if m in unviable]
+
+
+def not_reached(results: Path, tested: list[str]) -> list[str]:
+    """Mutants of the run's plan (mutants.json) that have no outcome."""
+    plan = results / "mutants.json"
+    if not plan.is_file():
+        return []
+    done = set(tested)
+    return [m["name"] for m in json.loads(plan.read_text() or "[]")
+            if isinstance(m, dict) and m.get("name") and m["name"] not in done]
 
 
 def mutant_body(line: str) -> str:
@@ -101,6 +132,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     caught = read_lines(results / "caught.txt")
     unviable = read_lines(results / "unviable.txt")
     timeout = read_lines(results / "timeout.txt")
+    carried_caught, carried_unviable = carried_over(results)
+    unreached = not_reached(results, caught + missed + unviable + timeout)
 
     _, line_supp = load_suppressions(Path(args.suppressions)) if args.suppressions else ([], [])
     # A line suppression matches either the bare mutation text (`mutant` written
@@ -120,11 +153,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     # it, or record an explicit suppression). Suppressing reuses the same model.
     supp_timeouts, real_timeouts = partition(timeout)
 
-    viable = len(caught) + len(missed)
+    killed = len(caught) + len(carried_caught)
+    viable = killed + len(missed)
     scored = viable - len(suppressed)  # equivalents/dead-code excluded from denominator
-    killed = len(caught)
     score = (killed / scored * 100.0) if scored else 100.0
     gate_pass = not real_survivors and not real_timeouts
+    incomplete = args.require_complete and bool(unreached)
 
     # ---- Markdown report (PR comment + step summary) ----
     status = "✅ PASS" if gate_pass else "❌ FAIL"
@@ -132,7 +166,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     # No viable mutants and nothing inconclusive (typical diff run whose changed
     # lines contain nothing mutatable). Reporting "100% (0/0)" reads like a real
     # result and confuses readers — say plainly that nothing was tested.
-    if viable == 0 and not real_timeouts:
+    if viable == 0 and not real_timeouts and not unreached:
         note = "**Nothing to test** — no mutants were generated"
         if unviable or timeout:
             note += f" ({len(unviable)} unviable, {len(timeout)} timed out)"
@@ -147,18 +181,28 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(report)
         return 0
 
+    if incomplete:
+        status = "❌ INCOMPLETE"
+    caught_line = f"- caught: {killed}"
+    if carried_caught:
+        caught_line += f" ({len(carried_caught)} carried over from earlier runs)"
     md = [
         f"## 🧬 Mutation testing — {status}",
         "",
-        f"**Diff mutation score: {score:.1f}%** ({killed}/{scored} viable mutants killed)",
+        f"**{args.scope} mutation score: {score:.1f}%** ({killed}/{scored} viable mutants killed)",
         "",
-        f"- caught: {len(caught)}",
+        caught_line,
         f"- survived (real gaps): **{len(real_survivors)}**",
         f"- timed out (inconclusive): **{len(real_timeouts)}**",
         f"- suppressed (equivalent/dead-code): {len(suppressed) + len(supp_timeouts)}",
-        f"- unviable: {len(unviable)} · timeout total: {len(timeout)}",
-        "",
+        f"- unviable: {len(unviable) + len(carried_unviable)} · timeout total: {len(timeout)}",
     ]
+    if unreached:
+        md.append(
+            f"- not reached in this run: **{len(unreached)}** (the run stopped before testing "
+            f"them; a carried-over run continues with them)"
+        )
+    md.append("")
 
     def section(title: str, blurb: str, items: list[str], artifact: str) -> list[str]:
         out = [f"### {title}", "", blurb, ""]
@@ -200,6 +244,13 @@ def cmd_report(args: argparse.Namespace) -> int:
             fh.write(report)
     print(report)
 
+    if incomplete:
+        print(
+            f"ERROR: {len(unreached)} mutants of this run were never tested — refusing to "
+            f"report a complete gate.",
+            file=sys.stderr,
+        )
+        return 2
     return 0 if gate_pass else 1
 
 
@@ -266,6 +317,9 @@ def main() -> int:
     pr.add_argument("--suppressions", default=None)
     pr.add_argument("--comment", default=None, help="write Markdown report here")
     pr.add_argument("--summary", default=None, help="append report here (GITHUB_STEP_SUMMARY)")
+    pr.add_argument("--scope", default="Diff", help="what was mutated, for the score's label")
+    pr.add_argument("--require-complete", action="store_true",
+                    help="exit 2 when mutants.json lists mutants the run never reached")
     pr.set_defaults(func=cmd_report)
 
     po = sub.add_parser("orphans", help="flag suppressions matching no live mutant")
