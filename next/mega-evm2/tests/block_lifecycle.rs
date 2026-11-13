@@ -52,11 +52,11 @@ const CREATE2_FACTORY_CODE: &[u8] = &hex!(
     "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3"
 );
 /// The index of a step's state in a block of the tests' chain with no change due: the two EIP
-/// calls, the five deployments, the due-change read, the registry's deployment, the L1 block info
-/// read and the resolution.
+/// calls, the five deployments, the due-change read, the registry's deployment and the
+/// resolution. No step reads the L1 block contract.
 const DUE_READ: usize = 7;
 const REGISTRY_DEPLOYMENT: usize = 8;
-const RESOLUTION: usize = 10;
+const RESOLUTION: usize = 9;
 
 /// A chain on which Satin is scheduled at `satin`, genesis at `genesis`, every fork below it from
 /// timestamp zero, and the tests' bootstrap values.
@@ -292,7 +292,7 @@ fn assert_read_is_internal(
 fn lifecycle_absent_system_contracts_are_installed_each_as_a_state_of_its_own() {
     let mut block = start(&genesis_chain(), &block_input(), world()).expect("the block starts");
     let states = block.pre_block_states().to_vec();
-    assert_eq!(states.len(), 11);
+    assert_eq!(states.len(), 10);
     for (i, contract) in FLAT_SYSTEM_CONTRACTS.iter().enumerate() {
         let state = &states[2 + i];
         assert_eq!(state.account_changes().count(), 1, "{}: a state of its own", contract.name);
@@ -594,7 +594,7 @@ fn lifecycle_due_change_compares_the_whole_activation_block() {
         set_slot(&mut db, 7, address_word(NEXT));
         set_slot(&mut db, 8, activation);
         let block = start(&genesis_chain(), &input(number, 100), db).expect("the block starts");
-        let applied = block.pre_block_states().len() == 12;
+        let applied = block.pre_block_states().len() == 11;
         assert_eq!(applied, due, "block {number}, activation {activation}");
         let live = if due { NEXT } else { LIVE };
         assert_eq!(block.system_address(), Some(live), "block {number}, activation {activation}");
@@ -614,7 +614,7 @@ fn lifecycle_due_change_applies_both_roles_before_the_registry_is_deployed() {
     set_slot(&mut db, 10, U256::from(NUMBER));
     let block = start(&genesis_chain(), &block_input(), db).expect("the block starts");
     let states = block.pre_block_states();
-    assert_eq!(states.len(), 12);
+    assert_eq!(states.len(), 11);
     let call = states[DUE_READ + 1].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
     assert_eq!(call.current.map(|i| i.code_hash), call.original.map(|i| i.code_hash), "1.0.0 ran");
     let migrated = states[DUE_READ + 2].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
@@ -785,7 +785,7 @@ fn lifecycle_the_factory_is_checked_in_the_crossing_block_only() {
     let block = start(&crossing, &block_input(), db).expect("the activation block starts");
     assert!(block.activation().satin_activates());
     let states = block.pre_block_states();
-    assert_eq!(states.len(), 12);
+    assert_eq!(states.len(), 11);
     let check = &states[2];
     assert_eq!(check.account_changes().count(), 1);
     let read = check.account_changes_for(&CREATE2_FACTORY).unwrap();
@@ -795,7 +795,7 @@ fn lifecycle_the_factory_is_checked_in_the_crossing_block_only() {
     // The next block checks nothing: it starts without the factory and reads it nowhere.
     let block = start(&crossing, &input(NUMBER + 1, 101), world()).expect("the next block");
     assert!(!block.activation().satin_activates());
-    assert_eq!(block.pre_block_states().len(), 11);
+    assert_eq!(block.pre_block_states().len(), 10);
     assert!(
         block.pre_block_states().iter().all(|s| s.account_changes_for(&CREATE2_FACTORY).is_none())
     );
@@ -816,7 +816,7 @@ fn lifecycle_block_zero_makes_no_eip_call_and_installs_every_contract() {
     let block = start(&genesis_chain(), &zero, InMemoryDB::default()).expect("block zero starts");
     assert!(block.activation().block_zero() && !block.activation().satin_activates());
     let states = block.pre_block_states();
-    assert_eq!(states.len(), 9, "five deployments, the due read, the registry, L1, resolution");
+    assert_eq!(states.len(), 8, "five deployments, the due read, the registry, the resolution");
     for address in [HISTORY_STORAGE, BEACON_ROOTS, CREATE2_FACTORY] {
         assert!(states.iter().all(|s| s.account_changes_for(&address).is_none()), "{address}");
     }
@@ -849,7 +849,7 @@ fn lifecycle_a_genesis_active_chain_has_no_crossing_block() {
     let block = start(&factory, &first, world()).expect("the first block starts");
     assert!(!block.activation().satin_activates() && !block.activation().deposits_only());
     let states = block.pre_block_states();
-    assert_eq!(states.len(), 11);
+    assert_eq!(states.len(), 10);
     assert!(states.iter().all(|s| s.account_changes_for(&CREATE2_FACTORY).is_none()));
     assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
 }

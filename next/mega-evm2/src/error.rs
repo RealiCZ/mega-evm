@@ -13,12 +13,13 @@
 //! | a pre-block call: a database error declared fatal | [`Disposition::Internal`] |
 //! | a pre-block call: any other database error, another execution error, a result that is not a success; a missing parent beacon block root | [`Disposition::InvalidBlock`] |
 //! | the EIP-7997 factory absent, without code or with other code in the block in which Satin activates; a SequencerRegistry with code the deployment cannot migrate; a registry the resolution finds absent, with other code or naming no system address | [`Disposition::InvalidBlock`] |
-//! | a read of the factory check, of a system contract's deployment, of the due-change predicate, of the L1 block info before the transactions, of the live system address | [`Disposition::Internal`], whatever the database declares |
-//! | a transaction's validation or execution: a database error declared fatal, a bucket capacity read that fails or is below the minimum (whatever the snapshot's backend declares), another fatal error | [`Disposition::Internal`] |
-//! | a transaction's validation or execution: a database error not declared fatal | [`Disposition::InvalidBlock`] |
-//! | the block's bookkeeping outside a transaction's execution: the sender's account, the L1 footprint scalar | [`Disposition::Internal`] |
+//! | a read of the factory check, of a system contract's deployment, of the due-change predicate, of the live system address | [`Disposition::Internal`], whatever the database declares |
+//! | a transaction's validation or execution, the L1 block contract's account and slots its fee computation reads included: a database error declared fatal, a bucket capacity read that fails or is below the minimum (whatever the snapshot's backend declares), another fatal error | [`Disposition::Internal`] |
+//! | a transaction's validation or execution, the L1 block contract's account and slots its fee computation reads included: a database error not declared fatal | [`Disposition::InvalidBlock`] |
+//! | the block's bookkeeping outside a transaction's execution: the sender's account, the L1 block contract's account and footprint scalar | [`Disposition::Internal`] |
+//! | a block hash a block's export cannot number (never through a block session, whose numbers are 64-bit) | [`Disposition::Internal`] |
 //! | a candidate the block's rules refuse: the activation policy, the block's gas limit, its packing budgets, its footprint room, the transaction's own validity | [`Disposition::Refused`] |
-//! | a candidate whose sender changed after it ran, or that ran for another block | [`Disposition::Retry`] |
+//! | a candidate whose sender changed after it ran, that ran on another committed prefix of the block (a commit came between its run and its commit, or another session's commits differ), or that ran for another block | [`Disposition::Retry`] |
 //!
 //! Reverts, halts, limit stops and valid failed deposits are a transaction's outcomes, never one of
 //! these errors. A database error keeps its own type and fatality through evm2's erased wrappers
@@ -60,12 +61,11 @@ pub enum Phase {
     Deployment,
     /// The registry's due-change read of the pre-block sequence.
     DueChangeRead,
-    /// The pre-block read of the L1 block info.
-    L1BlockInfoRead,
     /// The read of the live system address a transaction is classified against.
     SystemAddressResolution,
     /// The block's own reads for a transaction outside its execution: the sender's account before
-    /// it runs, the L1 block contract's footprint gas scalar.
+    /// it runs, the L1 block contract's account and footprint gas scalar before a non-deposit
+    /// transaction runs (`SATIN-WIT-011`, `SATIN-VAL-010`).
     Bookkeeping,
     /// The transaction's validation and execution.
     Transaction,
@@ -260,6 +260,10 @@ pub enum BlockErrorKind {
     /// A transaction's execution failed for a reason that is not the transaction's: a database
     /// error, a bucket capacity, another fatal error.
     Execution(HandlerError),
+    /// `BLOCKHASH` was served a hash for a block whose number a block's export, numbered by
+    /// `u64`, cannot hold: never through a block session, whose own number is a `u64` and above
+    /// every number it serves.
+    BlockHashNumber(crate::block_hashes::UnexportableBlockNumber),
 }
 
 /// Why the block's live system address cannot be resolved (`SATIN-REG-004`).
@@ -413,6 +417,21 @@ impl BlockError {
         }))
     }
 
+    /// A block hash `BLOCKHASH` was served whose number the block's export cannot hold, met in
+    /// `phase`: an internal error.
+    pub(crate) fn block_hash_number(
+        error: crate::block_hashes::UnexportableBlockNumber,
+        phase: Phase,
+        context: ErrorContext,
+    ) -> Self {
+        Self(Box::new(Failure {
+            kind: BlockErrorKind::BlockHashNumber(error),
+            phase,
+            disposition: Disposition::Internal,
+            context,
+        }))
+    }
+
     pub fn kind(&self) -> &BlockErrorKind {
         &self.0.kind
     }
@@ -430,6 +449,17 @@ impl BlockError {
     }
 
     /// The database error behind the failure, its type and fatality kept, when there is one.
+    /// The failed SALT lookup behind the failure, whichever charge site failed and however it
+    /// carried the failure out.
+    pub fn salt_lookup_error(&self) -> Option<&SaltLookupError> {
+        match &self.0.kind {
+            BlockErrorKind::SystemCall { error, .. } | BlockErrorKind::Execution(error) => {
+                salt_failure(error)
+            }
+            _ => None,
+        }
+    }
+
     pub fn database_error(&self) -> Option<&DatabaseError> {
         match &self.0.kind {
             BlockErrorKind::Database(e) => Some(e),
@@ -457,7 +487,6 @@ impl core::fmt::Display for BlockError {
                 Phase::DueChangeRead | Phase::SystemAddressResolution => {
                     write!(f, "registry read: {e:?}")
                 }
-                Phase::L1BlockInfoRead => write!(f, "L1 block info read: {e:?}"),
                 Phase::FactoryCheck => write!(f, "factory read: {e:?}"),
                 Phase::Deployment => write!(f, "system contract read: {e:?}"),
                 _ => write!(f, "{e:?}"),
@@ -494,6 +523,7 @@ impl core::fmt::Display for BlockError {
                 f.write_str("no live system address: the SequencerRegistry's slot 0 is zero")
             }
             BlockErrorKind::Execution(e) => write!(f, "EVM reported invalid transaction: {e:?}"),
+            BlockErrorKind::BlockHashNumber(e) => write!(f, "{e}"),
         }
     }
 }
@@ -576,6 +606,47 @@ pub struct BlockIdentity {
     pub parent_hash: B256,
 }
 
+/// The committed part of a block a candidate ran on: how many transactions the session had
+/// committed, and a digest of them in commit order (each by its sender, the nonce it ran with and
+/// its bytes). A session starts at the empty prefix once its pre-block sequence ran, and each
+/// commit extends it; two sessions of one block that committed the same transactions in the same
+/// order are at the same prefix, and a candidate commits only at the prefix it ran on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Prefix {
+    committed: u64,
+    digest: B256,
+}
+
+impl Prefix {
+    /// The number of transactions committed.
+    pub const fn committed(&self) -> u64 {
+        self.committed
+    }
+
+    /// The digest of the committed transactions; zero for the empty prefix.
+    pub const fn digest(&self) -> B256 {
+        self.digest
+    }
+
+    /// The prefix once the transaction `tx` (its [`Self::identity`]) is committed after it.
+    pub(crate) fn extended(self, tx: B256) -> Self {
+        let mut hasher = alloy_primitives::Keccak256::new();
+        hasher.update(self.digest);
+        hasher.update(tx);
+        Self { committed: self.committed + 1, digest: hasher.finalize() }
+    }
+
+    /// What identifies a transaction in a prefix: its sender and the nonce it ran with, which no
+    /// other transaction committed in the block shares, and its `bytes`.
+    pub(crate) fn identity(sender: Address, nonce: u64, bytes: &[u8]) -> B256 {
+        let mut hasher = alloy_primitives::Keccak256::new();
+        hasher.update(sender);
+        hasher.update(nonce.to_be_bytes());
+        hasher.update(bytes);
+        hasher.finalize()
+    }
+}
+
 /// Why a candidate transaction was not executed or not committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CandidateError {
@@ -583,6 +654,10 @@ pub enum CandidateError {
     Refused(Refusal),
     /// Its sender's nonce or balance changed after it ran ([`Disposition::Retry`]).
     Stale { sender: Address },
+    /// It ran on another committed prefix of the block than the session's ([`Disposition::Retry`]):
+    /// a commit came between its run and its commit, or it ran in a session whose commits differ.
+    /// Its state was computed on a state the block no longer has; it runs again.
+    OtherPrefix { expected: Prefix, found: Prefix },
     /// It ran for another block ([`Disposition::Retry`]).
     Foreign { expected: BlockIdentity, found: BlockIdentity },
     /// It ran under other rules than the session's: a simulation's in a consensus session, or
@@ -615,9 +690,10 @@ impl CandidateError {
     pub fn disposition(&self) -> Disposition {
         match self {
             Self::Refused(_) => Disposition::Refused,
-            Self::Stale { .. } | Self::Foreign { .. } | Self::OtherRules { .. } => {
-                Disposition::Retry
-            }
+            Self::Stale { .. } |
+            Self::OtherPrefix { .. } |
+            Self::Foreign { .. } |
+            Self::OtherRules { .. } => Disposition::Retry,
             Self::Block(e) => e.disposition(),
         }
     }
@@ -628,6 +704,11 @@ impl core::fmt::Display for CandidateError {
         match self {
             Self::Refused(r) => write!(f, "{r}"),
             Self::Stale { sender } => write!(f, "stale outcome: sender {sender}"),
+            Self::OtherPrefix { expected, found } => write!(
+                f,
+                "stale outcome: ran on {} committed transactions ({}), the block is at {} ({})",
+                found.committed, found.digest, expected.committed, expected.digest
+            ),
             Self::Foreign { expected, found } => write!(
                 f,
                 "outcome of block {} on {} committed to block {} on {}",
@@ -834,7 +915,6 @@ mod tests {
     fn test_the_blocks_own_reads_are_internal_whatever_the_fatality() {
         for phase in [
             Phase::DueChangeRead,
-            Phase::L1BlockInfoRead,
             Phase::SystemAddressResolution,
             Phase::Bookkeeping,
             Phase::Commit,
@@ -964,7 +1044,7 @@ mod tests {
         );
         let read = BlockError::read(Phase::DueChangeRead, db(true), ErrorContext::default());
         assert!(read.to_string().starts_with("registry read: "), "{read}");
-        let read = BlockError::read(Phase::L1BlockInfoRead, db(true), ErrorContext::default());
-        assert!(read.to_string().starts_with("L1 block info read: "), "{read}");
+        let read = BlockError::read(Phase::FactoryCheck, db(true), ErrorContext::default());
+        assert!(read.to_string().starts_with("factory read: "), "{read}");
     }
 }

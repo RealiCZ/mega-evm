@@ -56,7 +56,35 @@ impl BlockHashReads {
         served.sort_unstable_by_key(|(number, _)| *number);
         served
     }
+
+    /// [`Self::served`], numbered as a block's export numbers its blocks, by `u64`; an error names
+    /// a number that does not fit. A block session's numbers always fit: it serves only blocks
+    /// before its own, whose number its header gives as a `u64`; a single transaction's EVM in a
+    /// block numbered past 64 bits can be served one that does not.
+    pub fn exported(&self) -> Result<Vec<(u64, B256)>, UnexportableBlockNumber> {
+        self.served()
+            .into_iter()
+            .map(|(number, hash)| {
+                u64::try_from(number)
+                    .map(|n| (n, hash))
+                    .map_err(|_| UnexportableBlockNumber(number))
+            })
+            .collect()
+    }
 }
+
+/// A block number `BLOCKHASH` was served a hash for that does not fit the `u64` a block's export
+/// numbers its blocks by ([`BlockHashReads::exported`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnexportableBlockNumber(pub Word);
+
+impl core::fmt::Display for UnexportableBlockNumber {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "a hash was served for block {}, whose number does not fit 64 bits", self.0)
+    }
+}
+
+impl core::error::Error for UnexportableBlockNumber {}
 
 /// `BLOCKHASH`: evm2's rule — the hash of one of the last [`BLOCK_HASH_HISTORY`] blocks, zero for
 /// the current block, a future one or an older one, none of which asks the host — and the record
@@ -168,8 +196,14 @@ mod tests {
         reads.record(Word::from(7), a);
         reads.record(Word::from(9), b);
         assert_eq!(reads.served(), [(Word::from(7), a), (Word::from(9), b)]);
+        assert_eq!(reads.exported(), Ok(vec![(7, a), (9, b)]));
         reads.begin_attempt();
         assert!(reads.is_empty());
         assert!(reads.served().is_empty());
+        // A number past 64 bits is named, not cut down, nor a panic.
+        let past = Word::from(u64::MAX) + Word::from(1);
+        reads.record(Word::from(7), a);
+        reads.record(past, b);
+        assert_eq!(reads.exported(), Err(UnexportableBlockNumber(past)));
     }
 }

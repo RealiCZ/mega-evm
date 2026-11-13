@@ -33,6 +33,7 @@ pub mod error;
 pub mod factory;
 pub mod intercept;
 pub mod keyless;
+pub mod l1_reads;
 pub mod ledger;
 pub mod oracle;
 #[cfg(feature = "compare")]
@@ -44,6 +45,7 @@ pub mod satin_ext;
 mod system_code;
 pub mod system_contracts;
 pub mod tx;
+pub mod witness;
 
 pub use crate::{block_hashes::*, ledger::*, salt::*};
 

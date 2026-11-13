@@ -14,8 +14,9 @@
 //! 7. the resolution of the block's live system address (`SATIN-REG-002`, `SATIN-REG-004`).
 //!
 //! Each step's state, a read-only one included, is committed to the session before the next step
-//! runs, so every step sees the ones before it. The pre-block read of the L1 block contract's
-//! account and slots is still made, after step 6, so that the resolution is committed last.
+//! runs, so every step sees the ones before it. No step reads the L1 block contract: its account
+//! and slots are read when a transaction needs them, and reported with the first included
+//! transaction that read them (`SATIN-WIT-011`, `crate::l1_reads`).
 //!
 //! A deployment and the reads are charged nothing and count toward none of the block's counters.
 //! A pre-block call runs from `SYSTEM_CALLER` on 30,000,000 of regular gas and a reservoir of
@@ -38,10 +39,6 @@ use evm2::{
     bytecode::Bytecode,
     evm::{AccountInfo, PendingState, StateChangeSink, StateChangeSource},
 };
-use op_evm2::constants::L1_BLOCK_CONTRACT;
-
-/// The L1 block slots the transactions can be priced against (Satin `L1_BLOCK_INFO_SLOTS`).
-const L1_BLOCK_INFO_SLOTS: [u64; 5] = [1, 3, 5, 7, 8];
 
 /// A pre-block state whose account's earlier storage is cleared before the state's own changes
 /// apply: a new registry seeded over an account without code (`SATIN-REG-008`).
@@ -127,10 +124,6 @@ impl BlockSession<'_> {
                 self.commit_pre_block_state(state);
             }
         }
-        // The L1 block info read (read-only, as Satin's `read_l1_block_info`), before the
-        // resolution so that the resolution is committed last.
-        let state = self.read_l1_block_info()?;
-        self.commit_pre_block_state(state);
         // Step 7: the live system address, committed last.
         let (address, reads) = self.resolve_system_address()?;
         self.commit_pre_block_state(reads);
@@ -316,30 +309,5 @@ impl BlockSession<'_> {
             )
         };
         Ok((address, read.state()))
-    }
-
-    /// Satin `read_l1_block_info`: the account, then its slots when it exists, read-only. A read
-    /// the database cannot serve is an internal error.
-    fn read_l1_block_info(&mut self) -> Result<PendingState, BlockError> {
-        let state = self.evm.state_mut();
-        let failed = |slot: Option<U256>| {
-            move |e: evm2::DatabaseError| {
-                let context = ErrorContext { slot, ..ErrorContext::account(L1_BLOCK_CONTRACT) };
-                BlockError::read(Phase::L1BlockInfoRead, e, context)
-            }
-        };
-        let info = state.account_info_untracked(&L1_BLOCK_CONTRACT).map_err(failed(None))?;
-        let mut reads = PendingState::default();
-        reads.insert_account(L1_BLOCK_CONTRACT, info.clone(), info.clone());
-        if info.is_some() {
-            for slot in L1_BLOCK_INFO_SLOTS {
-                let key = U256::from(slot);
-                let value = state
-                    .storage_slot_untracked(&L1_BLOCK_CONTRACT, &key)
-                    .map_err(failed(Some(key)))?;
-                reads.insert_storage(L1_BLOCK_CONTRACT, key, value, value);
-            }
-        }
-        Ok(reads)
     }
 }

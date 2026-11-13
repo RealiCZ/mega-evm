@@ -159,7 +159,19 @@ pub struct Lite {
     /// executor installs. A tool or a test that runs under other values sets them here; what it
     /// computes is then a counterfactual, not the chain's result.
     pub limits: TxLimits,
+    /// The L1 block info the fee computation prices non-deposit transactions from, loaded once
+    /// per block and kept across transactions.
     pub l1: op_evm2::L1BlockInfo,
+    /// The L1 block contract's account and slots [`Self::l1`] was loaded from, kept with it: every
+    /// transaction priced from the cache read them (`SATIN-WIT-011`).
+    pub l1_sources: crate::l1_reads::L1Reads,
+    /// The L1 block contract's account and slots the running attempt's fee computation read,
+    /// outside its journal (`SATIN-WIT-003`, `SATIN-WIT-011`): the cache's sources, whether or
+    /// not the attempt loaded the cache. Emptied when the next attempt begins.
+    pub l1_reads: crate::l1_reads::L1Reads,
+    /// Whether the running attempt was priced from [`Self::l1`]: its fee computation ran.
+    /// Cleared when the next attempt begins.
+    pub l1_priced: bool,
     pub sender: Address,
     /// Whether the transaction pays history gas: every transaction, deposits and system-originated
     /// ones included, but a system call (`SATIN-HIST-016`).
@@ -348,8 +360,7 @@ impl Lite {
         self.tx_start_bytes = 0;
         self.last_caller_remaining = 0;
         self.reservoir_left = 0;
-        self.salt.begin_attempt();
-        self.block_hashes.begin_attempt();
+        self.begin_attempt();
         self.created_prices.clear();
         self.slot_records.clear();
         self.slot_undo.clear();
@@ -375,6 +386,27 @@ impl Lite {
         if sender == evm2::evm::SYSTEM_ADDRESS && !crate::off("protocol_origin") {
             self.set_system_originated();
         }
+    }
+
+    /// Begins an attempt: forgets what the previous one read outside its journal — its SALT
+    /// lookups, the block hashes it was served and its L1 block reads — keeping the L1 info cache
+    /// and its sources. Every engine handler begins with it, before any check that can refuse the
+    /// transaction, and a block session before its own checks of a candidate; so do
+    /// [`Self::begin_tx`] and [`Self::begin_system_call`]. A transaction of a type the EVM has no
+    /// handler for is refused before any engine code runs: it leaves the records of the attempt
+    /// before it, and a caller that reads them after such a refusal begins an attempt itself.
+    pub fn begin_attempt(&mut self) {
+        self.salt.begin_attempt();
+        self.block_hashes.begin_attempt();
+        self.l1_reads.clear();
+        self.l1_priced = false;
+    }
+
+    /// Forgets the L1 info cache and its sources: the next fee computation loads it again, from
+    /// the state as it then stands.
+    pub fn forget_l1_info(&mut self) {
+        self.l1 = op_evm2::L1BlockInfo::default();
+        self.l1_sources.clear();
     }
 
     /// Resets the ledger for a pre-block system call: the protocol's own work, and a system call

@@ -1,8 +1,8 @@
 //! A transaction outside a block session reads the live system address out of the
 //! `SequencerRegistry` before anything else; a block reads the registry once, before its
 //! transactions, to decide whether a role change is due and which address its transactions are
-//! classified against; a block reads the L1 block info before its transactions, and a
-//! transaction other than a deposit reads the L1Block account before it is priced. A read the
+//! classified against; a block reads no L1 block info before its transactions, and a transaction
+//! other than a deposit reads the L1Block account before it is priced. A read the
 //! database cannot serve fails the transaction (or the block) with the database's error, whatever
 //! the envelope; it is never taken for an absent account.
 //!
@@ -381,9 +381,9 @@ fn test_pre_block_step_fails_on_an_unreadable_registry() {
     }
     // The control: a change is due, so the sequence calls `applyPendingChanges()` after the
     // registry's read-only state: the two EIP calls, five deployments, the read, the call, the
-    // registry's deployment, the L1 block info read and the resolution.
+    // registry's deployment and the resolution.
     let block = start_block(Fail::Nothing, true).0.expect("the block starts");
-    assert_eq!(block.pre_block_states().len(), 12, "the control: a change is due");
+    assert_eq!(block.pre_block_states().len(), 11, "the control: a change is due");
 }
 
 /// A transaction other than a deposit reads the L1Block account, then its slots, before it is
@@ -404,17 +404,30 @@ fn test_unreadable_l1_block_fails_every_envelope_but_a_deposit() {
     }
 }
 
-/// The pre-block step reads the L1 block info: an unreadable L1Block account or slot fails the
-/// block.
+/// No pre-block step reads the L1 block contract: a block whose L1Block account or slots are
+/// unreadable starts, and includes a deposit, which reads neither; the first non-deposit
+/// transaction's footprint read is the block's own read for it, an internal error.
 #[test]
-fn test_pre_block_step_fails_on_an_unreadable_l1_block() {
+fn test_pre_block_sequence_reads_no_l1_block() {
+    let (_, deposit) = every_envelope().pop().unwrap();
+    let (_, legacy) = every_envelope().remove(0);
     for fail in [Fail::L1Account, Fail::L1Storage] {
-        // A parent beacon block root: a block without one is refused before the L1 read.
-        let error = start_block(fail, true).0.err().expect("an unreadable L1 block info");
-        assert_eq!(error.phase(), Phase::L1BlockInfoRead, "{fail:?}");
-        assert_eq!(error.disposition(), Disposition::Internal, "{fail:?}");
-        assert_eq!(error.context().address, Some(L1_BLOCK_CONTRACT), "{fail:?}");
-        assert_unavailable_block("L1 block info", &error);
+        let mut block = start_block(fail, true).0.expect("the block starts without an L1 read");
+        assert!(
+            block
+                .pre_block_states()
+                .iter()
+                .all(|s| s.account_changes_for(&L1_BLOCK_CONTRACT).is_none()),
+            "{fail:?}"
+        );
+        let out = block.execute_candidate(&deposit, &[]).expect("a deposit reads no L1 block");
+        block.commit_candidate(out).unwrap();
+        let error = block.execute_candidate(&legacy, &[]).expect_err("the footprint read fails");
+        let CandidateError::Block(fault) = &error else { panic!("{error:?}") };
+        assert_eq!(fault.phase(), Phase::Bookkeeping, "{fail:?}");
+        assert_eq!(fault.disposition(), Disposition::Internal, "{fail:?}");
+        assert_eq!(fault.context().address, Some(L1_BLOCK_CONTRACT), "{fail:?}");
+        assert_unavailable_block("L1 block", fault);
     }
 }
 

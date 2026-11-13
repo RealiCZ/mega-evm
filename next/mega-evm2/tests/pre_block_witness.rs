@@ -1,8 +1,9 @@
 //! Each pre-block step returns its own whole state, including read-only witness entries, in the
 //! order of the sequence (`SATIN-PBLK-003`): the EIP-2935 and EIP-4788 calls, the five flat
 //! system contracts' deployments, the registry's due-change read and its `applyPendingChanges()`
-//! call when due, the registry's deployment, the L1 block info read and the resolution of the live
-//! system address, last.
+//! call when due, the registry's deployment and the resolution of the live system address, last.
+//! No step reads the L1 block contract: its reads belong to the transactions that make them
+//! (`SATIN-WIT-011`).
 
 mod common;
 
@@ -56,7 +57,7 @@ fn test_read_only_pre_block_states_are_committed_in_order() {
         // The session runs the pre-block sequence before it is returned.
         let mut block = block(true, due);
         let states = block.pre_block_states().to_vec();
-        assert_eq!(states.len(), if due { 12 } else { 11 }, "due={due}");
+        assert_eq!(states.len(), if due { 11 } else { 10 }, "due={due}");
         assert!(states[0].account_changes_for(&mega_evm2::block::HISTORY_STORAGE).is_some());
         assert!(states[1].account_changes_for(&mega_evm2::block::BEACON_ROOTS).is_some());
         for (state, contract) in states[2..7].iter().zip(&FLAT_SYSTEM_CONTRACTS) {
@@ -81,15 +82,11 @@ fn test_read_only_pre_block_states_are_committed_in_order() {
         // Version 2.0.0: the deployment leaves it as it is, a read-only entry of its own.
         let deployed = states[next].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
         assert!(!deployed.is_changed() && deployed.storage.slots.is_empty());
-        let l1 = states[next + 1].account_changes_for(&L1_BLOCK_CONTRACT).unwrap();
-        assert!(!l1.is_changed());
-        assert_eq!(l1.storage.slots.len(), 5);
-        for slot in [1, 3, 5, 7, 8] {
-            let value = &l1.storage.slots[&U256::from(slot)].value;
-            assert_eq!(value.current, U256::from(slot * 10));
-            assert_eq!(value.original, value.current);
-        }
-        // The resolution, last: the account and slot 0 as the steps before left them.
+        // The L1 block contract, though it exists, is in no pre-block state.
+        assert!(states.iter().all(|s| s.account_changes_for(&L1_BLOCK_CONTRACT).is_none()));
+        // The resolution, last, right after the deployment: the account and slot 0 as the steps
+        // before left them.
+        assert_eq!(states.len(), next + 2);
         let resolved = states.last().unwrap().account_changes_for(&SEQUENCER_REGISTRY).unwrap();
         assert!(!resolved.is_changed());
         let live = if due { PENDING } else { LIVE };
@@ -105,14 +102,14 @@ fn test_read_only_pre_block_states_are_committed_in_order() {
 #[test]
 fn test_absent_pre_block_accounts_are_recorded_without_slots() {
     let block = block(false, false);
-    assert_eq!(block.pre_block_states().len(), 11);
-    for (index, address) in [(7, SEQUENCER_REGISTRY), (9, L1_BLOCK_CONTRACT)] {
-        let read = block.pre_block_states()[index]
-            .account_changes_for(&address)
-            .expect("absent account recorded");
-        assert!(read.original.is_none());
-        assert!(read.current.is_none());
-        assert!(read.storage.slots.is_empty());
-        assert!(!read.is_changed());
-    }
+    assert_eq!(block.pre_block_states().len(), 10);
+    let read = block.pre_block_states()[7]
+        .account_changes_for(&SEQUENCER_REGISTRY)
+        .expect("absent account recorded");
+    assert!(read.original.is_none());
+    assert!(read.current.is_none());
+    assert!(read.storage.slots.is_empty());
+    assert!(!read.is_changed());
+    let states = block.pre_block_states();
+    assert!(states.iter().all(|s| s.account_changes_for(&L1_BLOCK_CONTRACT).is_none()));
 }
