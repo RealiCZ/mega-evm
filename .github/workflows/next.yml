@@ -365,7 +365,7 @@ jobs:
 
   mutants:
     name: mutants (${{ github.event_name == 'pull_request' && 'pr' || 'push' }})
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/cz/feat/satin-evm2' || github.ref == 'refs/heads/cz/ci/mutants-iterate'))
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     defaults:
@@ -482,7 +482,7 @@ jobs:
           overwrite: true
 
   mutants-plan:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/cz/feat/satin-evm2' || github.ref == 'refs/heads/cz/ci/mutants-iterate'))
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
     runs-on: ubuntu-24.04
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
@@ -565,7 +565,7 @@ jobs:
           set -euo pipefail
           # Every shard starts from the same results, so they split what is left the same way.
           # End before the job limit (330 minutes), leaving 20 for the steps after this one.
-          MUTANTS_ITERATE=1 MUTANTS_BUDGET=$((JOB_START + 75 * 60 - $(date +%s))) \
+          MUTANTS_ITERATE=1 MUTANTS_BUDGET=$((JOB_START + (330 - 20) * 60 - $(date +%s))) \
             bash next/scripts/mutants.sh shard "$SHARD"
 
       - name: Show the linker of the test binaries
@@ -645,60 +645,4 @@ jobs:
         with:
           name: next-mutants-full
           path: mega-evm/next/target/mutants-out/mutants.out
-          overwrite: true
-
-
-  mutants-oom:
-    name: mutants-oom (json.rs, fresh)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/cz/ci/mutants-iterate'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    defaults:
-      run:
-        working-directory: mega-evm
-    env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
-    steps:
-      - name: Checkout mega-evm
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          path: mega-evm
-          persist-credentials: false
-      - name: Check out the evm2 fork at its pin
-        run: bash next/scripts/fetch-evm2-fork.sh
-      - name: Install the next/ toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
-        with:
-          rust-src-dir: mega-evm/next
-          rustflags: ""
-          cache: true
-          cache-shared-key: next-mutants
-      - name: Install mold
-        uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-        with:
-          make-default: false
-      - name: Install zstd
-        run: bash next/scripts/install-zstd.sh
-      - name: Install cargo-mutants
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-mutants@27.1.0
-      - name: Mutate the JSON parser under the memory cap
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
-          OUT: ${{ github.workspace }}/mega-evm/next/target/mutants-out
-        run: |
-          set -euo pipefail
-          MUTANTS_BUDGET=4200 bash next/scripts/mutants.sh files mega-evm2/src/chain/json.rs
-          free -m
-          grep -F "json.rs:204:40: replace += with -= in Parser<'a>::array" next/target/mutants-out/mutants.out/*.txt || true
-          f=$(grep -lF "json.rs:204:40: replace += with -=" next/target/mutants-out/mutants.out/log/*.log | head -1)
-          if [ -n "$f" ]; then grep -E 'memory allocation|SIGABRT|signal|result:' "$f" | tail -5; fi
-      - name: Upload
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: next-mutants-oom
-          path: mega-evm/next/target/mutants-out/mutants.out
-          if-no-files-found: ignore
           overwrite: true
