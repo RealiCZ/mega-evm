@@ -384,3 +384,37 @@ fn witness_unapplied_authority_is_required_evidence() {
     let (result, _) = replay(witness, &built.included);
     assert_eq!(missing(&result.expect_err("the second authority is needed")), evidence);
 }
+
+/// A keyless deployment's signer and deploy address are loaded by the transaction that makes it
+/// (`SATIN-WIT-008`): both are in its state and in the witness — the signer present, the deploy
+/// address absent — and the replay needs both. The transaction is the gate scenarios' `ok` keyless
+/// one: a creation of the code `0x00`, with a gas override of 1,000,000.
+#[test]
+fn witness_replay_of_a_keyless_deployment_needs_its_signer_and_deploy_address() {
+    const OK_TX: &str = "f8568085174876e80083030d4080808560016000f31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222";
+    let signer = alloy_primitives::address!("0x25a3eF92221C997F6abE3b393C5bA020c5E7EcD3");
+    let deploy = alloy_primitives::address!("0x7D62ff74389eBd91F9f40b72533eaa574Cbb6073");
+    let mut parent = chain(L1::Present);
+    let ether = U256::from(10).pow(U256::from(18));
+    parent.insert_account_info(&signer, AccountInfo::default().with_balance(ether));
+    let raw = alloy_primitives::hex::decode(OK_TX).unwrap();
+    let input = common::keyless_deploy(&raw, 1_000_000).to_vec();
+    let tx = legacy(SENDER, 0, TxKind::Call(common::KEYLESS), 0, input);
+    let built = produce(&parent, &included(&[tx]));
+    assert!(built.output.receipts[0].status);
+    let state = &built.output.tx_states[0];
+    assert!(state.account_changes_for(&signer).is_some());
+    let created = state.account_changes_for(&deploy).expect("the deploy address is loaded");
+    assert!(created.original.is_none() && created.current.is_some(), "deployed");
+    assert_eq!(built.witness.account(&deploy), Some(None));
+    assert!(built.witness.account(&signer).unwrap().is_some());
+    let (replayed, read) = replayed(built.witness.clone(), &built.included);
+    assert_same_block(&replayed, &built.output);
+    for evidence in [Evidence::Account(signer), Evidence::Account(deploy)] {
+        assert!(read.contains(&evidence), "{evidence:?}");
+        let mut witness = built.witness.clone();
+        witness.remove(&evidence);
+        let (result, _) = replay(witness, &built.included);
+        assert_eq!(missing(&result.expect_err("needed")), evidence);
+    }
+}
