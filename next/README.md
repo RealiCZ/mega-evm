@@ -65,6 +65,11 @@ A block's pre-block sequence (`mega-evm2/src/block/pre_block.rs`, `SATIN-PBLK-00
 
 No step reads the L1 block contract: a transaction reads it when it needs it (see "State and witness exports").
 
+`BlockSession::execute_candidate` runs a transaction on the session's committed state and returns a `Candidate`; nothing is committed.
+`BlockSession::commit_candidate` re-checks the candidate's block and rules, the block's room and the sender's nonce and balance, and then the committed prefix the candidate ran on (`Candidate::prefix`, `BlockSession::prefix`): the number of transactions committed and a digest of them in order, each by its sender, the nonce it ran with and its bytes.
+A candidate commits only at the prefix it ran on; any commit between its run and its commit makes it `CandidateError::OtherPrefix`, a retry, refused before anything changes, since its state was computed on a state the block no longer has (two candidates that credit one fee vault would otherwise both commit, and the block keep one credit).
+A candidate another session of the block ran commits when that session committed the same transactions in the same order, so a worker that starts on the block's empty prefix, or that committed the builder's transactions, hands over candidates the builder takes; selective conflict checks between candidates are the node's.
+
 Every transaction of the block is classified against that address (`BlockSession::system_address`, `Lite::system_address`); none reads the registry, or finds its account or slot warm, for its classification.
 A single transaction's EVM (`SatinFactory::evm`, `simulated_evm`) resolves the address once, when it is made, by the same direct read of the registry's account and slot 0 off the state it runs on (no warming, no charge), so a call or an estimate prices a transaction as its block would; outside a block a registry that is absent, holds other code or names no address leaves no system address, and an embedder that knows the block's resolved address may set `Lite::system_address` instead.
 The gates count that read in a single transaction's read set, where the reference's transaction reads the same account and slot as it is classified.
@@ -114,7 +119,9 @@ The change set (`BlockSession::changes`) is the block's state transition: a regi
 A witness collector consumes these states, not the change set, which holds no read-only entry.
 
 The L1 block contract is read outside any transaction's journal, by two reads (`mega-evm2/src/l1_reads.rs`, `SATIN-WIT-011`): the fee computation of a non-deposit transaction that pays an L1 fee reads its account and slots 1, 3, 7, 8 and, when the Ecotone scalars are empty, 5, once per block, into a cache that keeps the keys it was loaded from; and the block reads the account and slot 8, the footprint scalar, before every non-deposit transaction, a Mega System Transaction included.
-An absent contract is recorded as absent, with no slot; a block of deposits reads none of it.
+An absent contract is recorded as absent, with no slot, and neither read looks a slot up: the fee computation prices from the info an all-zero storage gives (`L1BlockInfo::of_absent_contract`); a block of deposits reads none of it.
+The cache is the block's as a replay makes it: loaded by the first included transaction the fee computation prices, on the state the transactions before it left, and kept to the block's end.
+Until such a transaction is committed, every commit forgets the cache and its source keys, so a cache a dropped candidate loaded before a deposit that changed the contract prices nothing after that deposit; the first such commit keeps the cache its candidate was priced from, whichever session ran it.
 `Candidate::l1_reads` holds what its attempt read, the cache's source keys included when the cache served it; its commit adds every key no earlier commit reported to its state as a read-only entry, never replacing the transaction's own entry for the account or a slot, so the first included transaction that read a key reports it and a dropped candidate reports nothing.
 A failed fee read is the transaction's (internal or an invalid block, by the database's fatality); a failed footprint read is the block's own, always internal (`SATIN-VAL-010`).
 
@@ -137,6 +144,7 @@ A single transaction's EVM keeps the reads of its last transaction in `Lite::blo
 A validator fills a `Witness` from the proofs it verified instead, and replays the block through `WitnessDb`, a database that answers exactly the witness, with the `Witness` itself as the SALT snapshot and no Oracle service.
 A read of anything the witness does not hold fails with `MissingEvidence`, a fatal error, so the block fails as an internal error of the node, never an invalid block; `MissingEvidence::of` names the missing piece from the block's error, a SALT capacity included.
 A replay's exports are a subset of the building node's, a proper one when the node dropped candidates.
+A replay reads what execution demands, so it proves every piece it reads required, not that the witness holds everything `SATIN-WIT-001` requires: the code of an account a load named without its code, and the exports of dropped candidates, are read by no replay, and a validator that needs that completeness checks the witness against its keys.
 The fork's `EmptyDB`, which answers any number with a hash it makes up, is not a witness database.
 
 ## Coverage and mutation testing in CI
