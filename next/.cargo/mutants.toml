@@ -9,8 +9,11 @@
 test_tool = "cargo"
 test_package = ["mega-evm2", "op-evm2", "mega-evm2-scenarios", "mega-evm2-diff"]
 
-# The gates run in release (gate-lib.sh); mutants are built and tested the same way.
-additional_cargo_args = ["--locked", "--release"]
+# The gates run in release (gate-lib.sh). Mutants are built and tested with the `mutants`
+# profile (next/Cargo.toml): release's semantics, rebuilt incrementally. scripts/mutants.sh
+# passes the same profile (MUTANTS_PROFILE) to its warm build and to cargo-mutants.
+profile = "mutants"
+additional_cargo_args = ["--locked"]
 
 # Never mutate generated code or test-only helpers.
 exclude_globs = ["**/tests/**", "**/benches/**", "**/test_utils/**"]

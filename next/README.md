@@ -131,12 +131,24 @@ The diff harness is only the driver and is left out of the report.
 It writes `lcov.info`, `summary.txt` (a `TOTAL` line and per-crate line and branch totals) and an HTML report to `$COV_DIR`, uploads them as an artifact and `lcov.info` to Codecov with the flag `next`.
 The upload needs the repository secret `CODECOV_TOKEN` and never fails the job, so a fork without the secret keeps the artifact only.
 
-The `mutants` job runs `scripts/mutants.sh` with cargo-mutants (pinned in the workflow; configuration in `.cargo/mutants.toml`).
+The `mutants` jobs run `scripts/mutants.sh` with cargo-mutants (pinned in the workflow; configuration in `.cargo/mutants.toml`).
 The oracle is `cargo test` over the engine crates and the harness with the sample gate's environment: the main scenarios, recorded-block replay and block execution (one synthetic run takes one reference file, so the fuzz batches are not part of it).
 A mutant is caught when any unit test or gate turns red; a survivor is a scenario the gates lack, or code no input reaches.
+Mutants are built and tested with the `mutants` cargo profile (`Cargo.toml`: release's semantics, rebuilt incrementally), and CI links them with mold, since every mutant rebuilds the mutated crate and relinks every test binary.
+
 On a pull request only the changed engine lines are mutated, and a survivor or timeout that `diff/mutants/suppressions.toml` does not list fails the job.
-Pushes to `cz/feat/satin-evm2`, the daily run and manual runs mutate the full engine in eight shards and report survivors and timeouts without failing.
-Locally, `bash scripts/mutants.sh smoke` runs a fixed set (the mutants of `mega-evm2/src/satin_ext.rs`) and writes `mutants.out/outcomes.json` under `$OUT`; `scripts/mutants.sh pr <base>`, `shard <k>/<n>` and `full` are the modes CI uses.
+A push to `cz/feat/satin-evm2` mutates the engine lines changed since the previous push and reports without failing.
+The full engine is never run from zero on a push: `mutants-full` runs it in eight shards that carry results over from run to run.
+Each shard restores the latest results from the Actions cache, does not test again a mutant caught or found unviable there whose code has not changed since, tests the rest, and ends itself before the job limit with every outcome so far kept; `mutants-merge` unions the shards and saves them for the next run.
+Missed and timed-out mutants are tested again by every run, as are those whose code changed.
+Carry-over trusts earlier results, so the cache key changes every month and the first run of a month starts without carry-over.
+A change that deletes or weakens tests should add a line to `diff/mutants/refresh.txt` naming the engine files whose mutants those tests caught: the next carried-over run tests them again without carry-over.
+
+Locally, `bash scripts/mutants.sh smoke` runs a fixed set (the mutants of `mega-evm2/src/satin_ext.rs`) and writes `mutants.out/` (outcomes.json, caught.txt, missed.txt, ...) under `$OUT` (default `target/mutants-out`).
+The other modes are `pr <base>`, `push <before>`, `files <glob>...`, `shard <k>/<n>` and `full`.
+`MUTANTS_ITERATE=1` carries over the results already in `$OUT` instead of starting afresh, `MUTANTS_BUDGET=<seconds>` ends a run cleanly after that many seconds with its results kept (continue it with `MUTANTS_ITERATE=1`), and `MUTANTS_REFRESH='<glob>...'` (or `all`) drops the carried-over results of those files.
+Every run ends with a line `MUTANTS-RESULT caught=<n> missed=<n> timeout=<n> unviable=<n> tested=<n> skipped=<n>`, where `skipped` counts the carried-over mutants and `tested` the ones this run built or tested.
+`scripts/mutants-ledger.py timing --results <mutants.out> [--compare <mutants.out>]` prints the build and test seconds per outcome of a run, or of the mutants two runs share.
 
 ## Comparing interpreter performance
 
