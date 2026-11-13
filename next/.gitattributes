@@ -5,3 +5,5 @@ Cargo.lock linguist-generated=true
 # `diff/scripts/count_expected.py`. Its README is written by hand.
 diff/data/** linguist-generated=true
 diff/data/README.md -linguist-generated
+# The tracer output the inspector tests pin, written by `MEGA_EVM2_BLESS_TRACES=1`.
+mega-evm2/tests/inspectors/golden/** linguist-generated=true

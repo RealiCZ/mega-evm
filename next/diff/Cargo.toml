@@ -27,6 +27,11 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
 
 [dev-dependencies]
+# evm2: the inspector crate's tracers, for the recorded blocks under a heavy tracer combination
+# (`tests/inspector_blocks.rs`).
+evm2-inspectors = { workspace = true, features = ["std"] }
+
+# misc
 criterion = { package = "codspeed-criterion-compat", version = "=5.0.1", default-features = false }
 
 [[bench]]

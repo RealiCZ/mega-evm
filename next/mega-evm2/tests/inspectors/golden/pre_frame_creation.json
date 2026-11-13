@@ -1,0 +1,237 @@
+{
+  "access_list": [],
+  "call": {
+    "error": "out of gas",
+    "executionGasUsed": "0xc920",
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": "0x13880",
+    "gasRefund": "0x0",
+    "gasUsed": "0x13880",
+    "input": "0x600361000b5f3960035ff35f5ff3",
+    "stateGasUsed": "0x6f60",
+    "type": "CREATE",
+    "value": "0x0"
+  },
+  "erc7562": {
+    "accessedSlots": {
+      "reads": {},
+      "transientReads": {},
+      "transientWrites": {},
+      "writes": {}
+    },
+    "contractSize": {},
+    "error": "out of gas",
+    "extCodeAccessInfo": [],
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": "0x13880",
+    "gasUsed": "0x13880",
+    "input": "0x600361000b5f3960035ff35f5ff3",
+    "outOfGas": false,
+    "type": "CREATE",
+    "usedOpcodes": {},
+    "value": "0x0"
+  },
+  "flat_call": [
+    {
+      "action": {
+        "creationMethod": "create",
+        "from": "0x0000000000000000000000000000000000400000",
+        "gas": "0x13880",
+        "init": "0x600361000b5f3960035ff35f5ff3",
+        "value": "0x0"
+      },
+      "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "blockNumber": 1,
+      "error": "Out of gas",
+      "result": null,
+      "subtraces": 0,
+      "traceAddress": [],
+      "transactionHash": "0x45cdba39e88646838894e5ae1ec9128bc0c725623eddc10856d3df3bed91ce41",
+      "transactionPosition": 0,
+      "type": "create"
+    }
+  ],
+  "four_byte": {},
+  "js": {
+    "block": 1,
+    "error": "out of gas",
+    "faults": [],
+    "frames": [],
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": 80000,
+    "gasPrice": "0",
+    "gasUsed": 80000,
+    "input": "0x600361000b5f3960035ff35f5ff3",
+    "output": "0x",
+    "senderBalance": "1000000000000000",
+    "senderNonce": 1,
+    "steps": [],
+    "to": "0x84b48846131a217635c4abd490c5e11486253fd9",
+    "toCode": "0x",
+    "toExists": false,
+    "type": "CREATE",
+    "value": "0"
+  },
+  "keccak_preimage": {},
+  "mux": {
+    "4byteTracer": {},
+    "callTracer": {
+      "error": "out of gas",
+      "executionGasUsed": "0xc920",
+      "from": "0x0000000000000000000000000000000000400000",
+      "gas": "0x13880",
+      "gasRefund": "0x0",
+      "gasUsed": "0x13880",
+      "input": "0x600361000b5f3960035ff35f5ff3",
+      "stateGasUsed": "0x6f60",
+      "type": "CREATE",
+      "value": "0x0"
+    },
+    "flatCallTracer": [
+      {
+        "action": {
+          "creationMethod": "create",
+          "from": "0x0000000000000000000000000000000000400000",
+          "gas": "0x13880",
+          "init": "0x600361000b5f3960035ff35f5ff3",
+          "value": "0x0"
+        },
+        "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "blockNumber": 1,
+        "error": "Out of gas",
+        "result": null,
+        "subtraces": 0,
+        "traceAddress": [],
+        "transactionHash": "0x45cdba39e88646838894e5ae1ec9128bc0c725623eddc10856d3df3bed91ce41",
+        "transactionPosition": 0,
+        "type": "create"
+      }
+    ],
+    "prestateTracer": {
+      "post": {
+        "0x0000000000000000000000000000000000400000": {
+          "nonce": 1
+        }
+      },
+      "pre": {
+        "0x0000000000000000000000000000000000400000": {
+          "balance": "0x38d7ea4c68000"
+        }
+      }
+    },
+    "{\n    frames: [],\n    steps: [],\n    faults: [],\n    step: function(log, db) {\n        this.steps.push([log.op.toString(), log.getDepth(), log.getPC(), log.getGas(),\n            log.getCost(), log.getRefund(), log.stack.length()]);\n    },\n    fault: function(log, db) {\n        this.faults.push([log.op.toString(), log.getDepth(), log.getError()]);\n    },\n    enter: function(frame) {\n        this.frames.push([\"enter\", frame.getType(), toHex(frame.getFrom()), toHex(frame.getTo()),\n            toHex(frame.getInput()), frame.getGas(), String(frame.getValue())]);\n    },\n    exit: function(res) {\n        this.frames.push([\"exit\", res.getGasUsed(), toHex(res.getOutput()), res.getError()]);\n    },\n    result: function(ctx, db) {\n        return {\n            type: ctx.type,\n            from: toHex(ctx.from),\n            to: toHex(ctx.to),\n            input: toHex(ctx.input),\n            gas: ctx.gas,\n            gasUsed: ctx.gasUsed,\n            gasPrice: String(ctx.gasPrice),\n            value: String(ctx.value),\n            block: ctx.block,\n            output: toHex(ctx.output),\n            error: ctx.error,\n            senderBalance: String(db.getBalance(ctx.from)),\n            senderNonce: db.getNonce(ctx.from),\n            toExists: db.exists(ctx.to),\n            toCode: toHex(db.getCode(ctx.to)),\n            frames: this.frames,\n            steps: this.steps,\n            faults: this.faults,\n        };\n    }\n}": {
+      "block": 1,
+      "error": "out of gas",
+      "faults": [],
+      "frames": [],
+      "from": "0x0000000000000000000000000000000000400000",
+      "gas": 80000,
+      "gasPrice": "0",
+      "gasUsed": 80000,
+      "input": "0x600361000b5f3960035ff35f5ff3",
+      "output": "0x",
+      "senderBalance": "1000000000000000",
+      "senderNonce": 1,
+      "steps": [],
+      "to": "0x84b48846131a217635c4abd490c5e11486253fd9",
+      "toCode": "0x",
+      "toExists": false,
+      "type": "CREATE",
+      "value": "0"
+    }
+  },
+  "noop": {},
+  "opcode_gas": [],
+  "otterscan": [],
+  "outcome": {
+    "gas_used": 80000,
+    "output": "0x",
+    "status": false
+  },
+  "parity": {
+    "output": "0x",
+    "stateDiff": {
+      "0x0000000000000000000000000000000000400000": {
+        "balance": "=",
+        "code": "=",
+        "nonce": {
+          "*": {
+            "from": "0x0",
+            "to": "0x1"
+          }
+        },
+        "storage": {}
+      }
+    },
+    "trace": [
+      {
+        "action": {
+          "creationMethod": "create",
+          "from": "0x0000000000000000000000000000000000400000",
+          "gas": "0x5cca",
+          "init": "0x600361000b5f3960035ff35f5ff3",
+          "value": "0x0"
+        },
+        "error": "Out of gas",
+        "result": null,
+        "subtraces": 0,
+        "traceAddress": [],
+        "type": "create"
+      }
+    ],
+    "vmTrace": {
+      "code": "0x",
+      "ops": []
+    }
+  },
+  "prestate": {
+    "0x0000000000000000000000000000000000400000": {
+      "balance": "0x38d7ea4c68000"
+    }
+  },
+  "prestate_diff": {
+    "post": {
+      "0x0000000000000000000000000000000000400000": {
+        "nonce": 1
+      }
+    },
+    "pre": {
+      "0x0000000000000000000000000000000000400000": {
+        "balance": "0x38d7ea4c68000"
+      }
+    }
+  },
+  "state_gas": {
+    "executionGasUsed": "0xc920",
+    "gasRefund": "0x0",
+    "gasUsed": "0x13880",
+    "stateGasUsed": "0x6f60"
+  },
+  "storage": {
+    "slots": [],
+    "unique_loads": 0,
+    "warm_loads": 0
+  },
+  "struct_log": {
+    "executionGasUsed": "0xc920",
+    "failed": true,
+    "gas": 80000,
+    "gasRefund": "0x0",
+    "returnValue": "0x",
+    "stateGasUsed": "0x6f60",
+    "structLogs": []
+  },
+  "struct_log_full": {
+    "executionGasUsed": "0xc920",
+    "failed": true,
+    "gas": 80000,
+    "gasRefund": "0x0",
+    "returnValue": "0x",
+    "stateGasUsed": "0x6f60",
+    "structLogs": []
+  },
+  "transfer": {
+    "logs": [],
+    "transfers": []
+  }
+}

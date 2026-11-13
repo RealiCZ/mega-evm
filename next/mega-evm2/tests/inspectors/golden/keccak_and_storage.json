@@ -1,0 +1,1375 @@
+{
+  "access_list": [
+    {
+      "address": "0x0000000000000000000000000000000000400002",
+      "storageKeys": [
+        "0x0000000000000000000000000000000000000000000000000000000000000001"
+      ]
+    }
+  ],
+  "call": {
+    "executionGasUsed": "0x6aad",
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": "0x989680",
+    "gasRefund": "0x0",
+    "gasUsed": "0x2617d",
+    "input": "0x",
+    "stateGasUsed": "0x1f6d0",
+    "to": "0x0000000000000000000000000000000000400002",
+    "type": "CALL",
+    "value": "0x0"
+  },
+  "erc7562": {
+    "accessedSlots": {
+      "reads": {},
+      "transientReads": {},
+      "transientWrites": {},
+      "writes": {
+        "0x0000000000000000000000000000000000000000000000000000000000000001": 1
+      }
+    },
+    "contractSize": {},
+    "extCodeAccessInfo": [],
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": "0x989680",
+    "gasUsed": "0x2617d",
+    "input": "0x",
+    "keccak": [
+      "0x736174696e20756e64657220657665727920747261636572",
+      "0x736174696e20756e646572206576657279207472616365720000000000000000"
+    ],
+    "outOfGas": false,
+    "to": "0x0000000000000000000000000000000000400002",
+    "type": "CALL",
+    "usedOpcodes": {
+      "0x0": 1,
+      "0x20": 2,
+      "0x52": 1,
+      "0x54": 1,
+      "0x55": 1
+    },
+    "value": "0x0"
+  },
+  "flat_call": [
+    {
+      "action": {
+        "callType": "call",
+        "from": "0x0000000000000000000000000000000000400000",
+        "gas": "0x989680",
+        "input": "0x",
+        "to": "0x0000000000000000000000000000000000400002",
+        "value": "0x0"
+      },
+      "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "blockNumber": 1,
+      "result": {
+        "gasUsed": "0x2617d",
+        "output": "0x"
+      },
+      "subtraces": 0,
+      "traceAddress": [],
+      "transactionHash": "0xe9c78aa6deca6eb06c2f4eff58c080ba36c1142a846f6b1ce522fbea938bd8c1",
+      "transactionPosition": 0,
+      "type": "call"
+    }
+  ],
+  "four_byte": {},
+  "js": {
+    "block": 1,
+    "faults": [],
+    "frames": [],
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": 10000000,
+    "gasPrice": "0",
+    "gasUsed": 156029,
+    "input": "0x",
+    "output": "0x",
+    "senderBalance": "1000000000000000",
+    "senderNonce": 1,
+    "steps": [
+      [
+        "PUSH32",
+        1,
+        0,
+        9957720,
+        3,
+        0,
+        0
+      ],
+      [
+        "PUSH8",
+        1,
+        33,
+        9957717,
+        3,
+        0,
+        1
+      ],
+      [
+        "MSTORE",
+        1,
+        42,
+        9957714,
+        6,
+        0,
+        2
+      ],
+      [
+        "PUSH1",
+        1,
+        43,
+        9957708,
+        3,
+        0,
+        0
+      ],
+      [
+        "PUSH0",
+        1,
+        45,
+        9957705,
+        2,
+        0,
+        1
+      ],
+      [
+        "KECCAK256",
+        1,
+        46,
+        9957703,
+        36,
+        0,
+        2
+      ],
+      [
+        "POP",
+        1,
+        47,
+        9957667,
+        2,
+        0,
+        1
+      ],
+      [
+        "PUSH1",
+        1,
+        48,
+        9957665,
+        3,
+        0,
+        0
+      ],
+      [
+        "PUSH0",
+        1,
+        50,
+        9957662,
+        2,
+        0,
+        1
+      ],
+      [
+        "KECCAK256",
+        1,
+        51,
+        9957660,
+        36,
+        0,
+        2
+      ],
+      [
+        "POP",
+        1,
+        52,
+        9957624,
+        2,
+        0,
+        1
+      ],
+      [
+        "PUSH32",
+        1,
+        53,
+        9957622,
+        3,
+        0,
+        0
+      ],
+      [
+        "PUSH32",
+        1,
+        86,
+        9957619,
+        3,
+        0,
+        1
+      ],
+      [
+        "SSTORE",
+        1,
+        119,
+        9957616,
+        113540,
+        0,
+        2
+      ],
+      [
+        "PUSH1",
+        1,
+        120,
+        9844076,
+        3,
+        0,
+        0
+      ],
+      [
+        "SLOAD",
+        1,
+        122,
+        9844073,
+        100,
+        0,
+        1
+      ],
+      [
+        "POP",
+        1,
+        123,
+        9843973,
+        2,
+        0,
+        1
+      ],
+      [
+        "STOP",
+        1,
+        124,
+        9843971,
+        0,
+        0,
+        0
+      ]
+    ],
+    "to": "0x0000000000000000000000000000000000400002",
+    "toCode": "0x7f736174696e20756e6465722065766572792074726163657200000000000000006700000000000000005260185f205060205f20507f00000000000000000000000000000000000000000000000000000000000000077f0000000000000000000000000000000000000000000000000000000000000001556001545000",
+    "toExists": true,
+    "type": "CALL",
+    "value": "0"
+  },
+  "keccak_preimage": {
+    "0x0b5262591ac254048ffc83e289ca112ac75f47cffd7785f0c5529311cb0fcefb": "0x736174696e20756e64657220657665727920747261636572",
+    "0xdcdc2c59f8d6281da39fce2896a512fd878a0ba1b6ff7c605de9696905131043": "0x736174696e20756e646572206576657279207472616365720000000000000000"
+  },
+  "mux": {
+    "4byteTracer": {},
+    "callTracer": {
+      "executionGasUsed": "0x6aad",
+      "from": "0x0000000000000000000000000000000000400000",
+      "gas": "0x989680",
+      "gasRefund": "0x0",
+      "gasUsed": "0x2617d",
+      "input": "0x",
+      "stateGasUsed": "0x1f6d0",
+      "to": "0x0000000000000000000000000000000000400002",
+      "type": "CALL",
+      "value": "0x0"
+    },
+    "flatCallTracer": [
+      {
+        "action": {
+          "callType": "call",
+          "from": "0x0000000000000000000000000000000000400000",
+          "gas": "0x989680",
+          "input": "0x",
+          "to": "0x0000000000000000000000000000000000400002",
+          "value": "0x0"
+        },
+        "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "blockNumber": 1,
+        "result": {
+          "gasUsed": "0x2617d",
+          "output": "0x"
+        },
+        "subtraces": 0,
+        "traceAddress": [],
+        "transactionHash": "0xe9c78aa6deca6eb06c2f4eff58c080ba36c1142a846f6b1ce522fbea938bd8c1",
+        "transactionPosition": 0,
+        "type": "call"
+      }
+    ],
+    "prestateTracer": {
+      "post": {
+        "0x0000000000000000000000000000000000400000": {
+          "nonce": 1
+        },
+        "0x0000000000000000000000000000000000400002": {
+          "storage": {
+            "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000007"
+          }
+        }
+      },
+      "pre": {
+        "0x0000000000000000000000000000000000400000": {
+          "balance": "0x38d7ea4c68000"
+        },
+        "0x0000000000000000000000000000000000400002": {
+          "balance": "0x0",
+          "code": "0x7f736174696e20756e6465722065766572792074726163657200000000000000006700000000000000005260185f205060205f20507f00000000000000000000000000000000000000000000000000000000000000077f0000000000000000000000000000000000000000000000000000000000000001556001545000"
+        }
+      }
+    },
+    "{\n    frames: [],\n    steps: [],\n    faults: [],\n    step: function(log, db) {\n        this.steps.push([log.op.toString(), log.getDepth(), log.getPC(), log.getGas(),\n            log.getCost(), log.getRefund(), log.stack.length()]);\n    },\n    fault: function(log, db) {\n        this.faults.push([log.op.toString(), log.getDepth(), log.getError()]);\n    },\n    enter: function(frame) {\n        this.frames.push([\"enter\", frame.getType(), toHex(frame.getFrom()), toHex(frame.getTo()),\n            toHex(frame.getInput()), frame.getGas(), String(frame.getValue())]);\n    },\n    exit: function(res) {\n        this.frames.push([\"exit\", res.getGasUsed(), toHex(res.getOutput()), res.getError()]);\n    },\n    result: function(ctx, db) {\n        return {\n            type: ctx.type,\n            from: toHex(ctx.from),\n            to: toHex(ctx.to),\n            input: toHex(ctx.input),\n            gas: ctx.gas,\n            gasUsed: ctx.gasUsed,\n            gasPrice: String(ctx.gasPrice),\n            value: String(ctx.value),\n            block: ctx.block,\n            output: toHex(ctx.output),\n            error: ctx.error,\n            senderBalance: String(db.getBalance(ctx.from)),\n            senderNonce: db.getNonce(ctx.from),\n            toExists: db.exists(ctx.to),\n            toCode: toHex(db.getCode(ctx.to)),\n            frames: this.frames,\n            steps: this.steps,\n            faults: this.faults,\n        };\n    }\n}": {
+      "block": 1,
+      "faults": [],
+      "frames": [],
+      "from": "0x0000000000000000000000000000000000400000",
+      "gas": 10000000,
+      "gasPrice": "0",
+      "gasUsed": 156029,
+      "input": "0x",
+      "output": "0x",
+      "senderBalance": "1000000000000000",
+      "senderNonce": 1,
+      "steps": [
+        [
+          "PUSH32",
+          1,
+          0,
+          9957720,
+          3,
+          0,
+          0
+        ],
+        [
+          "PUSH8",
+          1,
+          33,
+          9957717,
+          3,
+          0,
+          1
+        ],
+        [
+          "MSTORE",
+          1,
+          42,
+          9957714,
+          6,
+          0,
+          2
+        ],
+        [
+          "PUSH1",
+          1,
+          43,
+          9957708,
+          3,
+          0,
+          0
+        ],
+        [
+          "PUSH0",
+          1,
+          45,
+          9957705,
+          2,
+          0,
+          1
+        ],
+        [
+          "KECCAK256",
+          1,
+          46,
+          9957703,
+          36,
+          0,
+          2
+        ],
+        [
+          "POP",
+          1,
+          47,
+          9957667,
+          2,
+          0,
+          1
+        ],
+        [
+          "PUSH1",
+          1,
+          48,
+          9957665,
+          3,
+          0,
+          0
+        ],
+        [
+          "PUSH0",
+          1,
+          50,
+          9957662,
+          2,
+          0,
+          1
+        ],
+        [
+          "KECCAK256",
+          1,
+          51,
+          9957660,
+          36,
+          0,
+          2
+        ],
+        [
+          "POP",
+          1,
+          52,
+          9957624,
+          2,
+          0,
+          1
+        ],
+        [
+          "PUSH32",
+          1,
+          53,
+          9957622,
+          3,
+          0,
+          0
+        ],
+        [
+          "PUSH32",
+          1,
+          86,
+          9957619,
+          3,
+          0,
+          1
+        ],
+        [
+          "SSTORE",
+          1,
+          119,
+          9957616,
+          113540,
+          0,
+          2
+        ],
+        [
+          "PUSH1",
+          1,
+          120,
+          9844076,
+          3,
+          0,
+          0
+        ],
+        [
+          "SLOAD",
+          1,
+          122,
+          9844073,
+          100,
+          0,
+          1
+        ],
+        [
+          "POP",
+          1,
+          123,
+          9843973,
+          2,
+          0,
+          1
+        ],
+        [
+          "STOP",
+          1,
+          124,
+          9843971,
+          0,
+          0,
+          0
+        ]
+      ],
+      "to": "0x0000000000000000000000000000000000400002",
+      "toCode": "0x7f736174696e20756e6465722065766572792074726163657200000000000000006700000000000000005260185f205060205f20507f00000000000000000000000000000000000000000000000000000000000000077f0000000000000000000000000000000000000000000000000000000000000001556001545000",
+      "toExists": true,
+      "type": "CALL",
+      "value": "0"
+    }
+  },
+  "noop": {},
+  "opcode_gas": [
+    [
+      "KECCAK256",
+      2,
+      72
+    ],
+    [
+      "MSTORE",
+      1,
+      6
+    ],
+    [
+      "POP",
+      3,
+      6
+    ],
+    [
+      "PUSH0",
+      2,
+      4
+    ],
+    [
+      "PUSH1",
+      3,
+      9
+    ],
+    [
+      "PUSH32",
+      3,
+      9
+    ],
+    [
+      "PUSH8",
+      1,
+      3
+    ],
+    [
+      "SLOAD",
+      1,
+      100
+    ],
+    [
+      "SSTORE",
+      1,
+      113540
+    ],
+    [
+      "STOP",
+      1,
+      0
+    ]
+  ],
+  "otterscan": [],
+  "outcome": {
+    "gas_used": 156029,
+    "output": "0x",
+    "status": true
+  },
+  "parity": {
+    "output": "0x",
+    "stateDiff": {
+      "0x0000000000000000000000000000000000400000": {
+        "balance": "=",
+        "code": "=",
+        "nonce": {
+          "*": {
+            "from": "0x0",
+            "to": "0x1"
+          }
+        },
+        "storage": {}
+      },
+      "0x0000000000000000000000000000000000400002": {
+        "balance": "=",
+        "code": "=",
+        "nonce": "=",
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": {
+            "*": {
+              "from": "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "to": "0x0000000000000000000000000000000000000000000000000000000000000007"
+            }
+          }
+        }
+      }
+    },
+    "trace": [
+      {
+        "action": {
+          "callType": "call",
+          "from": "0x0000000000000000000000000000000000400000",
+          "gas": "0x97f158",
+          "input": "0x",
+          "to": "0x0000000000000000000000000000000000400002",
+          "value": "0x0"
+        },
+        "result": {
+          "gasUsed": "0x1bc55",
+          "output": "0x"
+        },
+        "subtraces": 0,
+        "traceAddress": [],
+        "type": "call"
+      }
+    ],
+    "vmTrace": {
+      "code": "0x7f736174696e20756e6465722065766572792074726163657200000000000000006700000000000000005260185f205060205f20507f00000000000000000000000000000000000000000000000000000000000000077f0000000000000000000000000000000000000000000000000000000000000001556001545000",
+      "ops": [
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x736174696e20756e646572206576657279207472616365720000000000000000"
+            ],
+            "store": null,
+            "used": 9957717
+          },
+          "op": "PUSH32",
+          "pc": 0,
+          "sub": null
+        },
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x0"
+            ],
+            "store": null,
+            "used": 9957714
+          },
+          "op": "PUSH8",
+          "pc": 33,
+          "sub": null
+        },
+        {
+          "cost": 6,
+          "ex": {
+            "mem": {
+              "data": "0x736174696e20756e646572206576657279207472616365720000000000000000",
+              "off": 0
+            },
+            "push": [],
+            "store": null,
+            "used": 9957708
+          },
+          "op": "MSTORE",
+          "pc": 42,
+          "sub": null
+        },
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x18"
+            ],
+            "store": null,
+            "used": 9957705
+          },
+          "op": "PUSH1",
+          "pc": 43,
+          "sub": null
+        },
+        {
+          "cost": 2,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x0"
+            ],
+            "store": null,
+            "used": 9957703
+          },
+          "op": "PUSH0",
+          "pc": 45,
+          "sub": null
+        },
+        {
+          "cost": 36,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0xb5262591ac254048ffc83e289ca112ac75f47cffd7785f0c5529311cb0fcefb"
+            ],
+            "store": null,
+            "used": 9957667
+          },
+          "op": "KECCAK256",
+          "pc": 46,
+          "sub": null
+        },
+        {
+          "cost": 2,
+          "ex": {
+            "mem": null,
+            "push": [],
+            "store": null,
+            "used": 9957665
+          },
+          "op": "POP",
+          "pc": 47,
+          "sub": null
+        },
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x20"
+            ],
+            "store": null,
+            "used": 9957662
+          },
+          "op": "PUSH1",
+          "pc": 48,
+          "sub": null
+        },
+        {
+          "cost": 2,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x0"
+            ],
+            "store": null,
+            "used": 9957660
+          },
+          "op": "PUSH0",
+          "pc": 50,
+          "sub": null
+        },
+        {
+          "cost": 36,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0xdcdc2c59f8d6281da39fce2896a512fd878a0ba1b6ff7c605de9696905131043"
+            ],
+            "store": null,
+            "used": 9957624
+          },
+          "op": "KECCAK256",
+          "pc": 51,
+          "sub": null
+        },
+        {
+          "cost": 2,
+          "ex": {
+            "mem": null,
+            "push": [],
+            "store": null,
+            "used": 9957622
+          },
+          "op": "POP",
+          "pc": 52,
+          "sub": null
+        },
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x7"
+            ],
+            "store": null,
+            "used": 9957619
+          },
+          "op": "PUSH32",
+          "pc": 53,
+          "sub": null
+        },
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x1"
+            ],
+            "store": null,
+            "used": 9957616
+          },
+          "op": "PUSH32",
+          "pc": 86,
+          "sub": null
+        },
+        {
+          "cost": 12100,
+          "ex": {
+            "mem": null,
+            "push": [],
+            "store": {
+              "key": "0x1",
+              "val": "0x7"
+            },
+            "used": 9844076
+          },
+          "op": "SSTORE",
+          "pc": 119,
+          "sub": null
+        },
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x1"
+            ],
+            "store": null,
+            "used": 9844073
+          },
+          "op": "PUSH1",
+          "pc": 120,
+          "sub": null
+        },
+        {
+          "cost": 100,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x7"
+            ],
+            "store": null,
+            "used": 9843973
+          },
+          "op": "SLOAD",
+          "pc": 122,
+          "sub": null
+        },
+        {
+          "cost": 2,
+          "ex": {
+            "mem": null,
+            "push": [],
+            "store": null,
+            "used": 9843971
+          },
+          "op": "POP",
+          "pc": 123,
+          "sub": null
+        },
+        {
+          "cost": 0,
+          "ex": {
+            "mem": null,
+            "push": [],
+            "store": null,
+            "used": 9843971
+          },
+          "op": "STOP",
+          "pc": 124,
+          "sub": null
+        }
+      ]
+    }
+  },
+  "prestate": {
+    "0x0000000000000000000000000000000000400000": {
+      "balance": "0x38d7ea4c68000"
+    },
+    "0x0000000000000000000000000000000000400002": {
+      "balance": "0x0",
+      "code": "0x7f736174696e20756e6465722065766572792074726163657200000000000000006700000000000000005260185f205060205f20507f00000000000000000000000000000000000000000000000000000000000000077f0000000000000000000000000000000000000000000000000000000000000001556001545000",
+      "storage": {
+        "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  },
+  "prestate_diff": {
+    "post": {
+      "0x0000000000000000000000000000000000400000": {
+        "nonce": 1
+      },
+      "0x0000000000000000000000000000000000400002": {
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000007"
+        }
+      }
+    },
+    "pre": {
+      "0x0000000000000000000000000000000000400000": {
+        "balance": "0x38d7ea4c68000"
+      },
+      "0x0000000000000000000000000000000000400002": {
+        "balance": "0x0",
+        "code": "0x7f736174696e20756e6465722065766572792074726163657200000000000000006700000000000000005260185f205060205f20507f00000000000000000000000000000000000000000000000000000000000000077f0000000000000000000000000000000000000000000000000000000000000001556001545000"
+      }
+    }
+  },
+  "state_gas": {
+    "executionGasUsed": "0x6aad",
+    "gasRefund": "0x0",
+    "gasUsed": "0x2617d",
+    "stateGasUsed": "0x1f6d0"
+  },
+  "storage": {
+    "slots": [
+      [
+        "0x0000000000000000000000000000000000400002",
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
+        1
+      ]
+    ],
+    "unique_loads": 1,
+    "warm_loads": 0
+  },
+  "struct_log": {
+    "executionGasUsed": "0x6aad",
+    "failed": false,
+    "gas": 156029,
+    "gasRefund": "0x0",
+    "returnValue": "0x",
+    "stateGasUsed": "0x1f6d0",
+    "structLogs": [
+      {
+        "depth": 1,
+        "gas": 9957720,
+        "gasCost": 3,
+        "op": "PUSH32",
+        "pc": 0,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957717,
+        "gasCost": 3,
+        "op": "PUSH8",
+        "pc": 33,
+        "stack": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957714,
+        "gasCost": 6,
+        "op": "MSTORE",
+        "pc": 42,
+        "stack": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957708,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 43,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957705,
+        "gasCost": 2,
+        "op": "PUSH0",
+        "pc": 45,
+        "stack": [
+          "0x18"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957703,
+        "gasCost": 36,
+        "op": "KECCAK256",
+        "pc": 46,
+        "stack": [
+          "0x18",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957667,
+        "gasCost": 2,
+        "op": "POP",
+        "pc": 47,
+        "stack": [
+          "0xb5262591ac254048ffc83e289ca112ac75f47cffd7785f0c5529311cb0fcefb"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957665,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 48,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957662,
+        "gasCost": 2,
+        "op": "PUSH0",
+        "pc": 50,
+        "stack": [
+          "0x20"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957660,
+        "gasCost": 36,
+        "op": "KECCAK256",
+        "pc": 51,
+        "stack": [
+          "0x20",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957624,
+        "gasCost": 2,
+        "op": "POP",
+        "pc": 52,
+        "stack": [
+          "0xdcdc2c59f8d6281da39fce2896a512fd878a0ba1b6ff7c605de9696905131043"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957622,
+        "gasCost": 3,
+        "op": "PUSH32",
+        "pc": 53,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957619,
+        "gasCost": 3,
+        "op": "PUSH32",
+        "pc": 86,
+        "stack": [
+          "0x7"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957616,
+        "gasCost": 12100,
+        "op": "SSTORE",
+        "pc": 119,
+        "stack": [
+          "0x7",
+          "0x1"
+        ],
+        "stateGasCost": 101440,
+        "stateGasReservoir": 0,
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000007"
+        }
+      },
+      {
+        "depth": 1,
+        "gas": 9844076,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 120,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9844073,
+        "gasCost": 100,
+        "op": "SLOAD",
+        "pc": 122,
+        "stack": [
+          "0x1"
+        ],
+        "stateGasReservoir": 0,
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000007"
+        }
+      },
+      {
+        "depth": 1,
+        "gas": 9843973,
+        "gasCost": 2,
+        "op": "POP",
+        "pc": 123,
+        "stack": [
+          "0x7"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9843971,
+        "gasCost": 0,
+        "op": "STOP",
+        "pc": 124,
+        "stack": [],
+        "stateGasReservoir": 0
+      }
+    ]
+  },
+  "struct_log_full": {
+    "executionGasUsed": "0x6aad",
+    "failed": false,
+    "gas": 156029,
+    "gasRefund": "0x0",
+    "returnValue": "0x",
+    "stateGasUsed": "0x1f6d0",
+    "structLogs": [
+      {
+        "depth": 1,
+        "gas": 9957720,
+        "gasCost": 3,
+        "op": "PUSH32",
+        "pc": 0,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957717,
+        "gasCost": 3,
+        "op": "PUSH8",
+        "pc": 33,
+        "stack": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957714,
+        "gasCost": 6,
+        "op": "MSTORE",
+        "pc": 42,
+        "stack": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957708,
+        "gasCost": 3,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "PUSH1",
+        "pc": 43,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957705,
+        "gasCost": 2,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "PUSH0",
+        "pc": 45,
+        "stack": [
+          "0x18"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957703,
+        "gasCost": 36,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "KECCAK256",
+        "pc": 46,
+        "stack": [
+          "0x18",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957667,
+        "gasCost": 2,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "POP",
+        "pc": 47,
+        "stack": [
+          "0xb5262591ac254048ffc83e289ca112ac75f47cffd7785f0c5529311cb0fcefb"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957665,
+        "gasCost": 3,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "PUSH1",
+        "pc": 48,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957662,
+        "gasCost": 2,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "PUSH0",
+        "pc": 50,
+        "stack": [
+          "0x20"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957660,
+        "gasCost": 36,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "KECCAK256",
+        "pc": 51,
+        "stack": [
+          "0x20",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957624,
+        "gasCost": 2,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "POP",
+        "pc": 52,
+        "stack": [
+          "0xdcdc2c59f8d6281da39fce2896a512fd878a0ba1b6ff7c605de9696905131043"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957622,
+        "gasCost": 3,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "PUSH32",
+        "pc": 53,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957619,
+        "gasCost": 3,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "PUSH32",
+        "pc": 86,
+        "stack": [
+          "0x7"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957616,
+        "gasCost": 12100,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "SSTORE",
+        "pc": 119,
+        "stack": [
+          "0x7",
+          "0x1"
+        ],
+        "stateGasCost": 101440,
+        "stateGasReservoir": 0,
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000007"
+        }
+      },
+      {
+        "depth": 1,
+        "gas": 9844076,
+        "gasCost": 3,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "PUSH1",
+        "pc": 120,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9844073,
+        "gasCost": 100,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "SLOAD",
+        "pc": 122,
+        "stack": [
+          "0x1"
+        ],
+        "stateGasReservoir": 0,
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000007"
+        }
+      },
+      {
+        "depth": 1,
+        "gas": 9843973,
+        "gasCost": 2,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "POP",
+        "pc": 123,
+        "stack": [
+          "0x7"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9843971,
+        "gasCost": 0,
+        "memory": [
+          "0x736174696e20756e646572206576657279207472616365720000000000000000"
+        ],
+        "op": "STOP",
+        "pc": 124,
+        "stack": [],
+        "stateGasReservoir": 0
+      }
+    ]
+  },
+  "transfer": {
+    "logs": [],
+    "transfers": []
+  }
+}

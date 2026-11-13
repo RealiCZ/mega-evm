@@ -1,0 +1,247 @@
+{
+  "access_list": [],
+  "call": {
+    "executionGasUsed": "0x3b98",
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": "0x989680",
+    "gasRefund": "0x0",
+    "gasUsed": "0xa6da",
+    "input": "0xdeadbeef",
+    "output": "0xdeadbeef",
+    "stateGasUsed": "0x6bf0",
+    "to": "0x0000000000000000000000000000000000000004",
+    "type": "CALL",
+    "value": "0x0"
+  },
+  "erc7562": {
+    "accessedSlots": {
+      "reads": {},
+      "transientReads": {},
+      "transientWrites": {},
+      "writes": {}
+    },
+    "contractSize": {},
+    "extCodeAccessInfo": [],
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": "0x989680",
+    "gasUsed": "0xa6da",
+    "input": "0xdeadbeef",
+    "outOfGas": false,
+    "output": "0xdeadbeef",
+    "to": "0x0000000000000000000000000000000000000004",
+    "type": "CALL",
+    "usedOpcodes": {},
+    "value": "0x0"
+  },
+  "flat_call": [
+    {
+      "action": {
+        "callType": "call",
+        "from": "0x0000000000000000000000000000000000400000",
+        "gas": "0x989680",
+        "input": "0xdeadbeef",
+        "to": "0x0000000000000000000000000000000000000004",
+        "value": "0x0"
+      },
+      "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "blockNumber": 1,
+      "result": {
+        "gasUsed": "0xa6da",
+        "output": "0xdeadbeef"
+      },
+      "subtraces": 0,
+      "traceAddress": [],
+      "transactionHash": "0x8d9eae298840b4cf86b788d9617157fc49526041d948c5d30955f623f95ff919",
+      "transactionPosition": 0,
+      "type": "call"
+    }
+  ],
+  "four_byte": {},
+  "js": {
+    "block": 1,
+    "faults": [],
+    "frames": [],
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": 10000000,
+    "gasPrice": "0",
+    "gasUsed": 42714,
+    "input": "0xdeadbeef",
+    "output": "0xdeadbeef",
+    "senderBalance": "1000000000000000",
+    "senderNonce": 1,
+    "steps": [],
+    "to": "0x0000000000000000000000000000000000000004",
+    "toCode": "0x",
+    "toExists": false,
+    "type": "CALL",
+    "value": "0"
+  },
+  "keccak_preimage": {},
+  "mux": {
+    "4byteTracer": {},
+    "callTracer": {
+      "executionGasUsed": "0x3b98",
+      "from": "0x0000000000000000000000000000000000400000",
+      "gas": "0x989680",
+      "gasRefund": "0x0",
+      "gasUsed": "0xa6da",
+      "input": "0xdeadbeef",
+      "output": "0xdeadbeef",
+      "stateGasUsed": "0x6bf0",
+      "to": "0x0000000000000000000000000000000000000004",
+      "type": "CALL",
+      "value": "0x0"
+    },
+    "flatCallTracer": [
+      {
+        "action": {
+          "callType": "call",
+          "from": "0x0000000000000000000000000000000000400000",
+          "gas": "0x989680",
+          "input": "0xdeadbeef",
+          "to": "0x0000000000000000000000000000000000000004",
+          "value": "0x0"
+        },
+        "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "blockNumber": 1,
+        "result": {
+          "gasUsed": "0xa6da",
+          "output": "0xdeadbeef"
+        },
+        "subtraces": 0,
+        "traceAddress": [],
+        "transactionHash": "0x8d9eae298840b4cf86b788d9617157fc49526041d948c5d30955f623f95ff919",
+        "transactionPosition": 0,
+        "type": "call"
+      }
+    ],
+    "prestateTracer": {
+      "post": {
+        "0x0000000000000000000000000000000000400000": {
+          "nonce": 1
+        }
+      },
+      "pre": {
+        "0x0000000000000000000000000000000000400000": {
+          "balance": "0x38d7ea4c68000"
+        }
+      }
+    },
+    "{\n    frames: [],\n    steps: [],\n    faults: [],\n    step: function(log, db) {\n        this.steps.push([log.op.toString(), log.getDepth(), log.getPC(), log.getGas(),\n            log.getCost(), log.getRefund(), log.stack.length()]);\n    },\n    fault: function(log, db) {\n        this.faults.push([log.op.toString(), log.getDepth(), log.getError()]);\n    },\n    enter: function(frame) {\n        this.frames.push([\"enter\", frame.getType(), toHex(frame.getFrom()), toHex(frame.getTo()),\n            toHex(frame.getInput()), frame.getGas(), String(frame.getValue())]);\n    },\n    exit: function(res) {\n        this.frames.push([\"exit\", res.getGasUsed(), toHex(res.getOutput()), res.getError()]);\n    },\n    result: function(ctx, db) {\n        return {\n            type: ctx.type,\n            from: toHex(ctx.from),\n            to: toHex(ctx.to),\n            input: toHex(ctx.input),\n            gas: ctx.gas,\n            gasUsed: ctx.gasUsed,\n            gasPrice: String(ctx.gasPrice),\n            value: String(ctx.value),\n            block: ctx.block,\n            output: toHex(ctx.output),\n            error: ctx.error,\n            senderBalance: String(db.getBalance(ctx.from)),\n            senderNonce: db.getNonce(ctx.from),\n            toExists: db.exists(ctx.to),\n            toCode: toHex(db.getCode(ctx.to)),\n            frames: this.frames,\n            steps: this.steps,\n            faults: this.faults,\n        };\n    }\n}": {
+      "block": 1,
+      "faults": [],
+      "frames": [],
+      "from": "0x0000000000000000000000000000000000400000",
+      "gas": 10000000,
+      "gasPrice": "0",
+      "gasUsed": 42714,
+      "input": "0xdeadbeef",
+      "output": "0xdeadbeef",
+      "senderBalance": "1000000000000000",
+      "senderNonce": 1,
+      "steps": [],
+      "to": "0x0000000000000000000000000000000000000004",
+      "toCode": "0x",
+      "toExists": false,
+      "type": "CALL",
+      "value": "0"
+    }
+  },
+  "noop": {},
+  "opcode_gas": [],
+  "otterscan": [],
+  "outcome": {
+    "gas_used": 42714,
+    "output": "0xdeadbeef",
+    "status": true
+  },
+  "parity": {
+    "output": "0xdeadbeef",
+    "stateDiff": {
+      "0x0000000000000000000000000000000000400000": {
+        "balance": "=",
+        "code": "=",
+        "nonce": {
+          "*": {
+            "from": "0x0",
+            "to": "0x1"
+          }
+        },
+        "storage": {}
+      }
+    },
+    "trace": [
+      {
+        "action": {
+          "callType": "call",
+          "from": "0x0000000000000000000000000000000000400000",
+          "gas": "0x97efb8",
+          "input": "0xdeadbeef",
+          "to": "0x0000000000000000000000000000000000000004",
+          "value": "0x0"
+        },
+        "result": {
+          "gasUsed": "0x12",
+          "output": "0xdeadbeef"
+        },
+        "subtraces": 0,
+        "traceAddress": [],
+        "type": "call"
+      }
+    ],
+    "vmTrace": {
+      "code": "0x",
+      "ops": []
+    }
+  },
+  "prestate": {
+    "0x0000000000000000000000000000000000400000": {
+      "balance": "0x38d7ea4c68000"
+    }
+  },
+  "prestate_diff": {
+    "post": {
+      "0x0000000000000000000000000000000000400000": {
+        "nonce": 1
+      }
+    },
+    "pre": {
+      "0x0000000000000000000000000000000000400000": {
+        "balance": "0x38d7ea4c68000"
+      }
+    }
+  },
+  "state_gas": {
+    "executionGasUsed": "0x3b98",
+    "gasRefund": "0x0",
+    "gasUsed": "0xa6da",
+    "stateGasUsed": "0x6bf0"
+  },
+  "storage": {
+    "slots": [],
+    "unique_loads": 0,
+    "warm_loads": 0
+  },
+  "struct_log": {
+    "executionGasUsed": "0x3b98",
+    "failed": false,
+    "gas": 42714,
+    "gasRefund": "0x0",
+    "returnValue": "0xdeadbeef",
+    "stateGasUsed": "0x6bf0",
+    "structLogs": []
+  },
+  "struct_log_full": {
+    "executionGasUsed": "0x3b98",
+    "failed": false,
+    "gas": 42714,
+    "gasRefund": "0x0",
+    "returnValue": "0xdeadbeef",
+    "stateGasUsed": "0x6bf0",
+    "structLogs": []
+  },
+  "transfer": {
+    "logs": [],
+    "transfers": []
+  }
+}
