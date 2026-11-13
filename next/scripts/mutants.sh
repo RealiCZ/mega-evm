@@ -300,7 +300,8 @@ unset CARGO_INCREMENTAL
 # mutant that loops while allocating, such as a parser stepping back onto the value it just read
 # and pushing it again, otherwise grows until the CI runner is shut down and every result of its
 # shard is lost; under the cap its test aborts on a failed allocation and it counts as caught. The
-# unmutated oracle peaks near 1 GiB in one test binary, and two run at a time on a 16 GB runner.
+# unmutated oracle peaks near 1 GiB in one test binary, and two run at a time on a runner with
+# 16 gigabytes of memory.
 export MUTANTS_TEST_MEMORY_MB=${MUTANTS_TEST_MEMORY_MB:-4096}
 host=$(rustc -vV | sed -n 's/^host: //p')
 export "CARGO_TARGET_$(printf '%s' "$host" | tr 'a-z-' 'A-Z_')_RUNNER=$here/mutants-test-limit.sh"
