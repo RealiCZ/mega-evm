@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Tests for scripts/mutation_gate.py, run through its command line.
+
+    python3 scripts/test_mutation_gate.py
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+GATE = Path(__file__).resolve().with_name("mutation_gate.py")
+
+CAUGHT = "crates/mega-evm/src/a.rs:1:1: replace f -> bool with true"
+MISSED = "crates/mega-evm/src/a.rs:2:1: replace g -> bool with false"
+UNVIABLE = "crates/mega-evm/src/a.rs:3:1: replace h -> Foo with Default::default()"
+
+
+def gate(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(GATE), *args], capture_output=True, text=True)
+
+
+class GateTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.results = self.tmp / "mutants.out"
+        self.status = self.tmp / "status"
+        self.comment = self.tmp / "comment.md"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def write_run(self, planned: int, **lists: list[str]) -> None:
+        """Lay out a cargo-mutants output directory with `planned` mutants in its plan."""
+        self.results.mkdir()
+        (self.results / "mutants.json").write_text(json.dumps([{"name": i} for i in range(planned)]))
+        for name in ("caught", "missed", "timeout", "unviable"):
+            lines = lists.get(name, [])
+            (self.results / f"{name}.txt").write_text("".join(f"{m}\n" for m in lines))
+
+    def write_status(self, status: str, expected: str, outcomes: str) -> None:
+        self.status.write_text(
+            f"MUTANTS-STATUS status={status} expected={expected} outcomes={outcomes}\n")
+
+    def report(self, *extra: str) -> subprocess.CompletedProcess:
+        return gate("report", "--results", str(self.results), "--comment", str(self.comment), *extra)
+
+    # ---- progress ----
+
+    def test_progress_before_any_output(self) -> None:
+        out = gate("progress", "--results", str(self.results))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "expected=unknown outcomes=0")
+
+    def test_progress_counts_plan_and_outcomes(self) -> None:
+        self.write_run(5, caught=[CAUGHT], missed=[MISSED], unviable=[UNVIABLE])
+        out = gate("progress", "--results", str(self.results))
+        self.assertEqual(out.stdout.strip(), "expected=5 outcomes=3")
+
+    # ---- report without --status (unchanged behaviour) ----
+
+    def test_absent_results_pass_without_status(self) -> None:
+        out = self.report()
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("nothing was mutated", out.stdout)
+
+    def test_survivor_fails(self) -> None:
+        self.write_run(2, caught=[CAUGHT], missed=[MISSED])
+        self.assertEqual(self.report().returncode, 1)
+
+    def test_suppressed_survivor_passes(self) -> None:
+        self.write_run(2, caught=[CAUGHT], missed=[MISSED])
+        supp = self.tmp / "suppressions.toml"
+        supp.write_text(f'[[suppress]]\nkind = "line"\nmutant = "{MISSED}"\n')
+        self.assertEqual(self.report("--suppressions", str(supp)).returncode, 0)
+
+    # ---- report with --status ----
+
+    def test_complete_run_passes(self) -> None:
+        self.write_run(2, caught=[CAUGHT], unviable=[UNVIABLE])
+        self.write_status("complete", "2", "2")
+        out = self.report("--status", str(self.status))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("Incomplete", out.stdout)
+
+    def test_complete_run_still_gates_survivors(self) -> None:
+        self.write_run(2, caught=[CAUGHT], missed=[MISSED])
+        self.write_status("complete", "2", "2")
+        self.assertEqual(self.report("--status", str(self.status)).returncode, 1)
+
+    def test_partial_run_fails_even_when_all_tested_were_caught(self) -> None:
+        self.write_run(3, caught=[CAUGHT], unviable=[UNVIABLE])
+        self.write_status("partial", "3", "2")
+        out = self.report("--status", str(self.status))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("Incomplete run", out.stdout)
+        self.assertIn("2 of 3", out.stdout)
+        self.assertIn("caught: 1", out.stdout)  # what it tested is still reported
+        self.assertIn("Incomplete run", self.comment.read_text())
+
+    def test_not_started_without_results_fails(self) -> None:
+        self.write_status("not-started", "unknown", "0")
+        out = self.report("--status", str(self.status))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("before any mutant was tested", out.stdout)
+
+    def test_not_started_with_plan_fails(self) -> None:
+        self.write_run(4)
+        self.write_status("not-started", "4", "0")
+        out = self.report("--status", str(self.status))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("4 planned", out.stdout)
+        self.assertNotIn("PASS", out.stdout)
+
+    def test_empty_diff_status_passes(self) -> None:
+        self.write_status("complete", "0", "0")
+        self.assertEqual(self.report("--status", str(self.status)).returncode, 0)
+
+    def test_missing_status_file_refuses(self) -> None:
+        self.write_run(1, caught=[CAUGHT])
+        out = self.report("--status", str(self.status))
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("MUTANTS-STATUS", out.stderr)
+
+    # ---- exclude-re ----
+
+    def test_exclude_re_emits_one_pair_per_function_suppression(self) -> None:
+        supp = self.tmp / "suppressions.toml"
+        supp.write_text('[[suppress]]\nkind = "function"\npattern = "foo"\n'
+                        '[[suppress]]\nkind = "line"\nmutant = "x"\n')
+        out = gate("exclude-re", "--suppressions", str(supp))
+        self.assertEqual(out.stdout.splitlines(), ["--exclude-re", "foo"])
+
+
+if __name__ == "__main__":
+    unittest.main()

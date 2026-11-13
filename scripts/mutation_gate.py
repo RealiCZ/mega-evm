@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """Score and gate a cargo-mutants run for mega-evm.
 
-Two subcommands:
+Subcommands:
 
   exclude-re  --suppressions <toml>
         Print one `--exclude-re <regex>` pair per line for every function-scoped
         suppression. Consumed by scripts/mutation_test.sh so suppressed
         functions are never generated as mutants.
 
+  progress    --results <mutants.out dir>
+        Print `expected=<n|unknown> outcomes=<n>`: how many mutants the run
+        planned (unknown before cargo-mutants wrote its plan) and how many have
+        an outcome. Used by scripts/mutation_test.sh for its status line.
+
   report      --results <mutants.out dir> [--suppressions <toml>]
-              [--comment <path>] [--summary <path>]
+              [--status <file>] [--comment <path>] [--summary <path>]
         Read the run outcomes, apply line-scoped suppressions, compute the
         mutation score, write a Markdown report, and exit non-zero if any
-        unsuppressed survivor remains (the "no new survivors" gate).
+        unsuppressed survivor remains (the "no new survivors" gate). With
+        --status (the driver's MUTANTS-STATUS line), a run that did not test
+        every planned mutant also fails: what it did test is still reported.
 
 The gate is intended to run diff-scoped (cargo mutants --in-diff), so every
 mutant it sees lives on a line the PR changed; an unsuppressed survivor there is
@@ -21,6 +28,7 @@ a test gap the PR introduced.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import tomllib
@@ -67,8 +75,71 @@ def mutant_body(line: str) -> str:
     return parts[1] if len(parts) == 2 else line
 
 
+# One file per cargo-mutants outcome; every tested mutant lands in exactly one.
+OUTCOME_FILES = ("caught.txt", "missed.txt", "timeout.txt", "unviable.txt")
+
+
+def progress(results: Path) -> tuple[int | None, int]:
+    """Return (planned mutants or None if no plan was written, mutants with an outcome)."""
+    plan = results / "mutants.json"
+    expected = len(json.loads(plan.read_text())) if plan.exists() else None
+    outcomes = sum(len(read_lines(results / name)) for name in OUTCOME_FILES)
+    return expected, outcomes
+
+
+def cmd_progress(args: argparse.Namespace) -> int:
+    expected, outcomes = progress(Path(args.results))
+    print(f"expected={'unknown' if expected is None else expected} outcomes={outcomes}")
+    return 0
+
+
+def read_status(path: Path) -> dict[str, str] | None:
+    """Parse the driver's `MUTANTS-STATUS key=value ...` line; None if absent."""
+    if not path.exists():
+        return None
+    for line in reversed(path.read_text().splitlines()):
+        if line.startswith("MUTANTS-STATUS "):
+            return dict(f.split("=", 1) for f in line.split()[1:] if "=" in f)
+    return None
+
+
+def incomplete_note(status: dict[str, str]) -> str:
+    """Describe a run that did not test every planned mutant."""
+    state, expected, outcomes = status.get("status"), status.get("expected"), status.get("outcomes")
+    if state == "partial":
+        return (f"**Incomplete run** — the time budget ran out after {outcomes} of {expected} "
+                f"planned mutants; the rest were not tested. The results below cover only "
+                f"the tested mutants, and an incomplete run never passes.")
+    if state == "not-started":
+        return ("**Incomplete run** — the time budget ran out before any mutant was tested "
+                f"({expected} planned). Nothing below is a result, and an incomplete run never passes.")
+    return (f"**Run did not complete** (status `{state}`, {outcomes} of {expected} mutants tested); "
+            f"see the run log.")
+
+
+def emit(report: str, args: argparse.Namespace) -> None:
+    if args.comment:
+        Path(args.comment).write_text(report)
+    if args.summary:
+        with open(args.summary, "a") as fh:
+            fh.write(report)
+    print(report)
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     results = Path(args.results)
+
+    # The driver's status says whether the run tested every planned mutant. A
+    # stopped run must never pass, even when everything it tested was caught.
+    note = None
+    if args.status:
+        run_status = read_status(Path(args.status))
+        if run_status is None:
+            print(f"ERROR: no MUTANTS-STATUS line in {args.status}: the mutation run did not "
+                  f"finish — refusing to report a passing gate.", file=sys.stderr)
+            return 2
+        if run_status.get("status") != "complete":
+            note = incomplete_note(run_status)
 
     # Guard against a silent pass when the run produced no results. We must tell
     # apart two cases that both leave the outcome lists empty:
@@ -78,14 +149,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     #     aborted, wrote elsewhere, or the tool renamed its output. Refusing to
     #     report a 100% pass here is the whole point.
     if not results.exists():
+        if note:
+            emit(f"## 🧬 Mutation testing — ❌ FAIL\n\n{note}\n", args)
+            return 1
         report = "## 🧬 Mutation testing\n\nNo results at "
         report += f"`{results}` — nothing was mutated (e.g. no mutatable changes).\n"
-        if args.comment:
-            Path(args.comment).write_text(report)
-        if args.summary:
-            with open(args.summary, "a") as fh:
-                fh.write(report)
-        print(report)
+        emit(report, args)
         return 0
     for required in ("caught.txt", "missed.txt"):
         if not (results / required).exists():
@@ -101,6 +170,9 @@ def cmd_report(args: argparse.Namespace) -> int:
     caught = read_lines(results / "caught.txt")
     unviable = read_lines(results / "unviable.txt")
     timeout = read_lines(results / "timeout.txt")
+    if note and not (missed or caught or unviable or timeout):
+        emit(f"## 🧬 Mutation testing — ❌ FAIL\n\n{note}\n", args)
+        return 1
 
     _, line_supp = load_suppressions(Path(args.suppressions)) if args.suppressions else ([], [])
     # A line suppression matches either the bare mutation text (`mutant` written
@@ -124,7 +196,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     scored = viable - len(suppressed)  # equivalents/dead-code excluded from denominator
     killed = len(caught)
     score = (killed / scored * 100.0) if scored else 100.0
-    gate_pass = not real_survivors and not real_timeouts
+    gate_pass = not real_survivors and not real_timeouts and note is None
 
     # ---- Markdown report (PR comment + step summary) ----
     status = "✅ PASS" if gate_pass else "❌ FAIL"
@@ -132,24 +204,19 @@ def cmd_report(args: argparse.Namespace) -> int:
     # No viable mutants and nothing inconclusive (typical diff run whose changed
     # lines contain nothing mutatable). Reporting "100% (0/0)" reads like a real
     # result and confuses readers — say plainly that nothing was tested.
-    if viable == 0 and not real_timeouts:
-        note = "**Nothing to test** — no mutants were generated"
+    if viable == 0 and not real_timeouts and note is None:
+        nothing = "**Nothing to test** — no mutants were generated"
         if unviable or timeout:
-            note += f" ({len(unviable)} unviable, {len(timeout)} timed out)"
+            nothing += f" ({len(unviable)} unviable, {len(timeout)} timed out)"
         else:
-            note += " on the changed lines"
-        report = f"## 🧬 Mutation testing — ✅ PASS\n\n{note}.\n"
-        if args.comment:
-            Path(args.comment).write_text(report)
-        if args.summary:
-            with open(args.summary, "a") as fh:
-                fh.write(report)
-        print(report)
+            nothing += " on the changed lines"
+        emit(f"## 🧬 Mutation testing — ✅ PASS\n\n{nothing}.\n", args)
         return 0
 
     md = [
         f"## 🧬 Mutation testing — {status}",
         "",
+        *([note, ""] if note else []),
         f"**Diff mutation score: {score:.1f}%** ({killed}/{scored} viable mutants killed)",
         "",
         f"- caught: {len(caught)}",
@@ -189,16 +256,9 @@ def cmd_report(args: argparse.Namespace) -> int:
         )
     if real_survivors or real_timeouts:
         md += ["", "_Tip: run `/improve-mutation-score` to triage and fix these._"]
-    else:
+    elif note is None:
         md.append("No new test gaps introduced by this change. 🎉")
-    report = "\n".join(md) + "\n"
-
-    if args.comment:
-        Path(args.comment).write_text(report)
-    if args.summary:
-        with open(args.summary, "a") as fh:
-            fh.write(report)
-    print(report)
+    emit("\n".join(md) + "\n", args)
 
     return 0 if gate_pass else 1
 
@@ -261,9 +321,15 @@ def main() -> int:
     pe.add_argument("--suppressions", required=True)
     pe.set_defaults(func=cmd_exclude_re)
 
+    pp = sub.add_parser("progress", help="count planned and tested mutants")
+    pp.add_argument("--results", required=True)
+    pp.set_defaults(func=cmd_progress)
+
     pr = sub.add_parser("report")
     pr.add_argument("--results", required=True)
     pr.add_argument("--suppressions", default=None)
+    pr.add_argument("--status", default=None,
+                    help="the driver's status file; fail unless it says complete")
     pr.add_argument("--comment", default=None, help="write Markdown report here")
     pr.add_argument("--summary", default=None, help="append report here (GITHUB_STEP_SUMMARY)")
     pr.set_defaults(func=cmd_report)

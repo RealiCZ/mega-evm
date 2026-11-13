@@ -30,13 +30,17 @@ jobs:
     name: cargo-mutants gate
     runs-on: ubuntu-24.04
     # Diff-scoped PR runs finish in minutes; the nightly full-crate run needs
-    # much longer headroom.
+    # much longer headroom. MUTANTS_BUDGET (below) stops the run itself before
+    # this limit, so a run that cannot finish still scores and uploads its results.
     timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0 # need base history for the diff
+
+      - name: Test the scorer
+        run: python3 scripts/test_mutation_gate.py
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -54,17 +58,25 @@ jobs:
           # generated mutants, which would silently shift the gate's baseline.
           tool: cargo-mutants@27.1.0
 
-      - name: Warm build cache
-        # Compile deps + test binaries into ./target so (a) Swatinem/rust-cache
-        # (bundled in setup-rust-toolchain) caches the compiled dependencies, and
-        # (b) cargo-mutants' `copy_target` seeds each scratch build from this warm
-        # target — so per-mutant builds skip recompiling dependencies.
-        run: cargo nextest run -p mega-evm --all-features --no-run
-
       - name: Run mutation testing
         # On a PR: mutate only the changed lines (fast gate). On manual dispatch
         # there is no PR base, so run the whole crate as an on-demand baseline
         # instead of feeding an empty base into `diff` mode (which would fail).
+        #
+        # The driver first builds the tests into ./target, so (a) Swatinem/rust-cache
+        # (bundled in setup-rust-toolchain) caches the compiled dependencies, and
+        # (b) cargo-mutants' `copy_target` seeds each scratch build from this warm
+        # target — so per-mutant builds skip recompiling dependencies.
+        env:
+          # setup-rust-toolchain exports CARGO_INCREMENTAL=0. Every mutant rebuilds
+          # mega-evm and all of its test binaries; incremental compilation, for the
+          # warm build and the mutant builds alike, lets each of those rebuilds
+          # reuse what the mutation did not touch.
+          CARGO_INCREMENTAL: "1"
+          # Seconds from the driver's start (300 min). Leaves the job's 330-minute
+          # limit room for setup, the driver's stop grace period, scoring, upload
+          # and the cache save.
+          MUTANTS_BUDGET: "18000"
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             scripts/mutation_test.sh diff "${{ github.event.pull_request.base.sha }}"
@@ -76,6 +88,7 @@ jobs:
         run: |
           python3 scripts/mutation_gate.py report \
             --results target/mutants/mutants.out \
+            --status target/mutants/status \
             --suppressions mutants/suppressions.toml \
             --comment mutation-report.md \
             --summary "$GITHUB_STEP_SUMMARY"
@@ -121,6 +134,7 @@ jobs:
           name: mutation-results
           path: |
             target/mutants/mutants.out
+            target/mutants/status
             target/mutants.diff
             mutation-report.md
           if-no-files-found: ignore

@@ -14,6 +14,7 @@ Target: **`crates/mega-evm`**.
 | `mutants/suppressions.toml` | Reviewed equivalent / dead-code mutants excluded from gating. |
 | `scripts/mutation_test.sh` | Driver: `diff <base>`, `full`, `file <glob>`. |
 | `scripts/mutation_gate.py` | Scores a run, applies suppressions, gates the PR. |
+| `scripts/test_mutation_gate.py` | Tests for the scorer (`python3 scripts/test_mutation_gate.py`). |
 | `.github/workflows/mutation.yml` | Diff-scoped PR gate + result comment. |
 
 ## Local use
@@ -22,11 +23,30 @@ Target: **`crates/mega-evm`**.
 # Mutate only what your branch changed (what CI runs on a PR):
 scripts/mutation_test.sh diff origin/main
 python3 scripts/mutation_gate.py report --results target/mutants/mutants.out \
-        --suppressions mutants/suppressions.toml
+        --status target/mutants/status --suppressions mutants/suppressions.toml
 
 # One subsystem while iterating:
 scripts/mutation_test.sh file 'crates/mega-evm/src/limit/**'
 ```
+
+## Build speed and the time budget
+
+Every mutant rebuilds `mega-evm` and all of its test binaries, so the run's cost is dominated by builds.
+The driver first builds the unmutated tests into `./target`, which `copy_target` copies into each scratch build directory.
+With incremental compilation, each mutant build then reuses everything the mutation did not touch.
+Cargo builds the dev profile incrementally by default, but `actions-rust-lang/setup-rust-toolchain` exports `CARGO_INCREMENTAL=0`, so the workflow sets `CARGO_INCREMENTAL=1` on the mutation step.
+
+`MUTANTS_BUDGET=<seconds>` bounds a run, counted from the driver's start and covering the warm build and cargo-mutants.
+When it runs out, the driver interrupts cargo-mutants, which stops its in-flight mutants and keeps every outcome already recorded, and exits 0 so that what was tested can still be scored and uploaded.
+The driver's last line, also written to `target/mutants/status`, says how far the run got:
+
+```
+MUTANTS-STATUS status=<complete|partial|not-started|baseline-failed|error> expected=<n|unknown> outcomes=<n>
+```
+
+`expected` is the number of mutants cargo-mutants planned (`unknown` if the run stopped before it planned them) and `outcomes` the number that got an outcome.
+`baseline-failed` (the unmutated tree does not build or pass its tests) and `error` (the run itself failed) exit non-zero.
+`mutation_gate.py report --status target/mutants/status` fails the gate unless the status is `complete`, while still reporting what was tested.
 
 ## The gate
 
