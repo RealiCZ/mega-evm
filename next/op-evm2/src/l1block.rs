@@ -56,24 +56,48 @@ pub struct L1BlockInfo {
     pub tx_l1_cost: Option<U256>,
 }
 
+/// A callback handed every slot of the `L1Block` predeploy a fetch reads, with the value read
+/// ([`L1BlockInfo::try_fetch_with`], [`L1BlockInfo::fetch_da_footprint_gas_scalar_with`]).
+pub type L1SlotRead<'r> = &'r mut dyn FnMut(U256, U256);
+
 /// Reads a storage slot of the `L1Block` predeploy without loading it into the transaction
-/// overlay.
-fn l1_block_slot(state: &mut State<'_>, slot: U256) -> Result<U256, DatabaseError> {
-    state.storage_slot_untracked(&L1_BLOCK_CONTRACT, &slot)
+/// overlay, and hands it to `read`.
+fn l1_block_slot(
+    state: &mut State<'_>,
+    slot: U256,
+    read: L1SlotRead<'_>,
+) -> Result<U256, DatabaseError> {
+    let value = state.storage_slot_untracked(&L1_BLOCK_CONTRACT, &slot)?;
+    read(slot, value);
+    Ok(value)
 }
 
 impl L1BlockInfo {
     /// Fetches the DA footprint gas scalar from the `L1Block` predeploy.
     pub fn fetch_da_footprint_gas_scalar(state: &mut State<'_>) -> Result<u16, DatabaseError> {
-        let slot = l1_block_slot(state, DA_FOOTPRINT_GAS_SCALAR_SLOT)?.to_be_bytes::<32>();
+        Self::fetch_da_footprint_gas_scalar_with(state, &mut |_, _| {})
+    }
+
+    /// [`Self::fetch_da_footprint_gas_scalar`], handing `read` the slot it reads with its value:
+    /// the read is made outside any transaction's journal, so a caller that reports what a
+    /// transaction read records it here.
+    pub fn fetch_da_footprint_gas_scalar_with(
+        state: &mut State<'_>,
+        read: L1SlotRead<'_>,
+    ) -> Result<u16, DatabaseError> {
+        let slot = l1_block_slot(state, DA_FOOTPRINT_GAS_SCALAR_SLOT, read)?.to_be_bytes::<32>();
         Ok(u16::from_be_bytes([
             slot[DA_FOOTPRINT_GAS_SCALAR_OFFSET],
             slot[DA_FOOTPRINT_GAS_SCALAR_OFFSET + 1],
         ]))
     }
 
-    fn try_fetch_isthmus(&mut self, state: &mut State<'_>) -> Result<(), DatabaseError> {
-        let scalars = l1_block_slot(state, OPERATOR_FEE_SCALARS_SLOT)?.to_be_bytes::<32>();
+    fn try_fetch_isthmus(
+        &mut self,
+        state: &mut State<'_>,
+        read: L1SlotRead<'_>,
+    ) -> Result<(), DatabaseError> {
+        let scalars = l1_block_slot(state, OPERATOR_FEE_SCALARS_SLOT, read)?.to_be_bytes::<32>();
         self.operator_fee_scalar = Some(U256::from_be_slice(
             &scalars[OPERATOR_FEE_SCALAR_OFFSET..OPERATOR_FEE_SCALAR_OFFSET + 4],
         ));
@@ -83,10 +107,14 @@ impl L1BlockInfo {
         Ok(())
     }
 
-    fn try_fetch_ecotone(&mut self, state: &mut State<'_>) -> Result<(), DatabaseError> {
-        self.l1_blob_base_fee = Some(l1_block_slot(state, ECOTONE_L1_BLOB_BASE_FEE_SLOT)?);
+    fn try_fetch_ecotone(
+        &mut self,
+        state: &mut State<'_>,
+        read: L1SlotRead<'_>,
+    ) -> Result<(), DatabaseError> {
+        self.l1_blob_base_fee = Some(l1_block_slot(state, ECOTONE_L1_BLOB_BASE_FEE_SLOT, read)?);
 
-        let scalars = l1_block_slot(state, ECOTONE_L1_FEE_SCALARS_SLOT)?.to_be_bytes::<32>();
+        let scalars = l1_block_slot(state, ECOTONE_L1_FEE_SCALARS_SLOT, read)?.to_be_bytes::<32>();
         self.l1_base_fee_scalar =
             U256::from_be_slice(&scalars[BASE_FEE_SCALAR_OFFSET..BASE_FEE_SCALAR_OFFSET + 4]);
         let l1_blob_base_fee_scalar = U256::from_be_slice(
@@ -99,7 +127,7 @@ impl L1BlockInfo {
         self.empty_ecotone_scalars = l1_blob_base_fee_scalar.is_zero()
             && scalars[BASE_FEE_SCALAR_OFFSET..BLOB_BASE_FEE_SCALAR_OFFSET + 4] == EMPTY_SCALARS;
         self.l1_fee_overhead = if self.empty_ecotone_scalars {
-            Some(l1_block_slot(state, L1_OVERHEAD_SLOT)?)
+            Some(l1_block_slot(state, L1_OVERHEAD_SLOT, read)?)
         } else {
             None
         };
@@ -112,26 +140,42 @@ impl L1BlockInfo {
         l2_block: U256,
         spec_id: OpSpecId,
     ) -> Result<Self, DatabaseError> {
+        Self::try_fetch_with(state, l2_block, spec_id, &mut |_, _| {})
+    }
+
+    /// [`Self::try_fetch`], handing `read` every slot it reads, in the order read, with its value:
+    /// the base fee slot, then by `spec_id` the scalar and overhead slots (before Ecotone), or the
+    /// blob base fee slot, the fee scalars slot, the overhead slot only when the scalars are
+    /// empty, the operator fee scalars slot (Isthmus) and the footprint scalar slot (Jovian).
+    /// The reads are made outside any transaction's journal, so a caller that reports what a
+    /// transaction read records them here.
+    pub fn try_fetch_with(
+        state: &mut State<'_>,
+        l2_block: U256,
+        spec_id: OpSpecId,
+        read: L1SlotRead<'_>,
+    ) -> Result<Self, DatabaseError> {
         let mut out = Self {
             l2_block: Some(l2_block),
-            l1_base_fee: l1_block_slot(state, L1_BASE_FEE_SLOT)?,
+            l1_base_fee: l1_block_slot(state, L1_BASE_FEE_SLOT, read)?,
             ..Default::default()
         };
 
         if !spec_id.is_enabled_in(OpSpecId::ECOTONE) {
-            out.l1_base_fee_scalar = l1_block_slot(state, L1_SCALAR_SLOT)?;
-            out.l1_fee_overhead = Some(l1_block_slot(state, L1_OVERHEAD_SLOT)?);
+            out.l1_base_fee_scalar = l1_block_slot(state, L1_SCALAR_SLOT, read)?;
+            out.l1_fee_overhead = Some(l1_block_slot(state, L1_OVERHEAD_SLOT, read)?);
             return Ok(out);
         }
 
-        out.try_fetch_ecotone(state)?;
+        out.try_fetch_ecotone(state, read)?;
 
         if spec_id.is_enabled_in(OpSpecId::ISTHMUS) {
-            out.try_fetch_isthmus(state)?;
+            out.try_fetch_isthmus(state, read)?;
         }
 
         if spec_id.is_enabled_in(OpSpecId::JOVIAN) {
-            out.da_footprint_gas_scalar = Some(Self::fetch_da_footprint_gas_scalar(state)?);
+            out.da_footprint_gas_scalar =
+                Some(Self::fetch_da_footprint_gas_scalar_with(state, read)?);
         }
 
         Ok(out)
@@ -475,5 +519,85 @@ mod tests {
         };
         assert_eq!(info.operator_fee_refund(50_000, 0, OpSpecId::ISTHMUS), U256::from(100));
         assert_eq!(info.operator_fee_refund(50_000, 0, OpSpecId::HOLOCENE), U256::ZERO);
+    }
+}
+
+#[cfg(test)]
+mod read_report_tests {
+    //! What [`L1BlockInfo::try_fetch_with`] and [`L1BlockInfo::fetch_da_footprint_gas_scalar_with`]
+    //! report: every slot they read, in the order read, with its value, and nothing else.
+
+    use super::*;
+    use alloc::vec::Vec;
+    use evm2::evm::{AccountInfo, InMemoryDB};
+
+    /// An `L1Block` predeploy whose slot `n` holds `n * 10`, its fee scalars slot (3) `scalars`.
+    fn l1_block(scalars: U256) -> InMemoryDB {
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(&L1_BLOCK_CONTRACT, AccountInfo::default().with_nonce(1));
+        for slot in 1..=8u64 {
+            db.insert_account_storage(
+                &L1_BLOCK_CONTRACT,
+                &U256::from(slot),
+                &U256::from(slot * 10),
+            );
+        }
+        db.insert_account_storage(&L1_BLOCK_CONTRACT, &ECOTONE_L1_FEE_SCALARS_SLOT, &scalars);
+        db
+    }
+
+    fn reported(db: InMemoryDB, spec: OpSpecId) -> (L1BlockInfo, Vec<(u64, U256)>) {
+        let mut state = State::new(db);
+        let mut reads = Vec::new();
+        let info = L1BlockInfo::try_fetch_with(&mut state, U256::from(1), spec, &mut |slot, v| {
+            reads.push((slot.to::<u64>(), v));
+        })
+        .unwrap();
+        (info, reads)
+    }
+
+    #[test]
+    fn witness_l1_fee_fetch_reports_every_slot_it_reads() {
+        // A blob base fee scalar of 1 (bytes 20 to 23): the scalars are not empty.
+        let scalars = U256::from(1) << 64;
+        // Jovian and later: the base fee, the blob base fee, the scalars, then the operator fee
+        // scalars and the footprint scalar, both of slot 8; no overhead.
+        for spec in [OpSpecId::JOVIAN, OpSpecId::KARST] {
+            let (info, reads) = reported(l1_block(scalars), spec);
+            assert!(!info.empty_ecotone_scalars);
+            let ten = |n: u64| U256::from(n * 10);
+            assert_eq!(reads, [(1, ten(1)), (7, ten(7)), (3, scalars), (8, ten(8)), (8, ten(8))]);
+        }
+        // Empty scalars: the Bedrock fallback's overhead, slot 5, is read too.
+        let (info, reads) = reported(l1_block(U256::ZERO), OpSpecId::KARST);
+        assert!(info.empty_ecotone_scalars);
+        let slots: Vec<u64> = reads.iter().map(|(slot, _)| *slot).collect();
+        assert_eq!(slots, [1, 7, 3, 5, 8, 8]);
+        // Isthmus: no footprint scalar; Ecotone: no operator fee scalars; before Ecotone: the
+        // scalar and the overhead.
+        let slots =
+            |spec| reported(l1_block(scalars), spec).1.iter().map(|r| r.0).collect::<Vec<_>>();
+        assert_eq!(slots(OpSpecId::ISTHMUS), [1, 7, 3, 8]);
+        assert_eq!(slots(OpSpecId::ECOTONE), [1, 7, 3]);
+        assert_eq!(slots(OpSpecId::REGOLITH), [1, 6, 5]);
+        // The unreported fetch reads the same values.
+        let mut state = State::new(l1_block(scalars));
+        let plain = L1BlockInfo::try_fetch(&mut state, U256::from(1), OpSpecId::KARST).unwrap();
+        assert_eq!(plain, reported(l1_block(scalars), OpSpecId::KARST).0);
+    }
+
+    #[test]
+    fn witness_footprint_fetch_reports_slot_8() {
+        let mut state = State::new(l1_block(U256::ZERO));
+        let mut reads = Vec::new();
+        let scalar =
+            L1BlockInfo::fetch_da_footprint_gas_scalar_with(&mut state, &mut |slot, value| {
+                reads.push((slot, value));
+            })
+            .unwrap();
+        assert_eq!(reads, [(DA_FOOTPRINT_GAS_SCALAR_SLOT, U256::from(80))]);
+        // 80 holds no footprint scalar in its bytes 12 and 13.
+        assert_eq!(scalar, 0);
+        assert_eq!(L1BlockInfo::fetch_da_footprint_gas_scalar(&mut state).unwrap(), scalar);
     }
 }

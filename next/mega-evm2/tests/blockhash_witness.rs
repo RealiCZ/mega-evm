@@ -327,7 +327,7 @@ fn blockhash_witness_export_has_the_number_and_the_hash() {
     let expected = served(&[OLDEST, 850, NEWEST]);
     let own: Vec<(u64, B256)> = expected.iter().map(|(n, h)| (*n, *h)).collect();
     assert_eq!(candidate.block_hash_reads(), own);
-    assert_eq!(block.last_attempt_block_hash_reads(), own);
+    assert_eq!(block.last_attempt_block_hash_reads().unwrap(), own);
     // The word `BLOCKHASH` pushed is the hash recorded: the receipt's logs carry it.
     let pushed: Vec<B256> =
         candidate.result().logs.iter().map(|log| B256::from_slice(&log.data.data)).collect();
@@ -339,7 +339,7 @@ fn blockhash_witness_export_has_the_number_and_the_hash() {
     let mut over = TxDeposit { gas_limit: 30_000_001, ..deposit_to(READER, &[U256::from(851)]) };
     let refused = block.execute_candidate(&recovered(over.clone()), &[]).expect_err("no room");
     assert_eq!(refused.disposition(), Disposition::Refused);
-    assert!(block.last_attempt_block_hash_reads().is_empty());
+    assert!(block.last_attempt_block_hash_reads().unwrap().is_empty());
     assert_eq!(*block.block_hash_reads(), expected);
     // The same candidate with room is served its hash.
     over.gas_limit = 2_000_000;
@@ -349,7 +349,7 @@ fn blockhash_witness_export_has_the_number_and_the_hash() {
     let expected = served(&[OLDEST, 850, 851, NEWEST]);
     // Committing added nothing, and a transaction that reads none adds none.
     include(&mut block, &[deposit(NOOP, &[])]);
-    assert!(block.last_attempt_block_hash_reads().is_empty());
+    assert!(block.last_attempt_block_hash_reads().unwrap().is_empty());
     assert_eq!(*block.block_hash_reads(), expected);
     assert_eq!(block.finish().expect("the block finishes").block_hash_reads, expected);
 }
@@ -531,7 +531,7 @@ fn blockhash_witness_failed_attempt_keeps_what_it_was_served() {
     let mut block = block_over(BLOCK, Db::new(witness));
     let error = block.execute_candidate(&read(&[850, 851]), &[]).expect_err("the read fails");
     assert_eq!(error.disposition(), Disposition::Internal);
-    assert_eq!(block.last_attempt_block_hash_reads(), [(850, hash_of(850))]);
+    assert_eq!(block.last_attempt_block_hash_reads().unwrap(), [(850, hash_of(850))]);
     assert_eq!(*block.block_hash_reads(), served(&[850]));
     assert!(block.execute_candidate(&deposit(NOOP, &[]), &[]).is_err());
     // The drained export is available after the failure, and empties the session's.

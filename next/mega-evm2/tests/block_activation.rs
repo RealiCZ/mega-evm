@@ -203,9 +203,8 @@ fn chain_config_block_zero_skips_the_eip_calls() {
     assert!(block.activation().block_zero());
     assert!(!block.activation().satin_activates() && !block.activation().deposits_only());
     let states = block.pre_block_states();
-    // The five deployments, the due-change read, the registry's deployment, the L1 block info
-    // read and the resolution.
-    assert_eq!(states.len(), 9, "every step but the EIP calls");
+    // The five deployments, the due-change read, the registry's deployment and the resolution.
+    assert_eq!(states.len(), 8, "every step but the EIP calls");
     for state in states {
         assert!(state.account_changes_for(&HISTORY_STORAGE).is_none());
         assert!(state.account_changes_for(&BEACON_ROOTS).is_none());

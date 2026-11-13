@@ -345,12 +345,7 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
         caller: alloy_primitives::Address,
         upfront_fee: U256,
     ) -> HandlerResult<()> {
-        // op-revm reads the L1Block account when it fetches the L1 info; op-evm2 reads only the
-        // slots. Read the account so the read set matches (no gas effect).
-        let number = host.block().number;
-        if host.ext().l1.l2_block != Some(number) {
-            host.state_mut().account_info_untracked(&op_evm2::constants::L1_BLOCK_CONTRACT)?;
-        }
+        load_l1_block_info(host)?;
         <OpHandlerHooks as TxHandlerHooks<MegaTypes>>::before_execution(
             host,
             envelope,
@@ -434,6 +429,38 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
     }
 }
 
+/// The fee computation's read of the L1 block info (`SATIN-WIT-011`), which op-evm2's hook would
+/// otherwise make: once per block, when the cache was not loaded for the block, the L1 block
+/// contract's account (op-revm reads it when it fetches the info; op-evm2 reads only the slots),
+/// then the slots the fetch reads, as op-evm2 reads them. The keys the cache was loaded from are
+/// kept with it (`Lite::l1_sources`): the transaction's reads, and those of every later one priced
+/// from the cache, are those keys (`Lite::l1_reads`), whether or not it loaded the cache. A slot
+/// of an absent account is read as op-evm2 reads it, and recorded as no read (`SATIN-WIT-006`).
+/// No gas effect; a read the database cannot serve fails the transaction (`SATIN-VAL-010`).
+fn load_l1_block_info(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<()> {
+    use op_evm2::OpTypes;
+    let number = host.block().number;
+    if host.ext().l1.l2_block != Some(number) {
+        let account =
+            host.state_mut().account_info_untracked(&op_evm2::constants::L1_BLOCK_CONTRACT)?;
+        let spec = <MegaTypes as OpTypes>::op_spec(host.config_spec_id());
+        let mut sources = crate::l1_reads::L1Reads::default();
+        sources.record_account(account);
+        let info = op_evm2::L1BlockInfo::try_fetch_with(
+            host.state_mut(),
+            number,
+            spec,
+            &mut |slot, value| sources.record_slot(slot, value),
+        )?;
+        let ext = host.ext_mut();
+        ext.l1 = info;
+        ext.l1_sources = sources;
+    }
+    let Lite { l1_reads, l1_sources, .. } = host.ext_mut();
+    l1_reads.merge(l1_sources);
+    Ok(())
+}
+
 /// Whether a deposit pays history gas: always (`SATIN-HIST-016`), but under the reference's rule,
 /// which exempts it (comparison only).
 fn deposit_prices_history(host: &Evm<'_, MegaTypes>) -> bool {
@@ -493,6 +520,7 @@ pub enum LegacyPrepared {
 fn prepare_legacy(
     req: &mut TxRequest<'_, '_, MegaTypes, TxLegacy>,
 ) -> HandlerResult<LegacyPrepared> {
+    req.host.ext_mut().begin_attempt();
     let caller = req.tx.signer();
     let tx = req.tx.inner();
     let (to, len, value) = (tx.to, tx.input.len(), tx.value);
@@ -559,6 +587,7 @@ fn charge_tx_state(tx_gas: &mut GasTracker, cost: u64) -> bool {
 }
 
 fn prepare_2930(req: &mut TxRequest<'_, '_, MegaTypes, TxEip2930>) -> HandlerResult<PreparedTx> {
+    req.host.ext_mut().begin_attempt();
     let caller = req.tx.signer();
     let tx = req.tx.inner();
     let (to, len, value) = (tx.to, body_extra(tx.input.len(), &tx.access_list), tx.value);
@@ -569,6 +598,7 @@ fn prepare_2930(req: &mut TxRequest<'_, '_, MegaTypes, TxEip2930>) -> HandlerRes
 }
 
 fn prepare_1559(req: &mut TxRequest<'_, '_, MegaTypes, TxEip1559>) -> HandlerResult<PreparedTx> {
+    req.host.ext_mut().begin_attempt();
     let caller = req.tx.signer();
     let tx = req.tx.inner();
     let (to, len, value) = (tx.to, body_extra(tx.input.len(), &tx.access_list), tx.value);
@@ -581,6 +611,7 @@ fn prepare_1559(req: &mut TxRequest<'_, '_, MegaTypes, TxEip1559>) -> HandlerRes
 fn prepare_deposit(
     req: &mut TxRequest<'_, '_, MegaTypes, TxDeposit>,
 ) -> HandlerResult<PreparedDeposit> {
+    req.host.ext_mut().begin_attempt();
     let tx = *req.tx.inner();
     match classify(req.host, tx.from, DEPOSIT_TRANSACTION_TYPE, tx.to) {
         Ok(_) => prepare_deposit_inner(req.host, tx, false),

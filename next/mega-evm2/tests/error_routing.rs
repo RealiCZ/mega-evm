@@ -2,9 +2,9 @@
 //! (`SATIN-VAL-010`, `SATIN-PBLK-006`, `SATIN-REG-007`), at every phase of a block:
 //!
 //! - a pre-block call: a fatal error is internal, any other an invalid block;
-//! - the pre-block reads (a system contract's deployment, the due-change read, the L1 block info
-//!   read, the resolution of the live system address), and the block's own reads for a transaction
-//!   outside its execution (the sender, the footprint scalar): always internal;
+//! - the pre-block reads (a system contract's deployment, the due-change read, the resolution of
+//!   the live system address), and the block's own reads for a transaction outside its execution
+//!   (the sender, the L1 block contract's account and footprint scalar): always internal;
 //! - a transaction's validation or execution (its frames, a deposit's, an authorization's
 //!   preflight): a fatal error is internal, any other an invalid block.
 //!
@@ -264,9 +264,6 @@ fn test_routing_the_pre_block_reads_as_internal_whatever_the_fatality() {
         (Read::Account(SEQUENCER_REGISTRY), Phase::DueChangeRead, SEQUENCER_REGISTRY, None),
         (Read::Storage(SEQUENCER_REGISTRY, 7), Phase::DueChangeRead, SEQUENCER_REGISTRY, Some(7)),
         (Read::Storage(SEQUENCER_REGISTRY, 9), Phase::DueChangeRead, SEQUENCER_REGISTRY, Some(9)),
-        (Read::Account(L1_BLOCK_CONTRACT), Phase::L1BlockInfoRead, L1_BLOCK_CONTRACT, None),
-        (Read::Storage(L1_BLOCK_CONTRACT, 1), Phase::L1BlockInfoRead, L1_BLOCK_CONTRACT, Some(1)),
-        (Read::Storage(L1_BLOCK_CONTRACT, 8), Phase::L1BlockInfoRead, L1_BLOCK_CONTRACT, Some(8)),
     ] {
         for fatal in [true, false] {
             let error = start(true, fail, fatal, true).0.err().expect("the read fails");
@@ -308,13 +305,20 @@ fn test_routing_the_blocks_own_reads_for_a_transaction_as_internal_whatever_the_
         let fault = assert_decides(block, error);
         assert_routed(&fault, Phase::Bookkeeping, Disposition::Internal, fatal);
         assert_eq!(fault.context().address, Some(SENDER));
-        // The footprint gas scalar before a non-deposit (no L1 block contract read before it).
-        let (mut block, plan) = started(false, Read::Storage(L1_BLOCK_CONTRACT, 8), fatal);
-        let error = block.execute_candidate(&legacy(TARGET), &[]).expect_err("the read fails");
-        assert_eq!(plan.borrow().served, 1);
-        let fault = assert_decides(block, error);
-        assert_routed(&fault, Phase::Bookkeeping, Disposition::Internal, fatal);
-        assert_eq!(fault.context().address, Some(L1_BLOCK_CONTRACT));
+        // The L1 block contract's account and footprint gas scalar before a non-deposit (no
+        // pre-block step reads either).
+        for (fail, slot) in [
+            (Read::Account(L1_BLOCK_CONTRACT), None),
+            (Read::Storage(L1_BLOCK_CONTRACT, 8), Some(U256::from(8))),
+        ] {
+            let (mut block, plan) = started(true, fail, fatal);
+            let error = block.execute_candidate(&legacy(TARGET), &[]).expect_err("the read fails");
+            assert_eq!(plan.borrow().served, 1);
+            let fault = assert_decides(block, error);
+            assert_routed(&fault, Phase::Bookkeeping, Disposition::Internal, fatal);
+            assert_eq!(fault.context().address, Some(L1_BLOCK_CONTRACT));
+            assert_eq!(fault.context().slot, slot);
+        }
     }
 }
 

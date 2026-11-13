@@ -32,7 +32,7 @@ pub use handler::{
     OpHandlerHooks, OpTxError, PreparedDeposit, execute_deposit_tx, op_tx_registry,
     prepare_deposit_tx,
 };
-pub use l1block::L1BlockInfo;
+pub use l1block::{L1BlockInfo, L1SlotRead};
 pub use precompiles::OpPrecompiles;
 pub use spec::{OpSpecId, UnknownOpHardfork, name};
 pub use transaction::{

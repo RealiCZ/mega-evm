@@ -8,19 +8,34 @@
 //!   calls (block zero makes neither, and its parent beacon block root must be zero), the EIP-7997
 //!   factory's check in the block in which Satin activates, the five flat system contracts'
 //!   deployment, the `SequencerRegistry`'s due-change read and its `applyPendingChanges()` call
-//!   when due, the registry's deployment, the read of the L1 block info slots, and the resolution
-//!   of the block's live system address, each committed on its own in that order;
+//!   when due, the registry's deployment and the resolution of the block's live system address,
+//!   each committed on its own in that order; no read of the L1 block contract is made before the
+//!   transactions;
 //! - **per candidate, before it runs** ([`BlockSession::execute_candidate`]): the activation
 //!   block's deposit-only rule, the Mega System Transaction decision against the block's live
 //!   system address (+ the system shape), `BlockLimiter::pre_execution_check` (the block's gas
 //!   limit, the builder's size limits, the three packing budgets: data size, KV updates, state
 //!   growth; a deposit is held to the gas limit alone, a Mega System Transaction to all of them as
-//!   any other non-deposit transaction), the DA footprint against the block's gas limit, the
-//!   sender's account read; then `Evm::transact` and `ExecutedTx::detach` (nothing committed);
+//!   any other non-deposit transaction), the DA footprint against the block's gas limit (its scalar
+//!   read off the L1 block contract), the sender's account read; then `Evm::transact` and
+//!   `ExecutedTx::detach` (nothing committed);
 //! - **commit** ([`BlockSession::commit_candidate`]): the candidate's block, the room check and the
 //!   sender check again, the block's counters, the receipt (status, cumulative gas, logs; a
-//!   deposit's nonce and receipt version), the state into the EVM's overlay and the block's change
-//!   set (`BlockStateAccumulator`, the counterpart of revm's bundle).
+//!   deposit's nonce and receipt version), the L1 block reads it is the first to report, the state
+//!   into the EVM's overlay and the block's change set (`BlockStateAccumulator`, the counterpart of
+//!   revm's bundle), and the state, whole, among the block's transaction states.
+//!
+//! States (`SATIN-WIT-005`, `SATIN-WIT-008`): every pre-block step's state and every committed
+//! transaction's state are kept whole, read-only entries included, in commit order
+//! ([`BlockSession::pre_block_states`], [`BlockSession::tx_states`]); the change set keeps only
+//! what they changed. They and the exports are what a block's witness is built from
+//! ([`crate::witness`]).
+//!
+//! L1 block reads (`SATIN-WIT-003`, `SATIN-WIT-011`, [`crate::l1_reads`]): the footprint scalar the
+//! block reads before a non-deposit candidate runs and the L1 block info its fee computation reads
+//! travel with the candidate ([`Candidate::l1_reads`]); its commit adds each key no earlier commit
+//! reported to its state as a read-only entry, so the first included transaction that read a key
+//! reports it and a dropped candidate reports nothing.
 //!
 //! SALT (`SATIN-WIT-013`): every attempt begins with an empty multiplier cache, and its valid
 //! lookups join the block's union ([`BlockSession::bucket_reads`]) whatever becomes of it — a
@@ -53,6 +68,7 @@ use crate::{
     error::{
         BlockError, BlockIdentity, Budget, CandidateError, ErrorContext, Phase, Refusal, TxContext,
     },
+    l1_reads::L1Reads,
     salt::{BucketId, ForeignSaltExport, SaltExport, SnapshotId},
     tx::ORACLE,
 };
@@ -168,6 +184,7 @@ pub struct Candidate {
     gas_used: u64,
     bucket_reads: Vec<BucketId>,
     block_hash_reads: Vec<(u64, B256)>,
+    l1_reads: L1Reads,
     block: BlockIdentity,
     simulated: bool,
 }
@@ -235,6 +252,13 @@ impl Candidate {
     pub fn block_hash_reads(&self) -> &[(u64, B256)] {
         &self.block_hash_reads
     }
+    /// The L1 block contract's account and slots its attempt read outside its journal
+    /// (`SATIN-WIT-011`): the footprint scalar the block read before it ran, for a non-deposit
+    /// transaction, and the L1 block info its fee computation read, cached or not. Its commit
+    /// reports, in its state, those no earlier commit of the block reported.
+    pub const fn l1_reads(&self) -> &L1Reads {
+        &self.l1_reads
+    }
     /// The block the candidate ran for.
     pub const fn block(&self) -> BlockIdentity {
         self.block
@@ -255,6 +279,10 @@ pub struct BlockOutput {
     /// set is the block's state transition: a registry seeded over an account without code clears
     /// that account's earlier storage there, which its pre-block state does not mark.
     pub pre_block_states: Vec<PendingState>,
+    /// Every included transaction's whole state, in commit order: every account and slot it
+    /// loaded, read-only entries included, and the L1 block contract's account and slots it was
+    /// the first to read (`SATIN-WIT-005`, `SATIN-WIT-008`, `SATIN-WIT-011`).
+    pub tx_states: Vec<PendingState>,
     /// The live system address the block's transactions were classified against: always resolved
     /// under consensus rules (`None` only in a comparison run under the reference's
     /// per-transaction classification, where the registry named none).
@@ -281,6 +309,11 @@ pub struct BlockSession<'a> {
     changes: BlockStateAccumulator,
     /// Whole pre-block states in commit order, including read-only accounts and slots.
     pre_block_states: Vec<PendingState>,
+    /// Every committed transaction's whole state, in commit order.
+    tx_states: Vec<PendingState>,
+    /// The L1 block contract's account and slots a committed transaction's state reports
+    /// (`SATIN-WIT-011`).
+    l1_reported: L1Reads,
     /// Valid SALT lookups of every attempt of the session, discarded candidates included, and of
     /// every export merged into it; emptied by a drain.
     bucket_reads: BTreeSet<BucketId>,
@@ -326,6 +359,8 @@ impl<'a> BlockSession<'a> {
             receipts: Vec::new(),
             changes: BlockStateAccumulator::new(),
             pre_block_states: Vec::new(),
+            tx_states: Vec::new(),
+            l1_reported: L1Reads::default(),
             bucket_reads: BTreeSet::new(),
             salt_snapshot,
             // Empty when the block starts, whatever a cache under the session holds.
@@ -362,6 +397,12 @@ impl<'a> BlockSession<'a> {
 
     pub fn pre_block_states(&self) -> &[PendingState] {
         &self.pre_block_states
+    }
+
+    /// Every committed transaction's whole state, in commit order, each with the L1 block reads it
+    /// was the first to report (`SATIN-WIT-005`, `SATIN-WIT-011`).
+    pub fn tx_states(&self) -> &[PendingState] {
+        &self.tx_states
     }
 
     /// Valid SALT lookups of every attempt of the session — discarded candidates, a candidate
@@ -431,17 +472,13 @@ impl<'a> BlockSession<'a> {
     }
 
     /// The block hashes the session's last attempt was served, ascending by block number: after a
-    /// candidate the candidate's own, after a failed one those served before it failed.
-    pub fn last_attempt_block_hash_reads(&self) -> Vec<(u64, B256)> {
-        let served = self.evm.ext().block_hashes.served().into_iter();
-        served
-            .map(|(number, hash)| {
-                // `BLOCKHASH` serves only a block before the session's own, whose number the
-                // header gives as a `u64`.
-                let number = u64::try_from(number).expect("a served block is before the block");
-                (number, hash)
-            })
-            .collect()
+    /// candidate the candidate's own, after a failed one those served before it failed. A number
+    /// that does not fit 64 bits is an error; a session's never is, since it serves only blocks
+    /// before its own, whose number the header gives as a `u64`.
+    pub fn last_attempt_block_hash_reads(
+        &self,
+    ) -> Result<Vec<(u64, B256)>, crate::block_hashes::UnexportableBlockNumber> {
+        self.evm.ext().block_hashes.exported()
     }
 
     /// Hands the session's served block hashes over to the session that builds the block, and
@@ -513,6 +550,7 @@ impl<'a> BlockSession<'a> {
             receipts: self.receipts,
             changes: self.changes,
             pre_block_states: self.pre_block_states,
+            tx_states: self.tx_states,
             system_address: self.system_address,
             limiter: self.limiter,
             bucket_reads: self.bucket_reads,
@@ -527,7 +565,10 @@ impl<'a> BlockSession<'a> {
             self.evm.system_call(SystemTx::new(target, data)).map(|executed| executed.detach());
         // What the call's `BLOCKHASH` was served is the block's, as an attempt's is
         // (`SATIN-WIT-014`).
-        self.block_hash_reads.extend(self.last_attempt_block_hash_reads());
+        let served = self.last_attempt_block_hash_reads().map_err(|e| {
+            BlockError::block_hash_number(e, Phase::PreBlockCall, ErrorContext::account(target))
+        })?;
+        self.block_hash_reads.extend(served);
         // The call's Oracle accesses go to the observer once it has ended, whatever its result.
         let success = executed.as_ref().is_ok_and(|e| e.result.status);
         self.evm.ext_mut().oracle.end_system_call(target, success);
@@ -621,9 +662,8 @@ impl<'a> BlockSession<'a> {
         encoded: &[u8],
     ) -> Result<Candidate, CandidateError> {
         // An attempt reads its buckets afresh (`SATIN-STATE-006`), and exports only its own
-        // lookups, also when it is refused before it runs.
-        self.evm.ext_mut().salt.begin_attempt();
-        self.evm.ext_mut().block_hashes.begin_attempt();
+        // lookups, block hashes and L1 block reads, also when it is refused before it runs.
+        self.evm.ext_mut().begin_attempt();
         let env = tx.inner();
         let ty = env.ty();
         let is_deposit = env.is_deposit();
@@ -642,15 +682,12 @@ impl<'a> BlockSession<'a> {
             gas_limit,
             self.packing_exempt(is_deposit, is_system_transaction),
         )?;
+        // The L1 block reads the block makes for the candidate, outside its execution.
+        let mut l1_reads = L1Reads::default();
         let da_footprint = if is_deposit {
             0
         } else {
-            let scalar =
-                L1BlockInfo::fetch_da_footprint_gas_scalar(self.evm.state_mut()).map_err(|e| {
-                    let context =
-                        ErrorContext::account(L1_BLOCK_CONTRACT).with_transaction(context);
-                    BlockError::read(Phase::Bookkeeping, e, context)
-                })?;
+            let scalar = self.read_footprint_scalar(context, &mut l1_reads)?;
             let footprint = da_size.saturating_mul(scalar as u64);
             self.limiter.check_da_footprint(footprint)?;
             footprint
@@ -670,10 +707,15 @@ impl<'a> BlockSession<'a> {
         let bucket_reads = self.evm.ext().salt.lookups();
         self.bucket_reads.extend(bucket_reads.iter().copied());
         // So does every block hash it was served (`SATIN-WIT-014`, `SATIN-WIT-016`).
-        let block_hash_reads = self.last_attempt_block_hash_reads();
+        let block_hash_reads = self.last_attempt_block_hash_reads().map_err(|e| {
+            let context = ErrorContext::default().with_transaction(context);
+            BlockError::block_hash_number(e, Phase::Transaction, context)
+        })?;
         self.block_hash_reads.extend(block_hash_reads.iter().copied());
         let TxResultWithState { result, pending_state, .. } =
             executed.map_err(|e| CandidateError::from_execution(e, context))?;
+        // Its fee computation's L1 block reads join the footprint's (`SATIN-WIT-011`).
+        l1_reads.merge(&self.evm.ext().l1_reads);
         let ext = self.evm.ext();
         let usage = ext.usage(result.status);
         let (history, history_bytes) = ext.history(result.status);
@@ -698,8 +740,42 @@ impl<'a> BlockSession<'a> {
             gas_used,
             bucket_reads,
             block_hash_reads,
+            l1_reads,
             block: self.identity,
             simulated: self.simulation,
+        })
+    }
+
+    /// The footprint gas scalar the block reads before a non-deposit transaction runs
+    /// (`SATIN-BASE-009`, `SATIN-WIT-011`): the L1 block contract's account, then, when it holds
+    /// one, its slot 8; zero, with no slot read, when it does not. Both reads are recorded in
+    /// `reads`. A read the database cannot serve is an internal error, whatever the database
+    /// declares (`SATIN-VAL-010`).
+    fn read_footprint_scalar(
+        &mut self,
+        context: TxContext,
+        reads: &mut L1Reads,
+    ) -> Result<u16, BlockError> {
+        let state = self.evm.state_mut();
+        let account = state.account_info_untracked(&L1_BLOCK_CONTRACT).map_err(|e| {
+            let error_context = ErrorContext::account(L1_BLOCK_CONTRACT).with_transaction(context);
+            BlockError::read(Phase::Bookkeeping, e, error_context)
+        })?;
+        let exists = account.is_some();
+        reads.record_account(account);
+        if !exists {
+            return Ok(0);
+        }
+        L1BlockInfo::fetch_da_footprint_gas_scalar_with(state, &mut |slot, value| {
+            reads.record_slot(slot, value)
+        })
+        .map_err(|e| {
+            let error_context = ErrorContext {
+                slot: Some(op_evm2::constants::DA_FOOTPRINT_GAS_SCALAR_SLOT),
+                ..ErrorContext::account(L1_BLOCK_CONTRACT)
+            }
+            .with_transaction(context);
+            BlockError::read(Phase::Bookkeeping, e, error_context)
         })
     }
 
@@ -752,7 +828,9 @@ impl<'a> BlockSession<'a> {
             l.block_da_size_used = l.block_da_size_used.saturating_add(out.da_size);
             l.block_da_footprint_used = l.block_da_footprint_used.saturating_add(out.da_footprint);
         }
-        let Candidate { ty, is_deposit, sender_nonce, result, pending, gas_used, .. } = out;
+        let Candidate {
+            ty, is_deposit, sender_nonce, result, mut pending, gas_used, l1_reads, ..
+        } = out;
         let status = result.status && !result.ext.failed_deposit;
         let bloom = alloy_primitives::logs_bloom(result.logs.iter());
         self.receipts.push(Receipt {
@@ -763,8 +841,12 @@ impl<'a> BlockSession<'a> {
             logs: result.logs,
             deposit_nonce: is_deposit.then_some(sender_nonce),
         });
+        // The L1 block reads no earlier commit reported are this transaction's to report, as
+        // read-only entries of its state (`SATIN-WIT-011`).
+        l1_reads.attach(&mut pending, &mut self.l1_reported);
         self.evm.commit_source(&pending);
         let _ = pending.visit(&mut self.changes);
+        self.tx_states.push(pending);
         Ok(gas_used)
     }
 }

@@ -40,6 +40,7 @@ use evm2::{
 pub const AUTHORIZATION_SIZE: u64 = 101;
 
 pub fn prepare(req: &mut TxRequest<'_, '_, MegaTypes, LazyTxEip7702>) -> HandlerResult<PreparedTx> {
+    req.host.ext_mut().begin_attempt();
     let caller = req.tx.signer();
     let tx = req.tx.inner();
     let entries = tx.authorizations().len() as u64;
