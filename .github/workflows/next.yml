@@ -30,12 +30,24 @@ name: next
 #             Runs next/scripts/coverage.sh (branch coverage of the engine crates under
 #             the unit tests and the sample gate) and uploads lcov.info to Codecov with
 #             the flag `next`. The upload never fails the job (a fork has no token).
-# mutants   — pull requests: cargo-mutants on the engine lines the pull request changes.
-#             Pushes to cz/feat/satin-evm2, daily and workflow_dispatch: the full
-#             engine, sharded. mutants-plan selects the shards. The oracle is the
-#             unit tests plus the sample gate (next/scripts/mutants.sh); a surviving or
-#             timed-out mutant that diff/mutants/suppressions.toml does not list fails
-#             the pull request run; the full-engine runs report and do not fail.
+# mutants   — pull requests: cargo-mutants on the engine lines the pull request changes; a
+#             surviving or timed-out mutant that diff/mutants/suppressions.toml does not
+#             list fails the job, as does a run that reaches its time budget before it
+#             tests every mutant (it ends itself before the job limit, with its report).
+#             Pushes to cz/feat/satin-evm2: the engine lines changed since the previous
+#             push, within the same budget; report only.
+# mutants-full — pushes to cz/feat/satin-evm2, daily and workflow_dispatch: the full
+#             engine in shards (mutants-plan), carried over from run to run instead of
+#             starting from zero: each shard restores the latest merged results from the
+#             Actions cache, does not test again a mutant they settle (caught or unviable,
+#             code unchanged), and ends itself cleanly before the job limit
+#             (MUTANTS_BUDGET); mutants-merge unions the shards and saves the cache the
+#             next run starts from. The cache key carries the month, so each month the
+#             full set also runs once without carry-over; next/diff/mutants/refresh.txt
+#             requests that sooner for chosen files. Report only.
+#             The oracle of every mutants job is the unit tests plus the sample gate
+#             (next/scripts/mutants.sh), built with the `mutants` cargo profile and linked
+#             with mold.
 
 on:
   pull_request:
@@ -351,35 +363,22 @@ jobs:
           name: next
           verbose: true
 
-  mutants-plan:
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
-    runs-on: ubuntu-24.04
-    outputs:
-      shards: ${{ steps.plan.outputs.shards }}
-    steps:
-      - name: Plan the shards
-        id: plan
-        run: |
-          # One job on a pull request (the changed lines only); eight shards of the full set otherwise.
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            echo 'shards=["pr"]' >> "$GITHUB_OUTPUT"
-          else
-            echo 'shards=["0/8","1/8","2/8","3/8","4/8","5/8","6/8","7/8"]' >> "$GITHUB_OUTPUT"
-          fi
-
   mutants:
-    name: mutants (${{ matrix.shard }})
-    needs: mutants-plan
+    name: mutants (${{ github.event_name == 'pull_request' && 'pr' || 'push' }})
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
     runs-on: ubuntu-24.04
     timeout-minutes: 330
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.mutants-plan.outputs.shards) }}
     defaults:
       run:
         working-directory: mega-evm
+    env:
+      # Every mutant relinks every test binary of the engine and the diff harness.
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
+      - name: Record the job's start
+        working-directory: .
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout mega-evm
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -398,6 +397,11 @@ jobs:
           cache: true
           cache-shared-key: next-mutants
 
+      - name: Install mold
+        uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+        with:
+          make-default: false
+
       - name: Install zstd
         run: bash next/scripts/install-zstd.sh
 
@@ -407,35 +411,61 @@ jobs:
           # Pinned: a new release can change the set of generated mutants.
           tool: cargo-mutants@27.1.0
 
+      - name: Test the mutation tooling
+        run: |
+          python3 -I scripts/test_mutation_gate.py
+          python3 -I next/scripts/test_mutants_ledger.py
+
       - name: Run mutation testing
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
-          OUT: ${{ github.workspace }}/mega-evm/next/target/mutants
-          SHARD: ${{ matrix.shard }}
+          OUT: ${{ github.workspace }}/mega-evm/next/target/mutants-out
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [ "$SHARD" = "pr" ]; then
-            # The base is fetched over https without the token (the repository is public).
+          # End before the job limit (330 minutes), leaving 20 for the steps after this one. A
+          # pull request run stopped there fails the gate as incomplete, with its report.
+          export MUTANTS_BUDGET=$((JOB_START + (330 - 20) * 60 - $(date +%s)))
+          # The repository is public: commits are fetched over https without the token.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" "$BASE_SHA"
             bash next/scripts/mutants.sh pr "$BASE_SHA"
           else
-            bash next/scripts/mutants.sh shard "$SHARD"
+            # After a force push the previous push is no branch's history; fetch it while the
+            # repository still has it, so the diff starts from the merge base. mutants.sh states
+            # the base it uses, and falls back to HEAD's parent without one.
+            if [ -n "${BEFORE//0/}" ]; then
+              git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" "$BEFORE" || true
+            fi
+            bash next/scripts/mutants.sh push "$BEFORE"
           fi
+
+      - name: Show the linker of the test binaries
+        if: always()
+        run: |
+          bin=$(find next/target/*/deps -maxdepth 1 -type f -perm -u+x -name 'mega_evm2-*' 2>/dev/null | head -1)
+          if [ -n "$bin" ]; then readelf -p .comment "$bin" | grep -iE 'mold|lld|GNU ld' || true; fi
 
       - name: Score and gate
         # Fail closed: the scorer refuses a results directory that exists without
         # caught.txt and missed.txt, and an unsuppressed survivor or timeout fails.
-        # Full-engine runs (integration pushes, daily and manual) report only.
+        # Push runs report only.
         run: |
           rc=0
-          python3 -I scripts/mutation_gate.py report \
-            --results next/target/mutants/mutants.out \
-            --suppressions next/diff/mutants/suppressions.toml \
-            --summary "$GITHUB_STEP_SUMMARY" || rc=$?
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            python3 -I scripts/mutation_gate.py report \
+              --results next/target/mutants-out/mutants.out \
+              --suppressions next/diff/mutants/suppressions.toml \
+              --require-complete \
+              --summary "$GITHUB_STEP_SUMMARY" || rc=$?
             exit "$rc"
           fi
+          python3 -I scripts/mutation_gate.py report \
+            --results next/target/mutants-out/mutants.out \
+            --suppressions next/diff/mutants/suppressions.toml \
+            --scope "Push diff" \
+            --summary "$GITHUB_STEP_SUMMARY" || rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::warning::mutation survivors or an incomplete run (status $rc); see the report and the artifact"
           fi
@@ -444,8 +474,175 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: next-mutants-${{ strategy.job-index }}
+          name: next-mutants-${{ github.event_name == 'pull_request' && 'pr' || 'push' }}
           path: |
-            mega-evm/next/target/mutants/mutants.out
-            mega-evm/next/target/mutants.diff
+            mega-evm/next/target/mutants-out/mutants.out
+            mega-evm/next/target/mutants-out.diff
           if-no-files-found: ignore
+          overwrite: true
+
+  mutants-plan:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
+    runs-on: ubuntu-24.04
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      ledger: ${{ steps.plan.outputs.ledger }}
+    steps:
+      - name: Plan the shards and the carried-over results
+        id: plan
+        run: |
+          echo 'shards=["0/8","1/8","2/8","3/8","4/8","5/8","6/8","7/8"]' >> "$GITHUB_OUTPUT"
+          # The cache key prefix of the carried-over results, read once for every shard and the
+          # merge. It changes each month: the first run of a month starts without carry-over.
+          echo "ledger=next-mutants-ledger-v1-$(date -u +%Y-%m)-" >> "$GITHUB_OUTPUT"
+
+  mutants-full:
+    name: mutants-full (${{ matrix.shard }})
+    needs: mutants-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.mutants-plan.outputs.shards) }}
+    defaults:
+      run:
+        working-directory: mega-evm
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    steps:
+      - name: Record the job's start
+        working-directory: .
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Checkout mega-evm
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mega-evm
+          persist-credentials: false
+          # The carried-over results name the commit they were made at; the diff from it finds
+          # the mutants whose code changed since.
+          fetch-depth: 0
+
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
+
+      - name: Install the next/ toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          rust-src-dir: mega-evm/next
+          rustflags: ""
+          cache: true
+          cache-shared-key: next-mutants
+
+      - name: Install mold
+        uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+        with:
+          make-default: false
+
+      - name: Install zstd
+        run: bash next/scripts/install-zstd.sh
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+
+      - name: Restore the carried-over results
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: mega-evm/next/target/mutants-out/mutants.out
+          # Never an exact hit: the latest saved results of this month, by prefix.
+          key: ${{ needs.mutants-plan.outputs.ledger }}${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ needs.mutants-plan.outputs.ledger }}
+
+      - name: Run the shard, carried over
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
+          OUT: ${{ github.workspace }}/mega-evm/next/target/mutants-out
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          # Every shard starts from the same results, so they split what is left the same way.
+          # End before the job limit (330 minutes), leaving 20 for the steps after this one.
+          MUTANTS_ITERATE=1 MUTANTS_BUDGET=$((JOB_START + (330 - 20) * 60 - $(date +%s))) \
+            bash next/scripts/mutants.sh shard "$SHARD"
+
+      - name: Show the linker of the test binaries
+        if: always()
+        run: |
+          bin=$(find next/target/*/deps -maxdepth 1 -type f -perm -u+x -name 'mega_evm2-*' 2>/dev/null | head -1)
+          if [ -n "$bin" ]; then readelf -p .comment "$bin" | grep -iE 'mold|lld|GNU ld' || true; fi
+
+      - name: Upload the shard's results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-mutants-full-${{ strategy.job-index }}
+          path: mega-evm/next/target/mutants-out/mutants.out
+          if-no-files-found: ignore
+          overwrite: true
+
+  mutants-merge:
+    needs: [mutants-plan, mutants-full]
+    # Also after a failed or cancelled shard: the others' results are kept.
+    if: always() && needs.mutants-plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mega-evm
+    steps:
+      - name: Checkout mega-evm
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mega-evm
+          persist-credentials: false
+
+      - name: Download the shards' results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: next-mutants-full-*
+          path: shards
+
+      - name: Merge the shards
+        id: merge
+        run: |
+          set -euo pipefail
+          # Only results made at this commit: a shard that stopped before cargo-mutants wrote
+          # anything uploads the directory it started from.
+          mapfile -t dirs < <(find "$GITHUB_WORKSPACE/shards" -type f -name previously_caught.txt -exec dirname {} \; | sort)
+          if python3 -I next/scripts/mutants-ledger.py merge --base "$GITHUB_SHA" \
+            --into next/target/mutants-out/mutants.out "${dirs[@]}"; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::no shard produced results of this commit; the carried-over results stay as they were"
+          fi
+
+      - name: Save the carried-over results
+        if: steps.merge.outputs.merged == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: mega-evm/next/target/mutants-out/mutants.out
+          key: ${{ needs.mutants-plan.outputs.ledger }}${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Report the full engine
+        if: steps.merge.outputs.merged == 'true'
+        run: |
+          rc=0
+          python3 -I scripts/mutation_gate.py report \
+            --results next/target/mutants-out/mutants.out \
+            --suppressions next/diff/mutants/suppressions.toml \
+            --scope "Full-engine (carried over)" \
+            --summary "$GITHUB_STEP_SUMMARY" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::mutation survivors, timeouts or mutants not yet reached (status $rc); see the report and the artifact"
+          fi
+
+      - name: Upload the merged results
+        if: steps.merge.outputs.merged == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-mutants-full
+          path: mega-evm/next/target/mutants-out/mutants.out
+          overwrite: true
