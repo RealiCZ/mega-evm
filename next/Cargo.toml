@@ -18,12 +18,16 @@ op-evm2 = { path = "op-evm2", default-features = false }
 # Features are chosen by each member, so that `op-evm2` still builds without `std`.
 evm2 = { path = "../../evm2/crates/evm2", default-features = false }
 evm2-macros = { path = "../../evm2/crates/macros" }
+# The fork's inspector crate: a dev-dependency only, for the tests that run Satin under every
+# tracer and inspector it provides.
+evm2-inspectors = { path = "../../evm2/crates/inspectors", default-features = false }
 
 # alloy
 alloy-consensus = { version = "2.5.0", default-features = false }
 alloy-eips = { version = "2.5.0", default-features = false }
 alloy-primitives = { version = "1.7.0", default-features = false }
 alloy-rlp = { version = "0.3", default-features = false }
+alloy-rpc-types-trace = { version = "2.5.0", default-features = false }
 
 # misc
 secp256k1 = { version = "0.33.1", default-features = false }

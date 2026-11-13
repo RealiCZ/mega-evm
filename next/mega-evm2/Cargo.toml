@@ -24,6 +24,17 @@ alloy-rlp.workspace = true
 # misc
 secp256k1 = { workspace = true, features = ["std", "recovery"] }
 
+[dev-dependencies]
+# evm2: every tracer and inspector of the fork's inspector crate, the JavaScript tracer included
+# (`tests/inspectors`).
+evm2-inspectors = { workspace = true, features = ["std", "js-tracer"] }
+
+# alloy
+alloy-rpc-types-trace.workspace = true
+
+# misc
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+
 [features]
 default = []
 # Everything that exists only for the differential comparison: start-ledger settlements, the

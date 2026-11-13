@@ -34,6 +34,8 @@ bash scripts/mega-eest-gate.sh                                 # Mega EEST slice
 bash diff/scripts/rule-coverage.sh <rules.md>                  # which rule ids of the specification have a scenario
 bash diff/scripts/probe.sh diff/probe-examples.jsonl           # inputs of your own, on both sides
 cargo bench -p mega-evm2-diff --bench engine                   # fixed workloads, plain and inspected
+cargo test -p mega-evm2 --test inspectors                      # every tracer and inspector, golden output
+bash diff/scripts/inspector-blocks.sh                          # the sample's blocks, plain and under a heavy tracer combination
 ```
 
 `gate.sh` prints one `GATE` line per gate (synthetic main scenarios, fuzz batches, engine replay and block executor on recorded blocks) and compares it with the expected counts.
@@ -123,6 +125,15 @@ Each `Candidate::block_hash_reads` holds its own attempt's reads, and `BlockSess
 The export starts empty for each session, and is handed over as the SALT lookups are: `BlockSession::drain_block_hash_reads` returns it as a `BlockHashExport`, and `merge_block_hash_reads` takes one into the building session, refusing an export of another block and one that holds another hash for a block the session was served.
 A single transaction's EVM keeps the reads of its last transaction in `Lite::block_hashes`, emptied when the next one begins.
 A block replayed on a database that holds exactly the witness — a strict one, which fails a read of anything else — makes the same reads; the fork's `EmptyDB`, which answers any number with a hash it makes up, is not a witness database.
+
+## Tracers and inspectors
+
+A node serves its tracing endpoints from evm2's inspector crate, `evm2-inspectors` (a dev-dependency of `mega-evm2` and `mega-evm2-diff`, by path into the fork): the Geth tracers through `DebugInspector::get_result` (struct logger, call, prestate and diff, flat call, four-byte, mux, no-op, state-gas, ERC-7562, keccak preimage and JavaScript), the Parity trace, state diff and VM trace, and the access-list, transfer and Otterscan inspectors.
+`mega-evm2/tests/inspectors` runs Satin transactions through the factory under each of them: the fifteen scenarios of the tracer tests of the Satin implementation under review, built the same way (`reference_scenarios.rs`), and the frames that are hard to trace under Satin (`hard_frames.rs`): a native keyless deployment's creation, intercepted system-contract calls, a first frame that runs out of gas before it starts, failed deposits, caught limit stops of each kind, reverted logs, EIP-7702 delegation, precompiles (one priced against detention), `SELFDESTRUCT`, detention stops and the reservoir's give-back.
+Every traced run is held to the run with no inspector: the same receipt, state changes, gas figures and engine ledgers.
+Each scenario's output for every tracer is pinned in `golden/<scenario>.json` and read back; `MEGA_EVM2_BLESS_TRACES=1` rewrites the files instead, a change to review file by file.
+`tracers.rs` holds each tracer to the receipt, the state and the other tracers, and names the shapes a tracer shows of Satin that are not what the engine did, such as a keyless deployment's creation missing from the struct logs and the Parity VM trace, and detention's withheld gas showing as the cost of the step that read volatile data.
+`diff/tests/inspector_blocks.rs` (through `diff/scripts/inspector-blocks.sh`, which CI runs) replays the sample's recorded blocks through block sessions plain and under the struct logger and the mux of the call, flat-call and four-byte tracers, observing the pre-block calls too, and requires the two runs to agree on every transaction, the block counters and the post-state.
 
 ## Coverage and mutation testing in CI
 

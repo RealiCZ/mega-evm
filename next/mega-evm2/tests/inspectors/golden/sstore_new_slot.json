@@ -1,0 +1,532 @@
+{
+  "access_list": [
+    {
+      "address": "0x0000000000000000000000000000000000400002",
+      "storageKeys": [
+        "0x0000000000000000000000000000000000000000000000000000000000000001"
+      ]
+    }
+  ],
+  "call": {
+    "executionGasUsed": "0x69e2",
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": "0x989680",
+    "gasRefund": "0x0",
+    "gasUsed": "0x260b2",
+    "input": "0x",
+    "stateGasUsed": "0x1f6d0",
+    "to": "0x0000000000000000000000000000000000400002",
+    "type": "CALL",
+    "value": "0x0"
+  },
+  "erc7562": {
+    "accessedSlots": {
+      "reads": {},
+      "transientReads": {},
+      "transientWrites": {},
+      "writes": {
+        "0x0000000000000000000000000000000000000000000000000000000000000001": 1
+      }
+    },
+    "contractSize": {},
+    "extCodeAccessInfo": [],
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": "0x989680",
+    "gasUsed": "0x260b2",
+    "input": "0x",
+    "outOfGas": false,
+    "to": "0x0000000000000000000000000000000000400002",
+    "type": "CALL",
+    "usedOpcodes": {
+      "0x0": 1,
+      "0x55": 1
+    },
+    "value": "0x0"
+  },
+  "flat_call": [
+    {
+      "action": {
+        "callType": "call",
+        "from": "0x0000000000000000000000000000000000400000",
+        "gas": "0x989680",
+        "input": "0x",
+        "to": "0x0000000000000000000000000000000000400002",
+        "value": "0x0"
+      },
+      "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "blockNumber": 1,
+      "result": {
+        "gasUsed": "0x260b2",
+        "output": "0x"
+      },
+      "subtraces": 0,
+      "traceAddress": [],
+      "transactionHash": "0xad60faa4dc933e55eaee3f69f16c21681870aa616453e7406a6a12482c755087",
+      "transactionPosition": 0,
+      "type": "call"
+    }
+  ],
+  "four_byte": {},
+  "js": {
+    "block": 1,
+    "faults": [],
+    "frames": [],
+    "from": "0x0000000000000000000000000000000000400000",
+    "gas": 10000000,
+    "gasPrice": "0",
+    "gasUsed": 155826,
+    "input": "0x",
+    "output": "0x",
+    "senderBalance": "1000000000000000",
+    "senderNonce": 1,
+    "steps": [
+      [
+        "PUSH32",
+        1,
+        0,
+        9957720,
+        3,
+        0,
+        0
+      ],
+      [
+        "PUSH32",
+        1,
+        33,
+        9957717,
+        3,
+        0,
+        1
+      ],
+      [
+        "SSTORE",
+        1,
+        66,
+        9957714,
+        113540,
+        0,
+        2
+      ],
+      [
+        "STOP",
+        1,
+        67,
+        9844174,
+        0,
+        0,
+        0
+      ]
+    ],
+    "to": "0x0000000000000000000000000000000000400002",
+    "toCode": "0x7f00000000000000000000000000000000000000000000000000000000000000017f00000000000000000000000000000000000000000000000000000000000000015500",
+    "toExists": true,
+    "type": "CALL",
+    "value": "0"
+  },
+  "keccak_preimage": {},
+  "mux": {
+    "4byteTracer": {},
+    "callTracer": {
+      "executionGasUsed": "0x69e2",
+      "from": "0x0000000000000000000000000000000000400000",
+      "gas": "0x989680",
+      "gasRefund": "0x0",
+      "gasUsed": "0x260b2",
+      "input": "0x",
+      "stateGasUsed": "0x1f6d0",
+      "to": "0x0000000000000000000000000000000000400002",
+      "type": "CALL",
+      "value": "0x0"
+    },
+    "flatCallTracer": [
+      {
+        "action": {
+          "callType": "call",
+          "from": "0x0000000000000000000000000000000000400000",
+          "gas": "0x989680",
+          "input": "0x",
+          "to": "0x0000000000000000000000000000000000400002",
+          "value": "0x0"
+        },
+        "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "blockNumber": 1,
+        "result": {
+          "gasUsed": "0x260b2",
+          "output": "0x"
+        },
+        "subtraces": 0,
+        "traceAddress": [],
+        "transactionHash": "0xad60faa4dc933e55eaee3f69f16c21681870aa616453e7406a6a12482c755087",
+        "transactionPosition": 0,
+        "type": "call"
+      }
+    ],
+    "prestateTracer": {
+      "post": {
+        "0x0000000000000000000000000000000000400000": {
+          "nonce": 1
+        },
+        "0x0000000000000000000000000000000000400002": {
+          "storage": {
+            "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          }
+        }
+      },
+      "pre": {
+        "0x0000000000000000000000000000000000400000": {
+          "balance": "0x38d7ea4c68000"
+        },
+        "0x0000000000000000000000000000000000400002": {
+          "balance": "0x0",
+          "code": "0x7f00000000000000000000000000000000000000000000000000000000000000017f00000000000000000000000000000000000000000000000000000000000000015500"
+        }
+      }
+    },
+    "{\n    frames: [],\n    steps: [],\n    faults: [],\n    step: function(log, db) {\n        this.steps.push([log.op.toString(), log.getDepth(), log.getPC(), log.getGas(),\n            log.getCost(), log.getRefund(), log.stack.length()]);\n    },\n    fault: function(log, db) {\n        this.faults.push([log.op.toString(), log.getDepth(), log.getError()]);\n    },\n    enter: function(frame) {\n        this.frames.push([\"enter\", frame.getType(), toHex(frame.getFrom()), toHex(frame.getTo()),\n            toHex(frame.getInput()), frame.getGas(), String(frame.getValue())]);\n    },\n    exit: function(res) {\n        this.frames.push([\"exit\", res.getGasUsed(), toHex(res.getOutput()), res.getError()]);\n    },\n    result: function(ctx, db) {\n        return {\n            type: ctx.type,\n            from: toHex(ctx.from),\n            to: toHex(ctx.to),\n            input: toHex(ctx.input),\n            gas: ctx.gas,\n            gasUsed: ctx.gasUsed,\n            gasPrice: String(ctx.gasPrice),\n            value: String(ctx.value),\n            block: ctx.block,\n            output: toHex(ctx.output),\n            error: ctx.error,\n            senderBalance: String(db.getBalance(ctx.from)),\n            senderNonce: db.getNonce(ctx.from),\n            toExists: db.exists(ctx.to),\n            toCode: toHex(db.getCode(ctx.to)),\n            frames: this.frames,\n            steps: this.steps,\n            faults: this.faults,\n        };\n    }\n}": {
+      "block": 1,
+      "faults": [],
+      "frames": [],
+      "from": "0x0000000000000000000000000000000000400000",
+      "gas": 10000000,
+      "gasPrice": "0",
+      "gasUsed": 155826,
+      "input": "0x",
+      "output": "0x",
+      "senderBalance": "1000000000000000",
+      "senderNonce": 1,
+      "steps": [
+        [
+          "PUSH32",
+          1,
+          0,
+          9957720,
+          3,
+          0,
+          0
+        ],
+        [
+          "PUSH32",
+          1,
+          33,
+          9957717,
+          3,
+          0,
+          1
+        ],
+        [
+          "SSTORE",
+          1,
+          66,
+          9957714,
+          113540,
+          0,
+          2
+        ],
+        [
+          "STOP",
+          1,
+          67,
+          9844174,
+          0,
+          0,
+          0
+        ]
+      ],
+      "to": "0x0000000000000000000000000000000000400002",
+      "toCode": "0x7f00000000000000000000000000000000000000000000000000000000000000017f00000000000000000000000000000000000000000000000000000000000000015500",
+      "toExists": true,
+      "type": "CALL",
+      "value": "0"
+    }
+  },
+  "noop": {},
+  "opcode_gas": [
+    [
+      "PUSH32",
+      2,
+      6
+    ],
+    [
+      "SSTORE",
+      1,
+      113540
+    ],
+    [
+      "STOP",
+      1,
+      0
+    ]
+  ],
+  "otterscan": [],
+  "outcome": {
+    "gas_used": 155826,
+    "output": "0x",
+    "status": true
+  },
+  "parity": {
+    "output": "0x",
+    "stateDiff": {
+      "0x0000000000000000000000000000000000400000": {
+        "balance": "=",
+        "code": "=",
+        "nonce": {
+          "*": {
+            "from": "0x0",
+            "to": "0x1"
+          }
+        },
+        "storage": {}
+      },
+      "0x0000000000000000000000000000000000400002": {
+        "balance": "=",
+        "code": "=",
+        "nonce": "=",
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": {
+            "*": {
+              "from": "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "to": "0x0000000000000000000000000000000000000000000000000000000000000001"
+            }
+          }
+        }
+      }
+    },
+    "trace": [
+      {
+        "action": {
+          "callType": "call",
+          "from": "0x0000000000000000000000000000000000400000",
+          "gas": "0x97f158",
+          "input": "0x",
+          "to": "0x0000000000000000000000000000000000400002",
+          "value": "0x0"
+        },
+        "result": {
+          "gasUsed": "0x1bb8a",
+          "output": "0x"
+        },
+        "subtraces": 0,
+        "traceAddress": [],
+        "type": "call"
+      }
+    ],
+    "vmTrace": {
+      "code": "0x7f00000000000000000000000000000000000000000000000000000000000000017f00000000000000000000000000000000000000000000000000000000000000015500",
+      "ops": [
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x1"
+            ],
+            "store": null,
+            "used": 9957717
+          },
+          "op": "PUSH32",
+          "pc": 0,
+          "sub": null
+        },
+        {
+          "cost": 3,
+          "ex": {
+            "mem": null,
+            "push": [
+              "0x1"
+            ],
+            "store": null,
+            "used": 9957714
+          },
+          "op": "PUSH32",
+          "pc": 33,
+          "sub": null
+        },
+        {
+          "cost": 12100,
+          "ex": {
+            "mem": null,
+            "push": [],
+            "store": {
+              "key": "0x1",
+              "val": "0x1"
+            },
+            "used": 9844174
+          },
+          "op": "SSTORE",
+          "pc": 66,
+          "sub": null
+        },
+        {
+          "cost": 0,
+          "ex": {
+            "mem": null,
+            "push": [],
+            "store": null,
+            "used": 9844174
+          },
+          "op": "STOP",
+          "pc": 67,
+          "sub": null
+        }
+      ]
+    }
+  },
+  "prestate": {
+    "0x0000000000000000000000000000000000400000": {
+      "balance": "0x38d7ea4c68000"
+    },
+    "0x0000000000000000000000000000000000400002": {
+      "balance": "0x0",
+      "code": "0x7f00000000000000000000000000000000000000000000000000000000000000017f00000000000000000000000000000000000000000000000000000000000000015500",
+      "storage": {
+        "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  },
+  "prestate_diff": {
+    "post": {
+      "0x0000000000000000000000000000000000400000": {
+        "nonce": 1
+      },
+      "0x0000000000000000000000000000000000400002": {
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000001"
+        }
+      }
+    },
+    "pre": {
+      "0x0000000000000000000000000000000000400000": {
+        "balance": "0x38d7ea4c68000"
+      },
+      "0x0000000000000000000000000000000000400002": {
+        "balance": "0x0",
+        "code": "0x7f00000000000000000000000000000000000000000000000000000000000000017f00000000000000000000000000000000000000000000000000000000000000015500"
+      }
+    }
+  },
+  "state_gas": {
+    "executionGasUsed": "0x69e2",
+    "gasRefund": "0x0",
+    "gasUsed": "0x260b2",
+    "stateGasUsed": "0x1f6d0"
+  },
+  "storage": {
+    "slots": [],
+    "unique_loads": 0,
+    "warm_loads": 0
+  },
+  "struct_log": {
+    "executionGasUsed": "0x69e2",
+    "failed": false,
+    "gas": 155826,
+    "gasRefund": "0x0",
+    "returnValue": "0x",
+    "stateGasUsed": "0x1f6d0",
+    "structLogs": [
+      {
+        "depth": 1,
+        "gas": 9957720,
+        "gasCost": 3,
+        "op": "PUSH32",
+        "pc": 0,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957717,
+        "gasCost": 3,
+        "op": "PUSH32",
+        "pc": 33,
+        "stack": [
+          "0x1"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957714,
+        "gasCost": 12100,
+        "op": "SSTORE",
+        "pc": 66,
+        "stack": [
+          "0x1",
+          "0x1"
+        ],
+        "stateGasCost": 101440,
+        "stateGasReservoir": 0,
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000001"
+        }
+      },
+      {
+        "depth": 1,
+        "gas": 9844174,
+        "gasCost": 0,
+        "op": "STOP",
+        "pc": 67,
+        "stack": [],
+        "stateGasReservoir": 0
+      }
+    ]
+  },
+  "struct_log_full": {
+    "executionGasUsed": "0x69e2",
+    "failed": false,
+    "gas": 155826,
+    "gasRefund": "0x0",
+    "returnValue": "0x",
+    "stateGasUsed": "0x1f6d0",
+    "structLogs": [
+      {
+        "depth": 1,
+        "gas": 9957720,
+        "gasCost": 3,
+        "op": "PUSH32",
+        "pc": 0,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957717,
+        "gasCost": 3,
+        "op": "PUSH32",
+        "pc": 33,
+        "stack": [
+          "0x1"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 1,
+        "gas": 9957714,
+        "gasCost": 12100,
+        "op": "SSTORE",
+        "pc": 66,
+        "stack": [
+          "0x1",
+          "0x1"
+        ],
+        "stateGasCost": 101440,
+        "stateGasReservoir": 0,
+        "storage": {
+          "0x0000000000000000000000000000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000000000000000000000000000001"
+        }
+      },
+      {
+        "depth": 1,
+        "gas": 9844174,
+        "gasCost": 0,
+        "op": "STOP",
+        "pc": 67,
+        "stack": [],
+        "stateGasReservoir": 0
+      }
+    ]
+  },
+  "transfer": {
+    "logs": [],
+    "transfers": []
+  }
+}

@@ -46,5 +46,6 @@ run cargo bench --locked -p mega-evm2-diff --bench engine --no-run
 run cargo check --locked -p op-evm2 --target riscv64imac-unknown-none-elf --no-default-features
 run bash diff/scripts/check-regen-refusal.sh
 run bash diff/scripts/gate.sh sample
+run bash diff/scripts/inspector-blocks.sh
 run bash diff/scripts/controls.sh sample
 run bash diff/scripts/faults.sh
