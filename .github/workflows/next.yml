@@ -438,7 +438,7 @@ jobs:
             if [ -n "${BEFORE//0/}" ]; then
               git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" "$BEFORE" || true
             fi
-            bash next/scripts/mutants.sh push 2d537bf66f46d378cf9ea8a98faa6080aef8a36c
+            bash next/scripts/mutants.sh push "$BEFORE"
           fi
 
       - name: Show the linker of the test binaries
@@ -647,44 +647,18 @@ jobs:
           path: mega-evm/next/target/mutants-out/mutants.out
           overwrite: true
 
-  mutants-bench:
-    name: mutants-bench (${{ matrix.leg }})
+
+  mutants-oom:
+    name: mutants-oom (json.rs, fresh)
     if: github.event_name == 'push' && github.ref == 'refs/heads/cz/ci/mutants-iterate'
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - leg: release
-            profile: release
-            rustflags: ""
-            opt: ""
-          - leg: release-mold
-            profile: release
-            rustflags: -C link-arg=-fuse-ld=mold
-            opt: ""
-          - leg: mutants-o3-mold
-            profile: mutants
-            rustflags: -C link-arg=-fuse-ld=mold
-            opt: "3"
-          - leg: mutants-o2-mold
-            profile: mutants
-            rustflags: -C link-arg=-fuse-ld=mold
-            opt: "2"
-          - leg: mutants-o1-mold
-            profile: mutants
-            rustflags: -C link-arg=-fuse-ld=mold
-            opt: "1"
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: mega-evm
     env:
-      RUSTFLAGS: ${{ matrix.rustflags }}
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
-      - name: Record the job's start
-        working-directory: .
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout mega-evm
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -698,7 +672,7 @@ jobs:
           rust-src-dir: mega-evm/next
           rustflags: ""
           cache: true
-          cache-shared-key: next-mutants-bench-${{ matrix.leg }}
+          cache-shared-key: next-mutants
       - name: Install mold
         uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         with:
@@ -709,30 +683,22 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants@27.1.0
-      - name: Run shard 5/8, fresh, cut by a budget
+      - name: Mutate the JSON parser under the memory cap
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
           OUT: ${{ github.workspace }}/mega-evm/next/target/mutants-out
-          MUTANTS_PROFILE: ${{ matrix.profile }}
-          OPT: ${{ matrix.opt }}
         run: |
           set -euo pipefail
-          if [ -n "$OPT" ]; then export CARGO_PROFILE_MUTANTS_OPT_LEVEL=$OPT; fi
-          echo "RUSTFLAGS=${RUSTFLAGS:-} MUTANTS_PROFILE=$MUTANTS_PROFILE CARGO_PROFILE_MUTANTS_OPT_LEVEL=${CARGO_PROFILE_MUTANTS_OPT_LEVEL:-}"
-          MUTANTS_BUDGET=$((JOB_START + 120 * 60 - $(date +%s))) bash next/scripts/mutants.sh shard 5/8
-      - name: Show the linker of the test binaries
-        if: always()
-        run: |
-          bin=$(find next/target/*/deps -maxdepth 1 -type f -perm -u+x -name 'mega_evm2-*' 2>/dev/null | head -1)
-          if [ -n "$bin" ]; then echo "$bin"; readelf -p .comment "$bin" | grep -iE 'mold|lld|GNU ld' || true; fi
-      - name: Timing
-        if: always()
-        run: python3 -I next/scripts/mutants-ledger.py timing --results next/target/mutants-out/mutants.out || true
+          MUTANTS_BUDGET=4200 bash next/scripts/mutants.sh files mega-evm2/src/chain/json.rs
+          free -m
+          grep -F "json.rs:204:40: replace += with -= in Parser<'a>::array" next/target/mutants-out/mutants.out/*.txt || true
+          f=$(grep -lF "json.rs:204:40: replace += with -=" next/target/mutants-out/mutants.out/log/*.log | head -1)
+          if [ -n "$f" ]; then grep -E 'memory allocation|SIGABRT|signal|result:' "$f" | tail -5; fi
       - name: Upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: next-mutants-bench-${{ matrix.leg }}
+          name: next-mutants-oom
           path: mega-evm/next/target/mutants-out/mutants.out
           if-no-files-found: ignore
           overwrite: true
