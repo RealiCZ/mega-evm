@@ -23,6 +23,8 @@
 #   SUPPRESS          suppressions file (default: next/diff/mutants/suppressions.toml)
 #   MUTANTS_PROFILE   cargo profile of the warm build, the mutant builds and the oracle (default:
 #                     `mutants`, next/Cargo.toml). CARGO_INCREMENTAL is unset: the profile decides.
+#   MUTANTS_TEST_MEMORY_MB  memory cap of each test binary of the oracle (default 4096; 0 for none),
+#                     applied by scripts/mutants-test-limit.sh as cargo's runner for the host target
 #   MUTANTS_ITERATE=1 carry over the results already in OUT/mutants.out instead of starting afresh:
 #                     a mutant caught or unviable there is not tested again, unless its code changed
 #                     since (the diff from the commit recorded in carry-base.txt) or a refresh drops
@@ -294,6 +296,14 @@ export TMPDIR=$scratch/tmp
 if budget_reached "before the warm build"; then exit 0; fi
 # CI toolchain setups export CARGO_INCREMENTAL=0, which would override the profile's choice.
 unset CARGO_INCREMENTAL
+# Every test binary of the oracle runs under a memory cap (enforced by Linux, as RLIMIT_DATA). A
+# mutant that loops while allocating, such as a parser stepping back onto the value it just read
+# and pushing it again, otherwise grows until the CI runner is shut down and every result of its
+# shard is lost; under the cap its test aborts on a failed allocation and it counts as caught. The
+# unmutated oracle peaks near 1 GiB in one test binary, and two run at a time on a 16 GB runner.
+export MUTANTS_TEST_MEMORY_MB=${MUTANTS_TEST_MEMORY_MB:-4096}
+host=$(rustc -vV | sed -n 's/^host: //p')
+export "CARGO_TARGET_$(printf '%s' "$host" | tr 'a-z-' 'A-Z_')_RUNNER=$here/mutants-test-limit.sh"
 
 # Each mutant builds in its own copy of next/ with its own `target/`. A shared
 # CARGO_TARGET_DIR would make the parallel builds overwrite one another's test binaries and

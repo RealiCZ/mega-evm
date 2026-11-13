@@ -135,6 +135,7 @@ The `mutants` jobs run `scripts/mutants.sh` with cargo-mutants (pinned in the wo
 The oracle is `cargo test` over the engine crates and the harness with the sample gate's environment: the main scenarios, recorded-block replay and block execution (one synthetic run takes one reference file, so the fuzz batches are not part of it).
 A mutant is caught when any unit test or gate turns red; a survivor is a scenario the gates lack, or code no input reaches.
 Mutants are built and tested with the `mutants` cargo profile (`Cargo.toml`: release's semantics, rebuilt incrementally), and CI links them with mold, since every mutant rebuilds the mutated crate and relinks every test binary.
+Each test binary of the oracle runs under a memory cap (`MUTANTS_TEST_MEMORY_MB`, default 4096, enforced on Linux by `scripts/mutants-test-limit.sh`), so a mutant that loops while allocating fails its test instead of exhausting the CI runner; the oracle also runs once on the unmutated tree before any mutant, and the run stops if it fails.
 
 On a pull request only the changed engine lines are mutated, and a survivor or timeout that `diff/mutants/suppressions.toml` does not list fails the job.
 A push to `cz/feat/satin-evm2` mutates the engine lines changed since the previous push and reports without failing.
