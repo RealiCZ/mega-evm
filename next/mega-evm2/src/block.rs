@@ -20,10 +20,12 @@
 //!   read off the L1 block contract), the sender's account read; then `Evm::transact` and
 //!   `ExecutedTx::detach` (nothing committed);
 //! - **commit** ([`BlockSession::commit_candidate`]): the candidate's block, the room check and the
-//!   sender check again, the block's counters, the receipt (status, cumulative gas, logs; a
-//!   deposit's nonce and receipt version), the L1 block reads it is the first to report, the state
-//!   into the EVM's overlay and the block's change set (`BlockStateAccumulator`, the counterpart of
-//!   revm's bundle), and the state, whole, among the block's transaction states.
+//!   sender check again, the committed prefix it ran on, the block's counters, the receipt (status,
+//!   cumulative gas, logs; a deposit's nonce and receipt version), the L1 block reads it is the
+//!   first to report, the state into the EVM's overlay and the block's change set
+//!   (`BlockStateAccumulator`, the counterpart of revm's bundle), the state, whole, among the
+//!   block's transaction states, and the L1 info cache it was priced from, if it is the first
+//!   committed transaction the fee computation priced.
 //!
 //! States (`SATIN-WIT-005`, `SATIN-WIT-008`): every pre-block step's state and every committed
 //! transaction's state are kept whole, read-only entries included, in commit order
@@ -31,11 +33,24 @@
 //! what they changed. They and the exports are what a block's witness is built from
 //! ([`crate::witness`]).
 //!
+//! Stale candidates: a candidate carries the committed prefix it ran on ([`Prefix`],
+//! [`Candidate::prefix`]), and commits only at that prefix. Any commit between its run and its
+//! commit makes it [`CandidateError::OtherPrefix`], a retry, before anything changes: its state was
+//! computed on a state the block no longer has (two candidates that credit one fee vault would
+//! otherwise both commit, and the block keep one credit). A candidate another session ran commits
+//! when that session committed the same transactions in the same order.
+//!
 //! L1 block reads (`SATIN-WIT-003`, `SATIN-WIT-011`, [`crate::l1_reads`]): the footprint scalar the
 //! block reads before a non-deposit candidate runs and the L1 block info its fee computation reads
 //! travel with the candidate ([`Candidate::l1_reads`]); its commit adds each key no earlier commit
 //! reported to its state as a read-only entry, so the first included transaction that read a key
-//! reports it and a dropped candidate reports nothing.
+//! reports it and a dropped candidate reports nothing. The L1 info cache is the block's as a
+//! replay makes it: loaded by the first included transaction the fee computation prices, on the
+//! state the transactions before it left, and kept for the rest of the block. Until such a
+//! transaction is committed, a commit forgets the cache and its sources, so the next fee
+//! computation loads it from the state the commit left (a dropped candidate's cache, loaded before
+//! a deposit that changed the L1 block contract, prices nothing after it); the first such commit
+//! keeps the cache its candidate was priced from, whichever session ran it.
 //!
 //! SALT (`SATIN-WIT-013`): every attempt begins with an empty multiplier cache, and its valid
 //! lookups join the block's union ([`BlockSession::bucket_reads`]) whatever becomes of it — a
@@ -66,7 +81,8 @@ use crate::{
     block_hashes::{BlockHashExport, BlockHashMergeRefusal, RefusedBlockHashExport},
     chain::{Activation, RegistryBootstrap},
     error::{
-        BlockError, BlockIdentity, Budget, CandidateError, ErrorContext, Phase, Refusal, TxContext,
+        BlockError, BlockIdentity, Budget, CandidateError, ErrorContext, Phase, Prefix, Refusal,
+        TxContext,
     },
     l1_reads::L1Reads,
     salt::{BucketId, ForeignSaltExport, SaltExport, SnapshotId},
@@ -185,8 +201,21 @@ pub struct Candidate {
     bucket_reads: Vec<BucketId>,
     block_hash_reads: Vec<(u64, B256)>,
     l1_reads: L1Reads,
+    /// The L1 info cache it was priced from, when no transaction the fee computation prices was
+    /// committed before it ran: the block's cache, if it is the first such transaction committed.
+    l1_info: Option<Box<L1InfoCache>>,
+    prefix: Prefix,
+    /// What identifies it in a prefix ([`Prefix::identity`]).
+    identity: B256,
     block: BlockIdentity,
     simulated: bool,
+}
+
+/// An L1 info cache and the keys it was loaded from.
+#[derive(Debug)]
+struct L1InfoCache {
+    info: L1BlockInfo,
+    sources: L1Reads,
 }
 
 impl Candidate {
@@ -259,6 +288,10 @@ impl Candidate {
     pub const fn l1_reads(&self) -> &L1Reads {
         &self.l1_reads
     }
+    /// The committed prefix of the block it ran on, the only one it commits at.
+    pub const fn prefix(&self) -> Prefix {
+        self.prefix
+    }
     /// The block the candidate ran for.
     pub const fn block(&self) -> BlockIdentity {
         self.block
@@ -314,6 +347,11 @@ pub struct BlockSession<'a> {
     /// The L1 block contract's account and slots a committed transaction's state reports
     /// (`SATIN-WIT-011`).
     l1_reported: L1Reads,
+    /// Whether a committed transaction was priced by the fee computation: the L1 info cache is
+    /// then the block's, kept to its end. Until then a commit forgets it.
+    l1_info_kept: bool,
+    /// The committed prefix: the transactions committed so far.
+    prefix: Prefix,
     /// Valid SALT lookups of every attempt of the session, discarded candidates included, and of
     /// every export merged into it; emptied by a drain.
     bucket_reads: BTreeSet<BucketId>,
@@ -361,6 +399,8 @@ impl<'a> BlockSession<'a> {
             pre_block_states: Vec::new(),
             tx_states: Vec::new(),
             l1_reported: L1Reads::default(),
+            l1_info_kept: false,
+            prefix: Prefix::default(),
             bucket_reads: BTreeSet::new(),
             salt_snapshot,
             // Empty when the block starts, whatever a cache under the session holds.
@@ -403,6 +443,11 @@ impl<'a> BlockSession<'a> {
     /// was the first to report (`SATIN-WIT-005`, `SATIN-WIT-011`).
     pub fn tx_states(&self) -> &[PendingState] {
         &self.tx_states
+    }
+
+    /// The committed prefix: what a candidate executed now runs on, and must commit at.
+    pub const fn prefix(&self) -> Prefix {
+        self.prefix
     }
 
     /// Valid SALT lookups of every attempt of the session — discarded candidates, a candidate
@@ -717,6 +762,22 @@ impl<'a> BlockSession<'a> {
         // Its fee computation's L1 block reads join the footprint's (`SATIN-WIT-011`).
         l1_reads.merge(&self.evm.ext().l1_reads);
         let ext = self.evm.ext();
+        // The cache it was priced from becomes the block's if it is the first such transaction
+        // committed.
+        let l1_info = (ext.l1_priced && !self.l1_info_kept)
+            .then(|| Box::new(L1InfoCache { info: ext.l1, sources: ext.l1_sources.clone() }));
+        // Its bytes: the 2718 bytes given, else the envelope's, else a deposit's fields.
+        let fields;
+        let bytes = match (env.enveloped_tx(), &env.tx) {
+            _ if !encoded.is_empty() => encoded,
+            (Some(enveloped), _) => &enveloped[..],
+            (None, op_evm2::OpTypedTx::Deposit(deposit)) => {
+                fields = deposit_fields(deposit);
+                &fields[..]
+            }
+            (None, _) => &[],
+        };
+        let identity = Prefix::identity(sender, before.nonce, bytes);
         let usage = ext.usage(result.status);
         let (history, history_bytes) = ext.history(result.status);
         let state = result.state_gas_spent.saturating_sub(history);
@@ -741,6 +802,9 @@ impl<'a> BlockSession<'a> {
             bucket_reads,
             block_hash_reads,
             l1_reads,
+            l1_info,
+            prefix: self.prefix,
+            identity,
             block: self.identity,
             simulated: self.simulation,
         })
@@ -779,8 +843,9 @@ impl<'a> BlockSession<'a> {
         })
     }
 
-    /// Re-checks the candidate's block, the block's room and the sender, then commits `out` (Satin
-    /// `commit_transaction_outcome`). Returns the receipt's gas.
+    /// Re-checks the candidate's block, the block's room, the sender and the committed prefix it
+    /// ran on, then commits `out` (Satin `commit_transaction_outcome`). Returns the receipt's
+    /// gas. A refused candidate changes nothing.
     pub fn commit_candidate(&mut self, out: Candidate) -> Result<u64, CandidateError> {
         self.check_fault()?;
         self.commit(out).map_err(|e| self.decide(e))
@@ -815,6 +880,10 @@ impl<'a> BlockSession<'a> {
         if (now.nonce, now.balance) != (out.sender_nonce, out.sender_balance) {
             return Err(CandidateError::Stale { sender: out.sender });
         }
+        // Its state is the block's next only on the state it ran on.
+        if out.prefix != self.prefix {
+            return Err(CandidateError::OtherPrefix { expected: self.prefix, found: out.prefix });
+        }
         let l = &mut self.limiter;
         l.block_gas_used = l.block_gas_used.saturating_add(out.gas_used);
         for i in 0..3 {
@@ -829,7 +898,16 @@ impl<'a> BlockSession<'a> {
             l.block_da_footprint_used = l.block_da_footprint_used.saturating_add(out.da_footprint);
         }
         let Candidate {
-            ty, is_deposit, sender_nonce, result, mut pending, gas_used, l1_reads, ..
+            ty,
+            is_deposit,
+            sender_nonce,
+            result,
+            mut pending,
+            gas_used,
+            l1_reads,
+            l1_info,
+            identity,
+            ..
         } = out;
         let status = result.status && !result.ext.failed_deposit;
         let bloom = alloy_primitives::logs_bloom(result.logs.iter());
@@ -847,8 +925,42 @@ impl<'a> BlockSession<'a> {
         self.evm.commit_source(&pending);
         let _ = pending.visit(&mut self.changes);
         self.tx_states.push(pending);
+        self.prefix = self.prefix.extended(identity);
+        // The L1 info cache, until a transaction priced from it is committed, is valid only on the
+        // prefix it was loaded on; the first such commit makes its candidate's the block's.
+        if !self.l1_info_kept {
+            let ext = self.evm.ext_mut();
+            match l1_info {
+                Some(cache) => {
+                    ext.l1 = cache.info;
+                    ext.l1_sources = cache.sources;
+                    self.l1_info_kept = true;
+                }
+                None => ext.forget_l1_info(),
+            }
+        }
         Ok(gas_used)
     }
+}
+
+/// A deposit's fields, for its identity in a prefix when it comes without its bytes: its source
+/// hash, recipient, mint, value, gas limit, system flag and input.
+fn deposit_fields(deposit: &op_evm2::TxDeposit) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32 + 21 + 16 + 32 + 8 + 1 + deposit.input.len());
+    out.extend_from_slice(deposit.source_hash.as_slice());
+    match deposit.to {
+        TxKind::Create => out.push(0),
+        TxKind::Call(to) => {
+            out.push(1);
+            out.extend_from_slice(to.as_slice());
+        }
+    }
+    out.extend_from_slice(&deposit.mint.to_be_bytes());
+    out.extend_from_slice(&deposit.value.to_be_bytes::<32>());
+    out.extend_from_slice(&deposit.gas_limit.to_be_bytes());
+    out.push(deposit.is_system_transaction.into());
+    out.extend_from_slice(&deposit.input);
+    out
 }
 
 /// A receipt's EIP-2718 encoding, as op-alloy's `OpReceiptEnvelope` encodes it: the type byte

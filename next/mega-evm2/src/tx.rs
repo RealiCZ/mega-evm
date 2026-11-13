@@ -432,11 +432,14 @@ impl TxHandlerHooks<MegaTypes> for MegaHooks {
 /// The fee computation's read of the L1 block info (`SATIN-WIT-011`), which op-evm2's hook would
 /// otherwise make: once per block, when the cache was not loaded for the block, the L1 block
 /// contract's account (op-revm reads it when it fetches the info; op-evm2 reads only the slots),
-/// then the slots the fetch reads, as op-evm2 reads them. The keys the cache was loaded from are
+/// then, when the account exists, the slots the fetch reads, as op-evm2 reads them. An absent
+/// account has no storage: the info is the one an all-zero storage gives, made with no slot
+/// lookup, and the account's absence is its only source. The keys the cache was loaded from are
 /// kept with it (`Lite::l1_sources`): the transaction's reads, and those of every later one priced
-/// from the cache, are those keys (`Lite::l1_reads`), whether or not it loaded the cache. A slot
-/// of an absent account is read as op-evm2 reads it, and recorded as no read (`SATIN-WIT-006`).
-/// No gas effect; a read the database cannot serve fails the transaction (`SATIN-VAL-010`).
+/// from the cache, are those keys (`Lite::l1_reads`), whether or not it loaded the cache. No gas
+/// effect; a read the database cannot serve fails the transaction (`SATIN-VAL-010`). A block
+/// session decides how long the cache stays valid (`BlockSession`): a single transaction's EVM
+/// keeps it for its block number.
 fn load_l1_block_info(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<()> {
     use op_evm2::OpTypes;
     let number = host.block().number;
@@ -445,18 +448,25 @@ fn load_l1_block_info(host: &mut Evm<'_, MegaTypes>) -> HandlerResult<()> {
             host.state_mut().account_info_untracked(&op_evm2::constants::L1_BLOCK_CONTRACT)?;
         let spec = <MegaTypes as OpTypes>::op_spec(host.config_spec_id());
         let mut sources = crate::l1_reads::L1Reads::default();
+        let exists = account.is_some();
         sources.record_account(account);
-        let info = op_evm2::L1BlockInfo::try_fetch_with(
-            host.state_mut(),
-            number,
-            spec,
-            &mut |slot, value| sources.record_slot(slot, value),
-        )?;
+        let info = if exists {
+            op_evm2::L1BlockInfo::try_fetch_with(
+                host.state_mut(),
+                number,
+                spec,
+                &mut |slot, value| sources.record_slot(slot, value),
+            )?
+        } else {
+            op_evm2::L1BlockInfo::of_absent_contract(number, spec)
+        };
         let ext = host.ext_mut();
         ext.l1 = info;
         ext.l1_sources = sources;
     }
-    let Lite { l1_reads, l1_sources, .. } = host.ext_mut();
+    let ext = host.ext_mut();
+    ext.l1_priced = true;
+    let Lite { l1_reads, l1_sources, .. } = ext;
     l1_reads.merge(l1_sources);
     Ok(())
 }

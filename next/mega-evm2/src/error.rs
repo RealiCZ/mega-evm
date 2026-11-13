@@ -19,7 +19,7 @@
 //! | the block's bookkeeping outside a transaction's execution: the sender's account, the L1 block contract's account and footprint scalar | [`Disposition::Internal`] |
 //! | a block hash a block's export cannot number (never through a block session, whose numbers are 64-bit) | [`Disposition::Internal`] |
 //! | a candidate the block's rules refuse: the activation policy, the block's gas limit, its packing budgets, its footprint room, the transaction's own validity | [`Disposition::Refused`] |
-//! | a candidate whose sender changed after it ran, or that ran for another block | [`Disposition::Retry`] |
+//! | a candidate whose sender changed after it ran, that ran on another committed prefix of the block (a commit came between its run and its commit, or another session's commits differ), or that ran for another block | [`Disposition::Retry`] |
 //!
 //! Reverts, halts, limit stops and valid failed deposits are a transaction's outcomes, never one of
 //! these errors. A database error keeps its own type and fatality through evm2's erased wrappers
@@ -606,6 +606,47 @@ pub struct BlockIdentity {
     pub parent_hash: B256,
 }
 
+/// The committed part of a block a candidate ran on: how many transactions the session had
+/// committed, and a digest of them in commit order (each by its sender, the nonce it ran with and
+/// its bytes). A session starts at the empty prefix once its pre-block sequence ran, and each
+/// commit extends it; two sessions of one block that committed the same transactions in the same
+/// order are at the same prefix, and a candidate commits only at the prefix it ran on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Prefix {
+    committed: u64,
+    digest: B256,
+}
+
+impl Prefix {
+    /// The number of transactions committed.
+    pub const fn committed(&self) -> u64 {
+        self.committed
+    }
+
+    /// The digest of the committed transactions; zero for the empty prefix.
+    pub const fn digest(&self) -> B256 {
+        self.digest
+    }
+
+    /// The prefix once the transaction `tx` (its [`Self::identity`]) is committed after it.
+    pub(crate) fn extended(self, tx: B256) -> Self {
+        let mut hasher = alloy_primitives::Keccak256::new();
+        hasher.update(self.digest);
+        hasher.update(tx);
+        Self { committed: self.committed + 1, digest: hasher.finalize() }
+    }
+
+    /// What identifies a transaction in a prefix: its sender and the nonce it ran with, which no
+    /// other transaction committed in the block shares, and its `bytes`.
+    pub(crate) fn identity(sender: Address, nonce: u64, bytes: &[u8]) -> B256 {
+        let mut hasher = alloy_primitives::Keccak256::new();
+        hasher.update(sender);
+        hasher.update(nonce.to_be_bytes());
+        hasher.update(bytes);
+        hasher.finalize()
+    }
+}
+
 /// Why a candidate transaction was not executed or not committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CandidateError {
@@ -613,6 +654,10 @@ pub enum CandidateError {
     Refused(Refusal),
     /// Its sender's nonce or balance changed after it ran ([`Disposition::Retry`]).
     Stale { sender: Address },
+    /// It ran on another committed prefix of the block than the session's ([`Disposition::Retry`]):
+    /// a commit came between its run and its commit, or it ran in a session whose commits differ.
+    /// Its state was computed on a state the block no longer has; it runs again.
+    OtherPrefix { expected: Prefix, found: Prefix },
     /// It ran for another block ([`Disposition::Retry`]).
     Foreign { expected: BlockIdentity, found: BlockIdentity },
     /// It ran under other rules than the session's: a simulation's in a consensus session, or
@@ -645,9 +690,10 @@ impl CandidateError {
     pub fn disposition(&self) -> Disposition {
         match self {
             Self::Refused(_) => Disposition::Refused,
-            Self::Stale { .. } | Self::Foreign { .. } | Self::OtherRules { .. } => {
-                Disposition::Retry
-            }
+            Self::Stale { .. } |
+            Self::OtherPrefix { .. } |
+            Self::Foreign { .. } |
+            Self::OtherRules { .. } => Disposition::Retry,
             Self::Block(e) => e.disposition(),
         }
     }
@@ -658,6 +704,11 @@ impl core::fmt::Display for CandidateError {
         match self {
             Self::Refused(r) => write!(f, "{r}"),
             Self::Stale { sender } => write!(f, "stale outcome: sender {sender}"),
+            Self::OtherPrefix { expected, found } => write!(
+                f,
+                "stale outcome: ran on {} committed transactions ({}), the block is at {} ({})",
+                found.committed, found.digest, expected.committed, expected.digest
+            ),
             Self::Foreign { expected, found } => write!(
                 f,
                 "outcome of block {} on {} committed to block {} on {}",

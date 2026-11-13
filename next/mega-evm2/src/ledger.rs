@@ -169,6 +169,9 @@ pub struct Lite {
     /// outside its journal (`SATIN-WIT-003`, `SATIN-WIT-011`): the cache's sources, whether or
     /// not the attempt loaded the cache. Emptied when the next attempt begins.
     pub l1_reads: crate::l1_reads::L1Reads,
+    /// Whether the running attempt was priced from [`Self::l1`]: its fee computation ran.
+    /// Cleared when the next attempt begins.
+    pub l1_priced: bool,
     pub sender: Address,
     /// Whether the transaction pays history gas: every transaction, deposits and system-originated
     /// ones included, but a system call (`SATIN-HIST-016`).
@@ -396,6 +399,14 @@ impl Lite {
         self.salt.begin_attempt();
         self.block_hashes.begin_attempt();
         self.l1_reads.clear();
+        self.l1_priced = false;
+    }
+
+    /// Forgets the L1 info cache and its sources: the next fee computation loads it again, from
+    /// the state as it then stands.
+    pub fn forget_l1_info(&mut self) {
+        self.l1 = op_evm2::L1BlockInfo::default();
+        self.l1_sources.clear();
     }
 
     /// Resets the ledger for a pre-block system call: the protocol's own work, and a system call
