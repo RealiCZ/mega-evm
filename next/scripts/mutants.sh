@@ -299,9 +299,17 @@ unset CARGO_INCREMENTAL
 # CARGO_TARGET_DIR would make the parallel builds overwrite one another's test binaries and
 # the outcomes would depend on timing, so cargo-mutants runs without it. `copy_target` seeds
 # every copy from next/target, which is warmed here with the unmutated test binaries.
-echo "+ cargo test --no-run --profile $profile (warming next/target)"
-env -u CARGO_TARGET_DIR cargo test --no-run --profile "$profile" --locked \
-  -p mega-evm2 -p op-evm2 -p mega-evm2-scenarios -p mega-evm2-diff
+#
+# The warm build also runs the whole oracle once on the unmutated tree. cargo-mutants' own
+# baseline tests only the mutated packages, not the gate harness, so an oracle that failed
+# without any mutation would mark every viable mutant caught, and a carried-over run would
+# keep those results.
+echo "+ cargo test --profile $profile (the oracle on the unmutated tree; warms next/target)"
+if ! env -u CARGO_TARGET_DIR cargo test --profile "$profile" --locked \
+  -p mega-evm2 -p op-evm2 -p mega-evm2-scenarios -p mega-evm2-diff; then
+  echo "the oracle fails on the unmutated tree; no mutant would mean anything" >&2
+  exit 1
+fi
 
 if budget_reached "before cargo-mutants started"; then exit 0; fi
 
