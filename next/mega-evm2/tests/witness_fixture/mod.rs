@@ -13,14 +13,14 @@ use alloy_consensus::{
 use alloy_eips::eip7702::{Authorization, SignedAuthorization};
 use alloy_primitives::{Address, B256, Bytes, Signature, TxKind, U256, keccak256};
 use evm2::{
-    DatabaseError,
+    DatabaseError, TxResult,
     bytecode::Bytecode,
     ethereum::LazyTxEip7702,
     evm::{AccountInfo, Database, Db, DynDatabase, InMemoryDB, PendingState},
 };
 use mega_evm2::{
-    BucketId, SEQUENCER_REGISTRY, SaltReadError, SaltSnapshot, SnapshotId,
-    block::{BlockOutput, BlockSession, encode_receipt},
+    BucketId, MegaTypes, SEQUENCER_REGISTRY, SaltReadError, SaltSnapshot, SnapshotId,
+    block::{BlockOutput, BlockSession, Candidate, encode_receipt},
     error::{BlockError, CandidateError, Disposition},
     factory::{BlockInput, BlockServices},
     oracle::OracleServices,
@@ -30,7 +30,7 @@ use mega_evm2::{
 };
 use op_evm2::{OpTxEnvelope, TxDeposit, constants::L1_BLOCK_CONTRACT};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::BTreeSet,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -349,13 +349,55 @@ pub enum Step {
     Drop(Tx),
 }
 
-/// A block a building node executed: its output, the witness derived from it, and the
-/// transactions it includes, in order.
+/// What one included transaction's execution reported before its commit: its result (status,
+/// gas, output, logs, fees), its engine ledgers and usage, its receipt gas and its block-level
+/// sizes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TxLedger {
+    pub result: TxResult<MegaTypes>,
+    pub gas: [u64; 4],
+    pub usage: [u64; 3],
+    pub gas_used: u64,
+    pub sizes: [u64; 3],
+    pub is_system_transaction: bool,
+}
+
+impl TxLedger {
+    pub fn of(candidate: &Candidate) -> Self {
+        Self {
+            result: candidate.result().clone(),
+            gas: candidate.gas(),
+            usage: candidate.usage(),
+            gas_used: candidate.gas_used(),
+            sizes: [candidate.tx_size(), candidate.da_size(), candidate.da_footprint()],
+            is_system_transaction: candidate.is_system_transaction(),
+        }
+    }
+}
+
+/// A block a building node executed: its output, the witness derived from it, the transactions
+/// it includes, in order, and each one's ledger.
 pub struct Produced {
     pub output: BlockOutput,
     pub keys: WitnessKeys,
     pub witness: Witness,
     pub included: Vec<Tx>,
+    pub ledgers: Vec<TxLedger>,
+}
+
+impl Produced {
+    /// The block a building node made from `output`, its witness resolved against `parent`.
+    pub fn of(
+        output: BlockOutput,
+        parent: &InMemoryDB,
+        included: Vec<Tx>,
+        ledgers: Vec<TxLedger>,
+    ) -> Self {
+        let keys = WitnessKeys::of(&output);
+        let witness = Witness::resolve(&keys, &mut parent.clone(), salt().as_ref())
+            .expect("the parent holds it");
+        Self { output, keys, witness, included, ledgers }
+    }
 }
 
 /// The SALT snapshot the building node reads: every bucket at the minimum capacity.
@@ -375,10 +417,12 @@ pub fn produce_over<'a>(
     let mut block =
         common::factory().start_block(&input(), database, services).expect("the block starts");
     let mut included = Vec::new();
+    let mut ledgers = Vec::new();
     for step in steps {
         match step {
             Step::Include(tx) => {
                 let candidate = block.execute_candidate(&tx.tx, &tx.encoded).expect("it runs");
+                ledgers.push(TxLedger::of(&candidate));
                 block.commit_candidate(candidate).expect("it commits");
                 included.push(tx.clone());
             }
@@ -388,10 +432,7 @@ pub fn produce_over<'a>(
         }
     }
     let output = block.finish().expect("the block finishes");
-    let keys = WitnessKeys::of(&output);
-    let witness =
-        Witness::resolve(&keys, &mut parent.clone(), salt().as_ref()).expect("the parent holds it");
-    Produced { output, keys, witness, included }
+    Produced::of(output, parent, included, ledgers)
 }
 
 /// [`produce_over`] on a cold copy of `parent`, with no Oracle service.
@@ -468,45 +509,95 @@ impl SaltSnapshot for RecordingSalt {
     }
 }
 
+/// A replayed block: its output and each transaction's ledger.
+#[derive(Debug)]
+pub struct Replay {
+    pub output: BlockOutput,
+    pub ledgers: Vec<TxLedger>,
+}
+
 /// A validator's replay of block [`BLOCK`] with `txs` on exactly `witness`, with no Oracle
 /// service, and the evidence it read. A failure that decides the block is returned.
-pub fn replay(
+pub fn replay(witness: Witness, txs: &[Tx]) -> (Result<Replay, BlockError>, BTreeSet<Evidence>) {
+    replay_input(witness, txs, &input())
+}
+
+/// [`replay`] of the block `block` takes as its input.
+pub fn replay_input(
     witness: Witness,
     txs: &[Tx],
-) -> (Result<BlockOutput, BlockError>, BTreeSet<Evidence>) {
+    block: &BlockInput,
+) -> (Result<Replay, BlockError>, BTreeSet<Evidence>) {
     let witness = Arc::new(witness);
     let read = Read::default();
     let database = Recording { inner: WitnessDb::new(witness.clone()), read: read.clone() };
     let salt = Arc::new(RecordingSalt { witness, read: read.clone() });
     let result = (|| {
-        let mut block =
-            common::factory().start_block(&input(), Db::new(database), BlockServices::new(salt))?;
+        let mut session =
+            common::factory().start_block(block, Db::new(database), BlockServices::new(salt))?;
+        let mut ledgers = Vec::new();
         for tx in txs {
-            let run = block
-                .execute_candidate(&tx.tx, &tx.encoded)
-                .and_then(|candidate| block.commit_candidate(candidate).map(|_| ()));
+            let run = session.execute_candidate(&tx.tx, &tx.encoded).and_then(|candidate| {
+                ledgers.push(TxLedger::of(&candidate));
+                session.commit_candidate(candidate).map(|_| ())
+            });
             match run {
                 Ok(()) => {}
                 Err(CandidateError::Block(e)) => return Err(e),
                 Err(other) => panic!("the replay refused a transaction of the block: {other:?}"),
             }
         }
-        block.finish()
+        Ok(Replay { output: session.finish()?, ledgers })
     })();
     let read = read.lock().unwrap().clone();
     (result, read)
 }
 
 /// A replay that must succeed.
-pub fn replayed(witness: Witness, txs: &[Tx]) -> (BlockOutput, BTreeSet<Evidence>) {
+pub fn replayed(witness: Witness, txs: &[Tx]) -> (Replay, BTreeSet<Evidence>) {
     let (result, read) = replay(witness, txs);
     (result.unwrap_or_else(|e| panic!("the replay failed: {e:?}")), read)
 }
 
-/// The replay produced the same block (`SATIN-WIT-016`): receipts (status, cumulative gas, logs),
-/// state changes, the pre-block and transaction states, gas ledgers and block counters, the live
-/// system address; and exports that are a subset of the building node's.
-pub fn assert_same_block(replayed: &BlockOutput, built: &BlockOutput) {
+/// The replay produced the same block (`SATIN-WIT-016`): each included transaction's ledger
+/// ([`TxLedger`]), and [`assert_same_output`].
+pub fn assert_same_block(replayed: &Replay, built: &Produced) {
+    assert_eq!(replayed.ledgers.len(), built.ledgers.len(), "transactions");
+    for (i, (r, b)) in replayed.ledgers.iter().zip(&built.ledgers).enumerate() {
+        assert_eq!(r, b, "transaction {i}'s ledger");
+    }
+    assert_same_output(&replayed.output, &built.output);
+}
+
+/// The replay replays `built` exactly (`SATIN-WIT-016`), reading only what the witness holds, and
+/// every piece of evidence it reads is required: removed from the witness alone, it fails the
+/// replay with a typed missing-evidence error naming it, an internal error, never a panic, a
+/// default value or another block. Returns what the replay read.
+pub fn assert_exact_replay(built: &Produced) -> BTreeSet<Evidence> {
+    assert_exact_replay_of(built, &input())
+}
+
+/// [`assert_exact_replay`] of the block `block` takes as its input.
+pub fn assert_exact_replay_of(built: &Produced, block: &BlockInput) -> BTreeSet<Evidence> {
+    let (result, read) = replay_input(built.witness.clone(), &built.included, block);
+    let replayed = result.unwrap_or_else(|e| panic!("the replay failed: {e:?}"));
+    assert_same_block(&replayed, built);
+    let held: BTreeSet<Evidence> = built.witness.evidence().into_iter().collect();
+    assert!(read.is_subset(&held), "read beyond the witness: {:?}", read.difference(&held));
+    for evidence in &read {
+        let mut witness = built.witness.clone();
+        assert!(witness.remove(evidence));
+        let (result, _) = replay_input(witness, &built.included, block);
+        let error = result.err().unwrap_or_else(|| panic!("replayed without {evidence:?}"));
+        assert_eq!(missing(&error), *evidence, "{error:?}");
+    }
+    read
+}
+
+/// The two outputs are one block: receipts (status, cumulative gas, logs), state changes, the
+/// pre-block and transaction states, gas ledgers and block counters, the live system address; and
+/// the first's exports are a subset of the second's.
+pub fn assert_same_output(replayed: &BlockOutput, built: &BlockOutput) {
     let receipts = |o: &BlockOutput| o.receipts.iter().map(encode_receipt).collect::<Vec<_>>();
     assert_eq!(receipts(replayed), receipts(built), "receipts");
     assert_eq!(replayed.changes, built.changes, "state changes");
@@ -607,19 +698,22 @@ impl std::error::Error for Unavailable {}
 /// Every account read (`None`) and slot read (`Some(key)`) that reached a [`Backend`].
 pub type Reached = Rc<RefCell<Vec<(Address, Option<U256>)>>>;
 
-/// The chain as a node's database: it records every account and slot read that reaches it, and
-/// fails the read of `fail`'s account (`None`) or slot with `fail`'s fatality.
+/// The chain as a node's database: it records every account and slot read that reaches it, fails
+/// the read of `fail`'s account (`None`) or slot with `fail`'s fatality, and, while `deny_storage`
+/// is set, fails every slot read, fatally.
 #[derive(Debug)]
 pub struct Backend {
     pub inner: InMemoryDB,
     pub reached: Reached,
     pub fail: Option<(Address, Option<U256>, bool)>,
+    pub deny_storage: Rc<Cell<bool>>,
 }
 
 impl Backend {
     pub fn new(inner: InMemoryDB) -> (Self, Reached) {
         let reached = Reached::default();
-        (Self { inner, reached: reached.clone(), fail: None }, reached)
+        let deny_storage = Rc::default();
+        (Self { inner, reached: reached.clone(), fail: None, deny_storage }, reached)
     }
 
     fn reach(&mut self, address: Address, slot: Option<U256>) -> Result<(), DatabaseError> {
@@ -627,6 +721,9 @@ impl Backend {
         match self.fail {
             Some((a, s, fatal)) if a == address && s == slot => {
                 Err(DatabaseError::new(Unavailable, fatal))
+            }
+            _ if slot.is_some() && self.deny_storage.get() => {
+                Err(DatabaseError::new(Unavailable, true))
             }
             _ => Ok(()),
         }

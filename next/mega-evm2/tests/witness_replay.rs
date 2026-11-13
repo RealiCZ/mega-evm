@@ -53,7 +53,7 @@ fn witness_replay_of_a_mixed_block_gives_identical_results() {
     // inner ones; the Oracle read's call ran out of gas inside a frame that went on).
     assert_eq!(statuses, [true, false, true, true, true, true, true, true]);
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     // Every piece of evidence the replay read is in the witness, and what it did not read is
     // code no load needed.
     let held: BTreeSet<Evidence> = built.witness.evidence().into_iter().collect();
@@ -108,13 +108,13 @@ fn witness_code_before_the_block_is_held_for_an_account_loaded_without_it() {
     let code = built.witness.code(&info.code_hash).expect("its code is held");
     assert_eq!(code.original_bytes()[..], [0x60, 0x2a, 0x00]);
     let (output, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&output, &built.output);
+    assert_same_block(&output, &built);
     assert!(!read.contains(&Evidence::Code(info.code_hash)), "no load needed it");
     // Removing it fails nothing: a piece no read needs is a superset item.
     let mut witness = built.witness.clone();
     assert!(witness.remove(&Evidence::Code(info.code_hash)));
     let (again, _) = replayed(witness, &built.included);
-    assert_same_block(&again, &built.output);
+    assert_same_block(&again, &built);
 }
 
 /// An authority delegated anew is admitted against the delegation the chain held before the
@@ -154,7 +154,7 @@ fn witness_redelegation_keeps_the_delegation_the_chain_held() {
     assert!(built.witness.code(&old_hash).is_some());
     assert!(built.witness.code(&new_hash).is_none());
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     assert!(read.contains(&Evidence::Code(old_hash)));
     let mut witness = built.witness.clone();
     witness.remove(&Evidence::Code(old_hash));
@@ -177,7 +177,7 @@ fn witness_failed_deposit_keeps_its_reads_in_the_witness() {
     assert!(halter.storage.slots.contains_key(&U256::from(1)));
     assert_eq!(built.witness.slot(&HALTER, &U256::from(1)), Some(U256::from(31)));
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     let slot = Evidence::Slot(HALTER, U256::from(1));
     assert!(read.contains(&slot));
     let mut witness = built.witness.clone();
@@ -202,7 +202,7 @@ fn witness_rollback_keeps_the_reads_of_reverted_and_halted_frames() {
     }
     assert_eq!(built.witness.slot(&READER, &U256::from(2)), Some(U256::ZERO), "proved zero");
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     for slot in [
         Evidence::Slot(REVERTER, U256::from(1)),
         Evidence::Slot(HALTER, U256::from(1)),
@@ -237,7 +237,7 @@ fn witness_new_account_read_later_in_the_block_has_no_storage_proof() {
         built.witness.evidence().iter().all(|e| !matches!(e, Evidence::Slot(a, _) if *a == new))
     );
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     assert!(read.contains(&Evidence::Account(new)));
 }
 
@@ -259,7 +259,7 @@ fn witness_warm_and_cold_caches_name_the_same_keys() {
     assert_eq!(warm.output.pre_block_states, cold.output.pre_block_states);
     assert_eq!(warm.witness, cold.witness);
     let (replayed, _) = replayed(warm.witness.clone(), &warm.included);
-    assert_same_block(&replayed, &warm.output);
+    assert_same_block(&replayed, &warm);
 }
 
 /// An Oracle read made before its charge loads the slot even when its frame then runs out of gas
@@ -285,7 +285,7 @@ fn witness_oracle_oog_read_is_required_evidence() {
         Some(U256::from(ORACLE_HELD))
     );
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     assert!(read.contains(&slot));
     let mut witness = built.witness.clone();
     witness.remove(&slot);
@@ -306,9 +306,9 @@ fn witness_discarded_candidate_exports_are_a_superset_the_replay_does_not_read()
     assert_eq!(built.witness.account(&HASHER), None, "no committed state loaded it");
     assert!(built.witness.block_hashes().contains_key(&900));
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
-    assert!(replayed.block_hash_reads.is_empty());
-    assert!(replayed.bucket_reads.is_empty());
+    assert_same_block(&replayed, &built);
+    assert!(replayed.output.block_hash_reads.is_empty());
+    assert!(replayed.output.bucket_reads.is_empty());
     assert!(!read.iter().any(|e| matches!(e, Evidence::BlockHash(_) | Evidence::Capacity(_))));
 }
 
@@ -351,7 +351,7 @@ fn witness_rollback_of_a_stopped_frame_keeps_its_read() {
         state.account_changes_for(&STOPPED).unwrap().storage.slots.contains_key(&U256::from(1))
     );
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     assert!(read.contains(&slot));
     let mut witness = built.witness.clone();
     witness.remove(&slot);
@@ -376,7 +376,7 @@ fn witness_unapplied_authority_is_required_evidence() {
         assert_eq!(built.witness.account(&authority), Some(None));
     }
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     let evidence = Evidence::Account(second);
     assert!(read.contains(&evidence));
     let mut witness = built.witness.clone();
@@ -409,7 +409,7 @@ fn witness_replay_of_a_keyless_deployment_needs_its_signer_and_deploy_address() 
     assert_eq!(built.witness.account(&deploy), Some(None));
     assert!(built.witness.account(&signer).unwrap().is_some());
     let (replayed, read) = replayed(built.witness.clone(), &built.included);
-    assert_same_block(&replayed, &built.output);
+    assert_same_block(&replayed, &built);
     for evidence in [Evidence::Account(signer), Evidence::Account(deploy)] {
         assert!(read.contains(&evidence), "{evidence:?}");
         let mut witness = built.witness.clone();
