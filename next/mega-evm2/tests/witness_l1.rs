@@ -341,7 +341,7 @@ fn witness_l1_fee_cache_of_a_discarded_candidate_dies_with_a_deposit_that_change
         Step::Include(user.clone()),
     ];
     let built = produce(&parent, &steps);
-    let old = produce(&parent, &included(&[user.clone()]));
+    let old = produce(&parent, &included(std::slice::from_ref(&user)));
     assert!(l1_fee(&built.ledgers[1]) > l1_fee(&old.ledgers[0]), "priced at the new base fee");
     let serial = produce(&parent, &included(&[update, user]));
     assert_eq!(built.ledgers, serial.ledgers);

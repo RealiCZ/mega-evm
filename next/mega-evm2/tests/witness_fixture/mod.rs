@@ -22,7 +22,7 @@ use mega_evm2::{
     BucketId, MegaTypes, SEQUENCER_REGISTRY, SaltReadError, SaltSnapshot, SnapshotId,
     block::{BlockOutput, BlockSession, Candidate, encode_receipt},
     error::{BlockError, CandidateError, Disposition},
-    factory::{BlockInput, BlockServices},
+    factory::{BlockInput, BlockServices, SatinFactory},
     oracle::OracleServices,
     system_contracts::{ORACLE_CODE, SEQUENCER_REGISTRY_CODE, address_word},
     tx::ORACLE,
@@ -144,6 +144,20 @@ pub mod asm {
         out
     }
 
+    /// `DELEGATECALL(gas or GAS, to, 0, args, 0, 0)`, its success dropped.
+    pub fn delegatecall(to: Address, gas: Option<u64>, args: u64) -> Vec<u8> {
+        let mut out = vec![0x5f, 0x5f];
+        out.extend(push(args));
+        out.push(0x5f);
+        out.extend(push_address(to));
+        match gas {
+            Some(gas) => out.extend(push(gas)),
+            None => out.push(0x5a),
+        }
+        out.extend([0xf4, 0x50]);
+        out
+    }
+
     /// `BALANCE(a)`, dropped.
     pub fn balance(a: Address) -> Vec<u8> {
         [push_address(a), vec![0x31, 0x50]].concat()
@@ -164,7 +178,7 @@ pub fn contract(code: Vec<u8>) -> AccountInfo {
 }
 
 /// The Oracle's `getSlot(uint256)` calldata for `slot`, in memory at 0 (36 bytes).
-fn get_slot_in_memory(slot: u64) -> Vec<u8> {
+pub fn get_slot_in_memory(slot: u64) -> Vec<u8> {
     let mut first = [0u8; 32];
     first[..4].copy_from_slice(&keccak256("getSlot(uint256)")[..4]);
     let mut second = [0u8; 32];
@@ -179,17 +193,24 @@ pub fn hash_of(number: u64) -> B256 {
 
 /// The chain before block [`BLOCK`].
 pub fn chain(l1: L1) -> InMemoryDB {
+    chain_with(l1, true)
+}
+
+/// [`chain`], with the registry or with no account at its address.
+pub fn chain_with(l1: L1, registry: bool) -> InMemoryDB {
     let mut db = InMemoryDB::default();
     let rich = U256::from(10).pow(U256::from(18));
     for sender in [SENDER, OTHER, DEPOSITOR] {
         db.insert_account_info(&sender, AccountInfo::default().with_balance(rich));
     }
     // The registry, version 2.0.0, naming the live system address.
-    db.insert_account_info(
-        &SEQUENCER_REGISTRY,
-        AccountInfo::default().with_code(Bytecode::new_legacy(SEQUENCER_REGISTRY_CODE)),
-    );
-    db.insert_account_storage(&SEQUENCER_REGISTRY, &U256::ZERO, &address_word(SYSTEM));
+    if registry {
+        db.insert_account_info(
+            &SEQUENCER_REGISTRY,
+            AccountInfo::default().with_code(Bytecode::new_legacy(SEQUENCER_REGISTRY_CODE)),
+        );
+        db.insert_account_storage(&SEQUENCER_REGISTRY, &U256::ZERO, &address_word(SYSTEM));
+    }
     // The Oracle, already deployed, its slot holding a value.
     db.insert_account_info(
         &ORACLE,
@@ -376,18 +397,33 @@ impl TxLedger {
 }
 
 /// A block a building node executed: its output, the witness derived from it, the transactions
-/// it includes, in order, and each one's ledger.
+/// it includes, in order, each one's ledger, and the configuration and input it ran under.
 pub struct Produced {
     pub output: BlockOutput,
     pub keys: WitnessKeys,
     pub witness: Witness,
     pub included: Vec<Tx>,
     pub ledgers: Vec<TxLedger>,
+    pub factory: SatinFactory,
+    pub input: BlockInput,
 }
 
 impl Produced {
-    /// The block a building node made from `output`, its witness resolved against `parent`.
+    /// The block [`BLOCK`] a building node made from `output`, its witness resolved against
+    /// `parent`.
     pub fn of(
+        output: BlockOutput,
+        parent: &InMemoryDB,
+        included: Vec<Tx>,
+        ledgers: Vec<TxLedger>,
+    ) -> Self {
+        Self::of_block(common::factory(), input(), output, parent, included, ledgers)
+    }
+
+    /// [`Self::of`] for the block `input` under `factory`.
+    pub fn of_block(
+        factory: SatinFactory,
+        input: BlockInput,
         output: BlockOutput,
         parent: &InMemoryDB,
         included: Vec<Tx>,
@@ -396,7 +432,7 @@ impl Produced {
         let keys = WitnessKeys::of(&output);
         let witness = Witness::resolve(&keys, &mut parent.clone(), salt().as_ref())
             .expect("the parent holds it");
-        Self { output, keys, witness, included, ledgers }
+        Self { output, keys, witness, included, ledgers, factory, input }
     }
 }
 
@@ -413,9 +449,21 @@ pub fn produce_over<'a>(
     oracle: OracleServices,
     steps: &[Step],
 ) -> Produced {
+    produce_block(common::factory(), input(), parent, database, oracle, steps)
+}
+
+/// [`produce_over`] for the block `block` under `factory`.
+pub fn produce_block<'a>(
+    factory: SatinFactory,
+    block_input: BlockInput,
+    parent: &InMemoryDB,
+    database: impl DynDatabase + 'a,
+    oracle: OracleServices,
+    steps: &[Step],
+) -> Produced {
     let services = BlockServices { oracle, ..BlockServices::new(salt()) };
     let mut block =
-        common::factory().start_block(&input(), database, services).expect("the block starts");
+        factory.start_block(&block_input, database, services).expect("the block starts");
     let mut included = Vec::new();
     let mut ledgers = Vec::new();
     for step in steps {
@@ -432,7 +480,7 @@ pub fn produce_over<'a>(
         }
     }
     let output = block.finish().expect("the block finishes");
-    Produced::of(output, parent, included, ledgers)
+    Produced::of_block(factory, block_input, output, parent, included, ledgers)
 }
 
 /// [`produce_over`] on a cold copy of `parent`, with no Oracle service.
@@ -519,14 +567,15 @@ pub struct Replay {
 /// A validator's replay of block [`BLOCK`] with `txs` on exactly `witness`, with no Oracle
 /// service, and the evidence it read. A failure that decides the block is returned.
 pub fn replay(witness: Witness, txs: &[Tx]) -> (Result<Replay, BlockError>, BTreeSet<Evidence>) {
-    replay_input(witness, txs, &input())
+    replay_block(&common::factory(), &input(), witness, txs)
 }
 
-/// [`replay`] of the block `block` takes as its input.
-pub fn replay_input(
+/// [`replay`] of the block `block` under `factory`.
+pub fn replay_block(
+    factory: &SatinFactory,
+    block: &BlockInput,
     witness: Witness,
     txs: &[Tx],
-    block: &BlockInput,
 ) -> (Result<Replay, BlockError>, BTreeSet<Evidence>) {
     let witness = Arc::new(witness);
     let read = Read::default();
@@ -534,7 +583,7 @@ pub fn replay_input(
     let salt = Arc::new(RecordingSalt { witness, read: read.clone() });
     let result = (|| {
         let mut session =
-            common::factory().start_block(block, Db::new(database), BlockServices::new(salt))?;
+            factory.start_block(block, Db::new(database), BlockServices::new(salt))?;
         let mut ledgers = Vec::new();
         for tx in txs {
             let run = session.execute_candidate(&tx.tx, &tx.encoded).and_then(|candidate| {
@@ -574,12 +623,8 @@ pub fn assert_same_block(replayed: &Replay, built: &Produced) {
 /// replay with a typed missing-evidence error naming it, an internal error, never a panic, a
 /// default value or another block. Returns what the replay read.
 pub fn assert_exact_replay(built: &Produced) -> BTreeSet<Evidence> {
-    assert_exact_replay_of(built, &input())
-}
-
-/// [`assert_exact_replay`] of the block `block` takes as its input.
-pub fn assert_exact_replay_of(built: &Produced, block: &BlockInput) -> BTreeSet<Evidence> {
-    let (result, read) = replay_input(built.witness.clone(), &built.included, block);
+    let replay = |witness| replay_block(&built.factory, &built.input, witness, &built.included);
+    let (result, read) = replay(built.witness.clone());
     let replayed = result.unwrap_or_else(|e| panic!("the replay failed: {e:?}"));
     assert_same_block(&replayed, built);
     let held: BTreeSet<Evidence> = built.witness.evidence().into_iter().collect();
@@ -587,7 +632,7 @@ pub fn assert_exact_replay_of(built: &Produced, block: &BlockInput) -> BTreeSet<
     for evidence in &read {
         let mut witness = built.witness.clone();
         assert!(witness.remove(evidence));
-        let (result, _) = replay_input(witness, &built.included, block);
+        let (result, _) = replay(witness);
         let error = result.err().unwrap_or_else(|| panic!("replayed without {evidence:?}"));
         assert_eq!(missing(&error), *evidence, "{error:?}");
     }
