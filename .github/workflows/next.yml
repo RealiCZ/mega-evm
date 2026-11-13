@@ -32,8 +32,10 @@ name: next
 #             the flag `next`. The upload never fails the job (a fork has no token).
 # mutants   — pull requests: cargo-mutants on the engine lines the pull request changes; a
 #             surviving or timed-out mutant that diff/mutants/suppressions.toml does not
-#             list fails the job. Pushes to cz/feat/satin-evm2: the engine lines changed
-#             since the previous push, ending itself before the job limit; report only.
+#             list fails the job, as does a run that reaches its time budget before it
+#             tests every mutant (it ends itself before the job limit, with its report).
+#             Pushes to cz/feat/satin-evm2: the engine lines changed since the previous
+#             push, within the same budget; report only.
 # mutants-full — pushes to cz/feat/satin-evm2, daily and workflow_dispatch: the full
 #             engine in shards (mutants-plan), carried over from run to run instead of
 #             starting from zero: each shard restores the latest merged results from the
@@ -422,6 +424,9 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
+          # End before the job limit (330 minutes), leaving 20 for the steps after this one. A
+          # pull request run stopped there fails the gate as incomplete, with its report.
+          export MUTANTS_BUDGET=$((JOB_START + (330 - 20) * 60 - $(date +%s)))
           # The repository is public: commits are fetched over https without the token.
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" "$BASE_SHA"
@@ -433,9 +438,7 @@ jobs:
             if [ -n "${BEFORE//0/}" ]; then
               git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" "$BEFORE" || true
             fi
-            # End before the job limit (330 minutes), leaving 20 for the steps after this one.
-            MUTANTS_BUDGET=$((JOB_START + (330 - 20) * 60 - $(date +%s))) \
-              bash next/scripts/mutants.sh push "$BEFORE"
+            bash next/scripts/mutants.sh push "$BEFORE"
           fi
 
       - name: Show the linker of the test binaries
