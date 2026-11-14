@@ -621,12 +621,6 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
 
-      - name: Fail shard 7/8 before it runs, on the first attempt (temporary validation)
-        if: matrix.shard == '7/8' && github.run_attempt == '1'
-        run: |
-          echo "::error::validation: shard 7/8 fails before it runs on the run's first attempt; a rerun of the failed jobs runs it"
-          exit 1
-
       - name: Run the shard
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
