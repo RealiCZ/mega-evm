@@ -1,0 +1,30 @@
+[package]
+name = "kec-micro"
+description = "Keccak-256 backend microbenchmarks, exact-trace cache replay, backend and cache validation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# alloy: without `asm-keccak`, its `keccak256` is RustCrypto's, as in the engine's baseline.
+alloy-primitives = { version = "=1.7.3", default-features = false, features = ["std"] }
+
+# misc: the backends compared, at the engine lockfile's versions.
+keccak = "=0.2.2"
+keccak-asm = "=0.1.9"
+sha3 = "=0.11.0"
+tiny-keccak = { version = "=2.0.2", features = ["keccak"] }
+
+[features]
+# Alloy's explicit cache entry point (`keccak256_cached`), for `validate-cache` only.
+cache = ["alloy-primitives/keccak-cache"]
+
+[[bin]]
+name = "kec-micro"
+path = "src/main.rs"
+
+[[bin]]
+name = "validate-cache"
+path = "src/bin/validate-cache.rs"
+required-features = ["cache"]

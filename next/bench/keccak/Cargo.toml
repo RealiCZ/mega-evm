@@ -1,0 +1,20 @@
+# Keccak backend and cache benchmarks for the Satin engine (bench-only; never merged).
+#
+# Its own workspace, so the `next/` workspace is untouched. The lockfile was seeded from
+# `next/Cargo.lock`, so every crate the engine shares with it resolves to the engine's versions.
+#
+# Build one package per cargo invocation (`-p kec-micro` or `-p kec-block`): the two enable
+# different Alloy Keccak features, and building them together would unify those features.
+[workspace]
+resolver = "2"
+members = ["micro", "block"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# The default release profile, as the earlier local measurements used: no LTO, 16 codegen units.
+[profile.release]
+debug = false

@@ -1,0 +1,3 @@
+# The `next/` toolchain, so the engine builds with the compiler its CI uses.
+[toolchain]
+channel = "nightly-2026-04-23"

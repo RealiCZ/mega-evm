@@ -1,0 +1,41 @@
+[package]
+name = "kec-block"
+description = "The 263-block Satin corpus timed under Alloy's Keccak backends and exact-input cache."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# megaeth: the engine of this checkout, with its default (production) features. The differential
+# harness's `compare` and `salt-test-hasher` features are not enabled: this crate does not depend
+# on `mega-evm2-diff`, and vendors the few replay helpers it needs (`src/replay.rs`).
+mega-evm2 = { path = "../../../mega-evm2" }
+op-evm2 = { path = "../../../op-evm2", features = ["std"] }
+
+# evm2: the fork, checked out next to this repository, where `next/Cargo.toml` expects it.
+evm2 = { path = "../../../../../evm2/crates/evm2", default-features = false, features = ["std"] }
+
+# alloy
+alloy-consensus = { version = "2.5.0", default-features = false, features = ["std"] }
+alloy-eips = { version = "2.5.0", default-features = false, features = ["std"] }
+alloy-primitives = { version = "1.7.0", default-features = false, features = ["std"] }
+
+# misc
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+# An independent Keccak-256 for `kec-trace`'s checks, never the engine's.
+tiny-keccak = { version = "=2.0.2", features = ["keccak"] }
+
+[features]
+# The two switches under test; both change every `alloy_primitives::keccak256` in the binary,
+# the engine's KECCAK256 opcode and receipt Blooms included.
+asm = ["alloy-primitives/asm-keccak"]
+cache = ["alloy-primitives/keccak-cache-global"]
+
+[[bin]]
+name = "kec-block"
+path = "src/main.rs"
+
+[[bin]]
+name = "kec-trace"
+path = "src/bin/kec-trace.rs"
