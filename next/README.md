@@ -171,19 +171,20 @@ A mutant is caught when any unit test or gate turns red; a survivor is a scenari
 Mutants are built and tested with the `mutants` cargo profile (`Cargo.toml`: release's semantics, rebuilt incrementally), and CI links them with mold, since every mutant rebuilds the mutated crate and relinks every test binary.
 Each test binary of the oracle runs under a memory cap (`MUTANTS_TEST_MEMORY_MB`, default 4096, enforced on Linux by `scripts/mutants-test-limit.sh`), so a mutant that loops while allocating fails its test instead of exhausting the CI runner; the oracle also runs once on the unmutated tree before any mutant, and the run stops if it fails.
 
-On a pull request only the changed engine lines are mutated, and a survivor or timeout that `diff/mutants/suppressions.toml` does not list fails the job.
+On a pull request only the changed engine lines are mutated, and a survivor or timeout that `diff/mutants/suppressions.toml` does not list fails the job, as does a run that is not complete.
 A push to `cz/feat/satin-evm2` mutates the engine lines changed since the previous push and reports without failing.
-The full engine is never run from zero on a push: `mutants-full` runs it in eight shards that carry results over from run to run.
-Each shard restores the latest results from the Actions cache, does not test again a mutant caught or found unviable there whose code has not changed since, tests the rest, and ends itself before the job limit with every outcome so far kept; `mutants-merge` unions the shards and saves them for the next run.
-Missed and timed-out mutants are tested again by every run, as are those whose code changed.
-Carry-over trusts earlier results, so the cache key changes every month and the first run of a month starts without carry-over.
-A change that deletes or weakens tests should add a line to `diff/mutants/refresh.txt` naming the engine files whose mutants those tests caught: the next carried-over run tests them again without carry-over.
+The full engine is audited from zero, in eight shards (`mutants-audit`), on a push to `cz/feat/satin-evm2` that needs it: a pushed commit's message carries `[mutants-audit]`, the push changes the oracle or its inputs (`Cargo.lock`, `evm2-fork.env`, `diff/**`, the engine's tests, `.cargo/mutants.toml`, `rust-toolchain.toml`), or no audit has completed on the branch in the current ISO week.
+Every other push runs the push diff only.
+Unit tests inside an engine source file count as engine code there, so a change that weakens them should carry the marker.
+`mutants-audit-merge` lists the full set and every shard's slice itself, takes a shard's results only when they are of the same commit, selection and cargo-mutants version and cover exactly its slice, and reports the audit complete or partial, with the mutants of a missing or rejected shard counted as missing.
+A rerun of a failed shard tests the same slice of the same commit, so it completes the audit without counting anything twice.
+The audit has a concurrency group of its own: no other job waits for it, and a newer audit waits for the running one.
 
 Locally, `bash scripts/mutants.sh smoke` runs a fixed set (the mutants of `mega-evm2/src/satin_ext.rs`) and writes `mutants.out/` (outcomes.json, caught.txt, missed.txt, ...) under `$OUT` (default `target/mutants-out`).
-The other modes are `pr <base>`, `push <before>`, `files <glob>...`, `shard <k>/<n>` and `full`.
-`MUTANTS_ITERATE=1` carries over the results already in `$OUT` instead of starting afresh, `MUTANTS_BUDGET=<seconds>` ends a run cleanly after that many seconds with its results kept (continue it with `MUTANTS_ITERATE=1`), and `MUTANTS_REFRESH='<glob>...'` (or `all`) drops the carried-over results of those files.
-Every run ends with a line `MUTANTS-RESULT caught=<n> missed=<n> timeout=<n> unviable=<n> tested=<n> skipped=<n>`, where `skipped` counts the carried-over mutants and `tested` the ones this run built or tested.
-`scripts/mutants-ledger.py timing --results <mutants.out> [--compare <mutants.out>]` prints the build and test seconds per outcome of a run, or of the mutants two runs share.
+The other modes are `pr <base>`, `push <before>`, `files <glob>...`, `shard <k>/<n>` and `full`; `scripts/mutants.sh list <mode>` prints the mutants a mode selects without building anything.
+Every run starts afresh and lists its mutants (its inventory) before building anything.
+`MUTANTS_BUDGET=<seconds>` is a deadline over every expensive phase (listing, the oracle's inputs, the oracle on the unmutated tree, cargo-mutants): the phase in flight is interrupted, the outcomes so far are kept and the run exits 0.
+Every run ends with two lines, `MUTANTS-STATUS status=<complete|partial|not-started|baseline-failed> expected=<n|unknown> outcomes=<n>` (against the inventory) and `MUTANTS-RESULT caught=<n> missed=<n> timeout=<n> unviable=<n> tested=<n> skipped=0`, and writes the same status with the run's commit and selection to `mutants.out/status.json`.
 
 ## Comparing interpreter performance
 

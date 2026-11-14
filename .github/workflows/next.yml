@@ -32,19 +32,24 @@ name: next
 #             the flag `next`. The upload never fails the job (a fork has no token).
 # mutants   — pull requests: cargo-mutants on the engine lines the pull request changes; a
 #             surviving or timed-out mutant that diff/mutants/suppressions.toml does not
-#             list fails the job, as does a run that reaches its time budget before it
-#             tests every mutant (it ends itself before the job limit, with its report).
+#             list fails the job, as does a run that is not complete: one that reaches its
+#             deadline (it ends itself before the job limit, with its report) before every
+#             mutant it listed has an outcome.
 #             Pushes to cz/feat/satin-evm2: the engine lines changed since the previous
-#             push, within the same budget; report only.
-# mutants-full — pushes to cz/feat/satin-evm2, daily and workflow_dispatch: the full
-#             engine in shards (mutants-plan), carried over from run to run instead of
-#             starting from zero: each shard restores the latest merged results from the
-#             Actions cache, does not test again a mutant they settle (caught or unviable,
-#             code unchanged), and ends itself cleanly before the job limit
-#             (MUTANTS_BUDGET); mutants-merge unions the shards and saves the cache the
-#             next run starts from. The cache key carries the month, so each month the
-#             full set also runs once without carry-over; next/diff/mutants/refresh.txt
-#             requests that sooner for chosen files. Report only.
+#             push, within the same deadline; report only.
+# mutants-audit — a fresh run of the full engine in eight shards: mutants-audit-plan
+#             decides, mutants-audit (k/8) runs shard k, mutants-audit-merge merges them.
+#             It runs on a push to cz/feat/satin-evm2 when a pushed commit's message carries
+#             [mutants-audit], when the push changes the oracle or its inputs (next/Cargo.lock,
+#             next/evm2-fork.env, next/diff/**, the engine's tests, next/.cargo/mutants.toml,
+#             next/rust-toolchain.toml), or when no audit has completed on the branch in the
+#             current ISO week (UTC); and on workflow_dispatch. Other pushes run the push diff
+#             only. The merge lists the full set and every shard's slice itself, takes a
+#             shard's results only when they are of this commit and exactly its slice, and
+#             reports the audit complete or partial, with the mutants of a missing shard
+#             counted. Report only. A complete audit leaves the artifact
+#             next-mutants-audit-complete-<week>, which the plan looks for. The audit has a
+#             concurrency group of its own, so no other job waits for it.
 #             The oracle of every mutants job is the unit tests plus the sample gate
 #             (next/scripts/mutants.sh), built with the `mutants` cargo profile and linked
 #             with mold.
@@ -67,8 +72,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # Superseded pull requests are cancelled. Pushes, the daily run, and manual runs are left to finish.
+  # Superseded pull requests are cancelled. Every other run has a group of its own and is left
+  # to finish, so no push waits behind an earlier run; the mutation audit has its own group.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -414,7 +420,7 @@ jobs:
       - name: Test the mutation tooling
         run: |
           python3 -I scripts/test_mutation_gate.py
-          python3 -I next/scripts/test_mutants_ledger.py
+          python3 -I next/scripts/test_mutants_results.py
 
       - name: Run mutation testing
         env:
@@ -449,7 +455,8 @@ jobs:
 
       - name: Score and gate
         # Fail closed: the scorer refuses a results directory that exists without
-        # caught.txt and missed.txt, and an unsuppressed survivor or timeout fails.
+        # caught.txt and missed.txt or a status, and an unsuppressed survivor or timeout fails;
+        # with --require-complete, so does a run that is not complete (or has no results).
         # Push runs report only.
         run: |
           rc=0
@@ -481,30 +488,98 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-  mutants-plan:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
+  mutants-audit-plan:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # To list this repository's artifacts: has an audit completed this week?
+      actions: read
     outputs:
+      audit: ${{ steps.plan.outputs.audit }}
       shards: ${{ steps.plan.outputs.shards }}
-      ledger: ${{ steps.plan.outputs.ledger }}
+    defaults:
+      run:
+        working-directory: mega-evm
     steps:
-      - name: Plan the shards and the carried-over results
-        id: plan
-        run: |
-          echo 'shards=["0/8","1/8","2/8","3/8","4/8","5/8","6/8","7/8"]' >> "$GITHUB_OUTPUT"
-          # The cache key prefix of the carried-over results, read once for every shard and the
-          # merge. It changes each month: the first run of a month starts without carry-over.
-          echo "ledger=next-mutants-ledger-v1-$(date -u +%Y-%m)-" >> "$GITHUB_OUTPUT"
+      - name: Checkout mega-evm
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mega-evm
+          persist-credentials: false
 
-  mutants-full:
-    name: mutants-full (${{ matrix.shard }})
-    needs: mutants-plan
+      - name: Decide whether this run audits the full engine
+        id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
+          MARKER: ${{ contains(join(github.event.commits.*.message, ' '), '[mutants-audit]') }}
+          BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo 'shards=["0/8","1/8","2/8","3/8","4/8","5/8","6/8","7/8"]' >> "$GITHUB_OUTPUT"
+          why=()
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then why+=("a manual run"); fi
+          if [ "$MARKER" = true ]; then why+=("a pushed commit's message carries [mutants-audit]"); fi
+          # The oracle and its inputs: the dependencies and the fork, the diff harness with its
+          # gates, data and suppressions, the engine's tests, the cargo-mutants configuration and
+          # the toolchain. (Unit tests inside an engine source file are engine code here; a
+          # change that weakens them asks for an audit with the marker.)
+          inputs=(next/Cargo.lock next/evm2-fork.env next/diff next/mega-evm2/tests next/op-evm2/tests
+            next/op-evm2/src/tests.rs next/op-evm2/src/test_vectors.rs next/.cargo/mutants.toml
+            next/rust-toolchain.toml)
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            # The repository is public: the previous push is fetched over https without the token.
+            if [ -z "${BEFORE//0/}" ]; then
+              why+=("there is no previous push to compare the oracle's inputs with")
+            elif ! git fetch --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" "$BEFORE"; then
+              why+=("the previous push $BEFORE could not be fetched to compare the oracle's inputs with")
+            elif ! changed=$(git diff --name-only FETCH_HEAD HEAD -- "${inputs[@]}"); then
+              why+=("the oracle's inputs could not be compared with the previous push")
+            elif [ -n "$changed" ]; then
+              why+=("the oracle's inputs changed since the previous push: $(head -5 <<< "$changed" | paste -sd ' ' -)")
+            fi
+          fi
+          # A completed audit leaves the artifact next-mutants-audit-complete-<ISO week, UTC> in
+          # its run. An artifact is made only by a merge that found the audit complete, cannot
+          # be changed, outlives the week, and names the branch of its run, so listing the
+          # artifacts of that name tells whether an audit completed on this branch this week.
+          # When the listing fails, this counts as no audit: the fallback is one audit too many,
+          # never one too few.
+          week=$(date -u +%G-W%V)
+          if ! n=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=next-mutants-audit-complete-$week&per_page=100" |
+            jq --arg branch "$BRANCH" '[.artifacts[] | select(.workflow_run.head_branch == $branch and (.expired | not))] | length'); then
+            why+=("the artifacts of this week's completed audits could not be listed")
+          elif [ "$n" = 0 ]; then
+            why+=("no audit has completed on $BRANCH in $week")
+          else
+            echo "An audit completed on $BRANCH in $week."
+          fi
+          if [ ${#why[@]} -gt 0 ]; then
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+            printf 'Full mutation audit: %s.\n' "${why[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "audit=false" >> "$GITHUB_OUTPUT"
+            echo "No full mutation audit: no pushed commit carries [mutants-audit], the oracle's inputs are unchanged, and an audit completed on $BRANCH in $week. The push diff runs as always." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  mutants-audit:
+    name: mutants-audit (${{ matrix.shard }})
+    needs: mutants-audit-plan
+    if: needs.mutants-audit-plan.outputs.audit == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 330
+    # The audit's own group, one per shard, so check, mega-eest and the gates never wait for an
+    # audit. A newer audit's shard waits for the running one (and replaces an older one still
+    # waiting): an audit that has started always finishes.
+    concurrency:
+      group: ${{ github.workflow }}-mutants-audit-${{ github.ref }}-${{ matrix.shard }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.mutants-plan.outputs.shards) }}
+        shard: ${{ fromJSON(needs.mutants-audit-plan.outputs.shards) }}
     defaults:
       run:
         working-directory: mega-evm
@@ -520,9 +595,6 @@ jobs:
         with:
           path: mega-evm
           persist-credentials: false
-          # The carried-over results name the commit they were made at; the diff from it finds
-          # the mutants whose code changed since.
-          fetch-depth: 0
 
       - name: Check out the evm2 fork at its pin
         run: bash next/scripts/fetch-evm2-fork.sh
@@ -548,25 +620,16 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
 
-      - name: Restore the carried-over results
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: mega-evm/next/target/mutants-out/mutants.out
-          # Never an exact hit: the latest saved results of this month, by prefix.
-          key: ${{ needs.mutants-plan.outputs.ledger }}${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: ${{ needs.mutants-plan.outputs.ledger }}
-
-      - name: Run the shard, carried over
+      - name: Run the shard
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
           OUT: ${{ github.workspace }}/mega-evm/next/target/mutants-out
           SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
-          # Every shard starts from the same results, so they split what is left the same way.
           # End before the job limit (330 minutes), leaving 20 for the steps after this one.
-          MUTANTS_ITERATE=1 MUTANTS_BUDGET=$((JOB_START + (330 - 20) * 60 - $(date +%s))) \
-            bash next/scripts/mutants.sh shard "$SHARD"
+          export MUTANTS_BUDGET=$((JOB_START + (330 - 20) * 60 - $(date +%s)))
+          bash next/scripts/mutants.sh shard "$SHARD"
 
       - name: Show the linker of the test binaries
         if: always()
@@ -578,15 +641,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: next-mutants-full-${{ strategy.job-index }}
+          name: next-mutants-shard-${{ strategy.job-index }}
           path: mega-evm/next/target/mutants-out/mutants.out
           if-no-files-found: ignore
           overwrite: true
 
-  mutants-merge:
-    needs: [mutants-plan, mutants-full]
-    # Also after a failed or cancelled shard: the others' results are kept.
-    if: always() && needs.mutants-plan.result == 'success'
+  mutants-audit-merge:
+    needs: [mutants-audit-plan, mutants-audit]
+    # Also after a failed, cancelled or lost shard: its mutants count as missing.
+    if: always() && needs.mutants-audit-plan.outputs.audit == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -599,50 +662,83 @@ jobs:
           path: mega-evm
           persist-credentials: false
 
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
+
+      - name: Install the next/ toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          rust-src-dir: mega-evm/next
+          rustflags: ""
+          cache: false
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+
+      - name: List the full set and each shard's slice
+        run: |
+          set -euo pipefail
+          # Listed here, independently of the shards: what the audit sets out to test, and the
+          # slice each shard must have tested.
+          mkdir -p "$RUNNER_TEMP/audit/slices"
+          bash next/scripts/mutants.sh list full > "$RUNNER_TEMP/audit/inventory.txt"
+          for k in 0 1 2 3 4 5 6 7; do
+            bash next/scripts/mutants.sh list shard "$k/8" > "$RUNNER_TEMP/audit/slices/$k.txt"
+          done
+          echo "The full set has $(wc -l < "$RUNNER_TEMP/audit/inventory.txt") mutants."
+
       - name: Download the shards' results
+        # A shard that uploaded nothing is missing from the merge, which counts its mutants.
+        continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: next-mutants-full-*
+          pattern: next-mutants-shard-*
           path: shards
 
       - name: Merge the shards
         id: merge
         run: |
           set -euo pipefail
-          # Only results made at this commit: a shard that stopped before cargo-mutants wrote
-          # anything uploads the directory it started from.
-          mapfile -t dirs < <(find "$GITHUB_WORKSPACE/shards" -type f -name previously_caught.txt -exec dirname {} \; | sort)
-          if python3 -I next/scripts/mutants-ledger.py merge --base "$GITHUB_SHA" \
-            --into next/target/mutants-out/mutants.out "${dirs[@]}"; then
-            echo "merged=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::no shard produced results of this commit; the carried-over results stay as they were"
+          shards=()
+          for k in 0 1 2 3 4 5 6 7; do shards+=(--shard "$k=$GITHUB_WORKSPACE/shards/next-mutants-shard-$k"); done
+          python3 -I next/scripts/mutants-results.py merge --into next/target/mutants-out/mutants.out \
+            --inventory "$RUNNER_TEMP/audit/inventory.txt" --slices "$RUNNER_TEMP/audit/slices" \
+            --shards 8 --commit "$GITHUB_SHA" --tool "$(cd next && cargo mutants --version)" \
+            --summary "$GITHUB_STEP_SUMMARY" "${shards[@]}" | tee "$RUNNER_TEMP/audit/merge.log"
+          status=$(sed -n 's/^MUTANTS-STATUS status=\([a-z-]*\) .*/\1/p' "$RUNNER_TEMP/audit/merge.log")
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+          if [ "$status" != complete ]; then
+            echo "::warning::the full audit is $status; see the report and the shards' table"
           fi
 
-      - name: Save the carried-over results
-        if: steps.merge.outputs.merged == 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: mega-evm/next/target/mutants-out/mutants.out
-          key: ${{ needs.mutants-plan.outputs.ledger }}${{ github.run_id }}-${{ github.run_attempt }}
-
       - name: Report the full engine
-        if: steps.merge.outputs.merged == 'true'
         run: |
           rc=0
           python3 -I scripts/mutation_gate.py report \
             --results next/target/mutants-out/mutants.out \
             --suppressions next/diff/mutants/suppressions.toml \
-            --scope "Full-engine (carried over)" \
+            --scope "Full-engine audit" \
             --summary "$GITHUB_STEP_SUMMARY" || rc=$?
           if [ "$rc" -ne 0 ]; then
-            echo "::warning::mutation survivors, timeouts or mutants not yet reached (status $rc); see the report and the artifact"
+            echo "::warning::mutation survivors, timeouts or mutants without an outcome (status $rc); see the report and the artifact"
           fi
 
       - name: Upload the merged results
-        if: steps.merge.outputs.merged == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: next-mutants-full
+          name: next-mutants-audit
           path: mega-evm/next/target/mutants-out/mutants.out
+          overwrite: true
+
+      - name: Record this week's completed audit
+        # Read by mutants-audit-plan: an audit completed on this branch this week.
+        if: steps.merge.outputs.status == 'complete'
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-mutants-audit-complete-${{ steps.merge.outputs.week }}
+          path: mega-evm/next/target/mutants-out/mutants.out/status.json
+          retention-days: 14
           overwrite: true

@@ -15,13 +15,15 @@ Two subcommands:
         mutation score, write a Markdown report, and exit non-zero if any
         unsuppressed survivor remains (the "no new survivors" gate).
 
-        A results directory of a carried-over run (cargo-mutants --iterate)
-        also lists the mutants an earlier run caught or found unviable in
-        previously_caught.txt; previously_unviable.txt, when present, names
-        the unviable part of it. Those count as caught and unviable. When
-        mutants.json lists mutants the run never reached (it was stopped, for
-        example at a time budget), the report says how many, and
-        --require-complete makes that exit 2.
+        A run of next/scripts/mutants.sh writes status.json into the results
+        directory: its status against the inventory of mutants it set out to
+        test (complete, partial, not-started or baseline-failed), with the
+        inventory's size and the number of mutants that have an outcome. The
+        report says how many have none, and --require-complete exits 2 unless
+        the status is complete; it also exits 2 when the results directory is
+        absent, since such a run writes one even when nothing was selected.
+        Without status.json, mutants.json lists the mutants the run set out to
+        test, and those without an outcome are reported the same way.
 
 The gate is intended to run diff-scoped (cargo mutants --in-diff), so every
 mutant it sees lives on a line the PR changed; an unsuppressed survivor there is
@@ -71,15 +73,16 @@ def read_lines(path: Path) -> list[str]:
     return [ln.strip() for ln in path.read_text().splitlines() if ln.strip()]
 
 
-def carried_over(results: Path) -> tuple[list[str], list[str]]:
-    """(caught, unviable) mutants an earlier run settled, for a carried-over run.
-
-    cargo-mutants --iterate writes them all to previously_caught.txt, caught and unviable
-    alike; previously_unviable.txt (written by next/scripts/mutants.sh) names the unviable
-    ones. Without it, every carried-over mutant counts as caught."""
-    prev = read_lines(results / "previously_caught.txt")
-    unviable = set(read_lines(results / "previously_unviable.txt"))
-    return [m for m in prev if m not in unviable], [m for m in prev if m in unviable]
+def read_status(results: Path) -> dict | None:
+    """The run's status.json (next/scripts/mutants.sh), or None."""
+    path = results / "status.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {"status": "unreadable"}
+    return data if isinstance(data, dict) else {"status": "unreadable"}
 
 
 def not_reached(results: Path, tested: list[str]) -> list[str]:
@@ -109,6 +112,13 @@ def cmd_report(args: argparse.Namespace) -> int:
     #     aborted, wrote elsewhere, or the tool renamed its output. Refusing to
     #     report a 100% pass here is the whole point.
     if not results.exists():
+        if args.require_complete:
+            print(
+                f"ERROR: no results at {results}. A complete run writes them, also when it "
+                f"selected nothing — refusing to report a complete gate.",
+                file=sys.stderr,
+            )
+            return 2
         report = "## 🧬 Mutation testing\n\nNo results at "
         report += f"`{results}` — nothing was mutated (e.g. no mutatable changes).\n"
         if args.comment:
@@ -118,8 +128,11 @@ def cmd_report(args: argparse.Namespace) -> int:
                 fh.write(report)
         print(report)
         return 0
+    status = read_status(results)
+    # A run that stopped before cargo-mutants wrote its lists, or selected nothing, has only
+    # its status: the lists are empty and the status says why.
     for required in ("caught.txt", "missed.txt"):
-        if not (results / required).exists():
+        if status is None and not (results / required).exists():
             print(
                 f"ERROR: {results / required} is missing although {results} exists. "
                 f"The mutation run aborted or changed its output format — refusing to "
@@ -132,8 +145,16 @@ def cmd_report(args: argparse.Namespace) -> int:
     caught = read_lines(results / "caught.txt")
     unviable = read_lines(results / "unviable.txt")
     timeout = read_lines(results / "timeout.txt")
-    carried_caught, carried_unviable = carried_over(results)
-    unreached = not_reached(results, caught + missed + unviable + timeout)
+    if status is None:
+        unreached = len(not_reached(results, caught + missed + unviable + timeout))
+        complete = not unreached
+        state = ""
+    else:
+        state = str(status.get("status"))
+        complete = state == "complete"
+        expected = status.get("expected")
+        outcomes = len(set(caught + missed + unviable + timeout))
+        unreached = expected - outcomes if isinstance(expected, int) else 0
 
     _, line_supp = load_suppressions(Path(args.suppressions)) if args.suppressions else ([], [])
     # A line suppression matches either the bare mutation text (`mutant` written
@@ -153,20 +174,18 @@ def cmd_report(args: argparse.Namespace) -> int:
     # it, or record an explicit suppression). Suppressing reuses the same model.
     supp_timeouts, real_timeouts = partition(timeout)
 
-    killed = len(caught) + len(carried_caught)
+    killed = len(caught)
     viable = killed + len(missed)
     scored = viable - len(suppressed)  # equivalents/dead-code excluded from denominator
     score = (killed / scored * 100.0) if scored else 100.0
     gate_pass = not real_survivors and not real_timeouts
-    incomplete = args.require_complete and bool(unreached)
+    incomplete = args.require_complete and not complete
 
     # ---- Markdown report (PR comment + step summary) ----
-    status = "✅ PASS" if gate_pass else "❌ FAIL"
-
     # No viable mutants and nothing inconclusive (typical diff run whose changed
     # lines contain nothing mutatable). Reporting "100% (0/0)" reads like a real
     # result and confuses readers — say plainly that nothing was tested.
-    if viable == 0 and not real_timeouts and not unreached:
+    if viable == 0 and not real_timeouts and complete:
         note = "**Nothing to test** — no mutants were generated"
         if unviable or timeout:
             note += f" ({len(unviable)} unviable, {len(timeout)} timed out)"
@@ -182,25 +201,32 @@ def cmd_report(args: argparse.Namespace) -> int:
         return 0
 
     if incomplete:
-        status = "❌ INCOMPLETE"
-    caught_line = f"- caught: {killed}"
-    if carried_caught:
-        caught_line += f" ({len(carried_caught)} carried over from earlier runs)"
+        verdict = "❌ INCOMPLETE"
+    else:
+        verdict = "✅ PASS" if gate_pass else "❌ FAIL"
     md = [
-        f"## 🧬 Mutation testing — {status}",
+        f"## 🧬 Mutation testing — {verdict}",
         "",
         f"**{args.scope} mutation score: {score:.1f}%** ({killed}/{scored} viable mutants killed)",
         "",
-        caught_line,
+    ]
+    if status is not None:
+        expected = status.get("expected")
+        md.append(
+            f"- run status: **{state}** ({len(set(caught + missed + unviable + timeout))} of "
+            f"{expected if isinstance(expected, int) else 'an unknown number of'} mutants have an outcome)"
+        )
+    md += [
+        f"- caught: {killed}",
         f"- survived (real gaps): **{len(real_survivors)}**",
         f"- timed out (inconclusive): **{len(real_timeouts)}**",
         f"- suppressed (equivalent/dead-code): {len(suppressed) + len(supp_timeouts)}",
-        f"- unviable: {len(unviable) + len(carried_unviable)} · timeout total: {len(timeout)}",
+        f"- unviable: {len(unviable)} · timeout total: {len(timeout)}",
     ]
     if unreached:
         md.append(
-            f"- not reached in this run: **{len(unreached)}** (the run stopped before testing "
-            f"them; a carried-over run continues with them)"
+            f"- without an outcome: **{unreached}** (the run stopped before testing them, or "
+            f"their shard's results are missing)"
         )
     md.append("")
 
@@ -233,6 +259,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         )
     if real_survivors or real_timeouts:
         md += ["", "_Tip: run `/improve-mutation-score` to triage and fix these._"]
+    elif not complete:
+        md.append("No survivor among the mutants tested, but not every mutant was tested.")
     else:
         md.append("No new test gaps introduced by this change. 🎉")
     report = "\n".join(md) + "\n"
@@ -246,8 +274,8 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     if incomplete:
         print(
-            f"ERROR: {len(unreached)} mutants of this run were never tested — refusing to "
-            f"report a complete gate.",
+            f"ERROR: the run is {state or 'incomplete'}: {unreached or 'an unknown number of'} "
+            f"mutants were never tested — refusing to report a complete gate.",
             file=sys.stderr,
         )
         return 2
@@ -319,7 +347,7 @@ def main() -> int:
     pr.add_argument("--summary", default=None, help="append report here (GITHUB_STEP_SUMMARY)")
     pr.add_argument("--scope", default="Diff", help="what was mutated, for the score's label")
     pr.add_argument("--require-complete", action="store_true",
-                    help="exit 2 when mutants.json lists mutants the run never reached")
+                    help="exit 2 unless the run is complete (status.json, else mutants.json)")
     pr.set_defaults(func=cmd_report)
 
     po = sub.add_parser("orphans", help="flag suppressions matching no live mutant")
