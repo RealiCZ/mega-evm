@@ -23,14 +23,17 @@ alloy-primitives = { version = "1.7.0", default-features = false, features = ["s
 
 # misc
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
-# An independent Keccak-256 for `kec-trace`'s checks, never the engine's.
+# Independent Keccak-256s for `kec-trace`'s checks: whichever the engine of the build does not use.
+sha3 = "=0.11.0"
 tiny-keccak = { version = "=2.0.2", features = ["keccak"] }
 
 [features]
-# The two switches under test; both change every `alloy_primitives::keccak256` in the binary,
-# the engine's KECCAK256 opcode and receipt Blooms included.
+# The switches under test; each changes every `alloy_primitives::keccak256` in the binary, the
+# engine's KECCAK256 opcode and receipt Blooms included.
 asm = ["alloy-primitives/asm-keccak"]
 cache = ["alloy-primitives/keccak-cache-global"]
+# Alloy's tiny-keccak backend (scalar Rust), one-shot and streaming.
+tiny = ["alloy-primitives/tiny-keccak"]
 
 [[bin]]
 name = "kec-block"

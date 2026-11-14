@@ -22,7 +22,7 @@
 use alloy_consensus::transaction::Recovered;
 use alloy_primitives::Bytes;
 use kec_block::{
-    VARIANT, bench_blocks, blockdb,
+    bench_blocks, blockdb,
     replay::{self, Evm2Db},
 };
 use op_evm2::OpTxEnvelope;
@@ -58,7 +58,7 @@ fn run(
     {
         eprintln!(
             "{}",
-            json!({"variant": VARIANT, "set": block.set, "block": block.number,
+            json!({"variant": kec_block::variant(), "set": block.set, "block": block.number,
                 "first_ms": elapsed.as_secs_f64() * 1000.0})
         );
     }
@@ -123,7 +123,7 @@ fn parallel(spec: &str) {
         .collect();
     eprintln!(
         "{}",
-        json!({"variant": VARIANT, "parallel_first_traversal_ms": first.elapsed().as_secs_f64() * 1000.0})
+        json!({"variant": kec_block::variant(), "parallel_first_traversal_ms": first.elapsed().as_secs_f64() * 1000.0})
     );
     perf_control("enable");
     for config in spec.split(',').filter(|s| !s.is_empty()) {
@@ -183,7 +183,7 @@ fn parallel(spec: &str) {
             let blocks: usize = per_thread.iter().map(|(_, k)| k).sum();
             println!(
                 "{}",
-                json!({"variant": VARIANT, "threads": threads, "mode": mode, "run": r,
+                json!({"variant": kec_block::variant(), "threads": threads, "mode": mode, "run": r,
                     "wall_ms": wall.as_secs_f64() * 1000.0, "busy_ms": busy, "blocks": blocks,
                     "per_thread_blocks": per_thread.iter().map(|(_, k)| k).collect::<Vec<_>>()})
             );

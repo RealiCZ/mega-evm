@@ -6,8 +6,10 @@
 #   <bin-dir>/block/<variant>/{kec-block,kec-trace}                        one per block variant
 #
 # Usage: build.sh <bin-dir> <isa-variants> <block-variants>
-#   <isa-variants>    comma-separated: generic, x86-64-v3, x86-64-v4 (x86-64), sha3 (aarch64)
-#   <block-variants>  comma-separated: baseline, asm, cache, asm-cache, asm-sha3 (aarch64)
+#   <isa-variants>    comma-separated: generic, x86-64-v3, x86-64-v4 (x86-64), sha3 (aarch64), soft
+#                     (RustCrypto forced to its scalar backend)
+#   <block-variants>  comma-separated: baseline, asm, cache, asm-cache, tiny, tiny-cache, soft;
+#                     baseline-v3, asm-v3, baseline-v4, asm-v4 (x86-64); asm-sha3 (aarch64)
 #
 # Each ISA flag set gets its own target directory, so no build reuses another's artifacts.
 # `generic` is the target's default CPU (x86-64 or generic aarch64): never `target-cpu=native`.
@@ -26,6 +28,7 @@ isa_flags() {
     x86-64-v3) echo "-C target-cpu=x86-64-v3" ;;
     x86-64-v4) echo "-C target-cpu=x86-64-v4" ;;
     sha3) echo "-C target-feature=+sha3" ;;
+    soft) echo '--cfg keccak_backend="soft"' ;;
     *) echo "unknown ISA variant $1" >&2; return 2 ;;
   esac
 }
@@ -61,7 +64,14 @@ for v in "${variant_list[@]}"; do
     asm) features=asm ;;
     cache) features=cache ;;
     asm-cache) features=asm,cache ;;
+    tiny) features=tiny ;;
+    tiny-cache) features=tiny,cache ;;
+    soft) features="" flags=$(isa_flags soft) dir=block-soft ;;
     asm-sha3) features=asm flags=$(isa_flags sha3) dir=block-sha3 ;;
+    baseline-v3) features="" flags=$(isa_flags x86-64-v3) dir=block-v3 ;;
+    asm-v3) features=asm flags=$(isa_flags x86-64-v3) dir=block-v3 ;;
+    baseline-v4) features="" flags=$(isa_flags x86-64-v4) dir=block-v4 ;;
+    asm-v4) features=asm flags=$(isa_flags x86-64-v4) dir=block-v4 ;;
     *) echo "unknown block variant $v" >&2; exit 2 ;;
   esac
   echo "== block $v (features='$features', RUSTFLAGS='$flags')"

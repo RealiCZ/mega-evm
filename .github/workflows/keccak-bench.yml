@@ -10,12 +10,14 @@ name: keccak-bench
 #   2. downloads the corpus the `next` workflow's full gate uses (a pinned release asset,
 #      checked by sha256);
 #   3. builds the micro benchmarks for every ISA variant the CPU supports and the block
-#      harness in its variants (default Alloy, asm-keccak, keccak-cache-global, both);
+#      harness in its variants (default Alloy, asm-keccak, keccak-cache-global, both; under the
+#      supported x86-64 levels; on aarch64 also keccak-asm on SHA3 and the scalar backends);
 #   4. validates before any timing: each backend on fixed vectors, every KECCAK256 result and
 #      receipt Bloom of the corpus against an independent Keccak, outcomes equal across variants,
 #      and the cache against uncached hashing on every captured input;
 #   5. times the micro benchmarks and the corpus on one pinned core, in alternating order, then
-#      the cache on all cores, and samples the Keccak share with perf when the kernel allows;
+#      the four main variants on all cores (cache contention), and samples the Keccak share with
+#      perf when the kernel allows;
 #   6. uploads the raw CSV/JSON and writes a summary.
 
 on:
@@ -45,14 +47,22 @@ jobs:
         include:
           - arch: x86-64
             runner: ubuntu-24.04
-            # Each ISA variant beyond generic is built and run only when the CPU has it.
+            # Each ISA variant beyond generic is built and run only when the CPU has it, the block
+            # harness too (default Alloy and asm-keccak under those flags).
             isa_candidates: x86-64-v3,x86-64-v4
             variants: baseline,asm,cache,asm-cache
+            extra_isas: ""
+            extra_variants: ""
+            profile_variants: baseline,asm,baseline-v4,asm-v4
           - arch: arm64
             runner: ubuntu-24.04-arm
             # With +sha3 keccak-asm uses the SHA3 instructions; generic aarch64 uses NEON only.
             isa_candidates: sha3
             variants: baseline,asm,cache,asm-cache
+            # Scalar backends: RustCrypto forced to software, and Alloy's tiny-keccak.
+            extra_isas: soft
+            extra_variants: tiny,tiny-cache,soft
+            profile_variants: baseline,asm,tiny
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     defaults:
@@ -161,6 +171,8 @@ jobs:
         env:
           CANDIDATES: ${{ matrix.isa_candidates }}
           VARIANTS: ${{ matrix.variants }}
+          EXTRA_ISAS: ${{ matrix.extra_isas }}
+          EXTRA_VARIANTS: ${{ matrix.extra_variants }}
         run: |
           set -euo pipefail
           CARGO_TARGET_DIR=$CARGO_TARGET_DIR/micro-generic RUSTFLAGS="" \
@@ -173,12 +185,19 @@ jobs:
           for c in ${CANDIDATES//,/ }; do
             if grep -qx "$c=yes" <<< "$probe"; then
               isas="$isas,$c"
-              # On aarch64, also time the block harness with keccak-asm on the SHA3 instructions.
-              if [ "$c" = sha3 ]; then variants="$variants,asm-sha3"; fi
+              case "$c" in
+                # keccak-asm on the SHA3 instructions.
+                sha3) variants="$variants,asm-sha3" ;;
+                # The engine under the flags, with Alloy's default backend and with asm-keccak.
+                x86-64-v3) variants="$variants,baseline-v3,asm-v3" ;;
+                x86-64-v4) variants="$variants,baseline-v4,asm-v4" ;;
+              esac
             else
               echo "$c: skipped, the CPU lacks it" | tee -a "$OUT/env/skipped.txt"
             fi
           done
+          if [ -n "$EXTRA_ISAS" ]; then isas="$isas,$EXTRA_ISAS"; fi
+          if [ -n "$EXTRA_VARIANTS" ]; then variants="$variants,$EXTRA_VARIANTS"; fi
           {
             echo "ISAS=$isas"
             echo "VARIANTS=$variants"
@@ -202,13 +221,15 @@ jobs:
 
       - name: Cache contention smoke test (all cores)
         run: |
-          python3 -I "$KEC/scripts/kec.py" parallel --bin "$BIN" --out "$OUT" --variants "$VARIANTS" \
+          python3 -I "$KEC/scripts/kec.py" parallel --bin "$BIN" --out "$OUT" --variants baseline,asm,cache,asm-cache \
             --configs "1:split,$NPROC:split,$NPROC:shared" --rounds 2 --runs 3
 
       - name: Sample the Keccak share
         continue-on-error: true
         timeout-minutes: 25
-        run: python3 -I "$KEC/scripts/kec.py" profile --bin "$BIN" --out "$OUT" --variants baseline,asm --core "$CORE" --runs 5
+        env:
+          PROFILE_VARIANTS: ${{ matrix.profile_variants }}
+        run: python3 -I "$KEC/scripts/kec.py" profile --bin "$BIN" --out "$OUT" --variants "$PROFILE_VARIANTS" --core "$CORE" --runs 5
 
       - name: Summarize
         if: always()

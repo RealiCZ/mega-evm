@@ -14,10 +14,19 @@ pub mod bench_blocks;
 
 pub mod replay;
 
-/// The variant this binary was built as, from its Cargo features.
-pub const VARIANT: &str = match (cfg!(feature = "asm"), cfg!(feature = "cache")) {
-    (false, false) => "baseline",
-    (true, false) => "asm",
-    (false, true) => "cache",
-    (true, true) => "asm-cache",
-};
+/// The variant's label: `KEC_VARIANT` (the runner names the build, its ISA flags included), else
+/// the Keccak features this binary was built with.
+pub fn variant() -> String {
+    if let Ok(v) = std::env::var("KEC_VARIANT") {
+        return v;
+    }
+    let features: Vec<&str> = [
+        (cfg!(feature = "asm"), "asm"),
+        (cfg!(feature = "tiny"), "tiny"),
+        (cfg!(feature = "cache"), "cache"),
+    ]
+    .into_iter()
+    .filter_map(|(on, name)| on.then_some(name))
+    .collect();
+    if features.is_empty() { "baseline".into() } else { features.join("-") }
+}

@@ -89,6 +89,7 @@ def cmd_validate(a):
     reference = None
     for v in lst(a.variants):
         env = {"KEC_TRACE_OUT": str(traces)} if v == "baseline" else {}
+        env["KEC_VARIANT"] = v
         p = run([f"{a.bin}/block/{v}/kec-trace"], env=env, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, check=False)
         (out / f"trace-{v}.jsonl").write_text(p.stdout)
@@ -192,7 +193,7 @@ def cmd_blocks(a):
             stem = d / f"{v}-{rnd}"
             with open(f"{stem}.jsonl", "w") as so, open(f"{stem}.first.jsonl", "w") as se:
                 run(pinned(a.core, [f"{a.bin}/block/{v}/kec-block"]),
-                    env={"BENCH_RUNS": str(a.runs)}, stdout=so, stderr=se)
+                    env={"BENCH_RUNS": str(a.runs), "KEC_VARIANT": v}, stdout=so, stderr=se)
             rows = json_lines(pathlib.Path(f"{stem}.jsonl").read_text())
             first = [r for r in json_lines(pathlib.Path(f"{stem}.first.jsonl").read_text())
                      if "first_ms" in r]
@@ -235,7 +236,7 @@ def cmd_parallel(a):
         order = variants if rnd % 2 == 0 else list(reversed(variants))
         for v in order:
             p = run([f"{a.bin}/block/{v}/kec-block"],
-                    env={"BENCH_RUNS": str(a.runs), "KEC_PARALLEL": a.configs},
+                    env={"BENCH_RUNS": str(a.runs), "KEC_PARALLEL": a.configs, "KEC_VARIANT": v},
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             for r in json_lines(p.stdout):
                 r["round"] = rnd
@@ -268,6 +269,9 @@ def cmd_profile(a):
         return
     report = {"available": True, "variants": {}}
     for v in lst(a.variants):
+        if not os.path.exists(f"{a.bin}/block/{v}/kec-block"):
+            report["variants"][v] = {"record_status": "not built on this runner"}
+            continue
         tmp = pathlib.Path(tempfile.mkdtemp())
         ctl, ack = tmp / "ctl", tmp / "ack"
         os.mkfifo(ctl)
@@ -278,7 +282,7 @@ def cmd_profile(a):
         argv += pinned(a.core, [f"{a.bin}/block/{v}/kec-block"])
         try:
             # Bounded: a perf that never opens its control fifo would leave kec-block waiting.
-            p = run(argv, env={"BENCH_RUNS": str(a.runs), "KEC_PARALLEL": "1:split",
+            p = run(argv, env={"BENCH_RUNS": str(a.runs), "KEC_PARALLEL": "1:split", "KEC_VARIANT": v,
                                "KEC_PERF_CTL": str(ctl), "KEC_PERF_ACK": str(ack)},
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=600)
         except subprocess.TimeoutExpired:
@@ -297,7 +301,7 @@ def cmd_profile(a):
                 m = LINE.match(line)
                 if m:
                     syms.append((float(m.group(1)), m.group(3).strip()))
-            samples = re.search(r"Samples: (\S+)", r.stdout)
+            samples = re.search(r"^# Samples: (\S+)", r.stdout, re.M)
             keccak = sum(pct for pct, s in syms if KECCAK.search(s) and not CACHE.search(s))
             cache = sum(pct for pct, s in syms if CACHE.search(s))
             entry.update({

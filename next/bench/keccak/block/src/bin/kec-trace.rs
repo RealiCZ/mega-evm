@@ -1,8 +1,8 @@
 //! Replays the corpus once under an inspector on KECCAK256, as validation of the build's Keccak
 //! backend and cache inside the engine, before any timing:
 //!
-//! - every successful KECCAK256's result must equal an independent Keccak-256 (tiny-keccak) of the
-//!   memory it hashed;
+//! - every successful KECCAK256's result must equal an independent Keccak-256 of the memory it
+//!   hashed (tiny-keccak; RustCrypto's when the engine itself runs on tiny-keccak);
 //! - every receipt's logs Bloom must equal one rebuilt from its logs with that independent hash.
 //!
 //! Prints each block's outcome as a JSON line on stdout (to compare with the timing runs) and a
@@ -14,7 +14,7 @@
 use alloy_primitives::{B256, Bloom, BloomInput};
 use evm2::{InspectorConfig, evm::Db, inspector::Inspector, interpreter::Interpreter};
 use kec_block::{
-    VARIANT, blockdb,
+    blockdb,
     replay::{self, Evm2Db},
 };
 use mega_evm2::{MegaTypes, factory::BlockServices};
@@ -27,6 +27,9 @@ use std::{
     rc::Rc,
 };
 
+/// A Keccak-256 the engine of this build does not use: tiny-keccak, or RustCrypto's when the
+/// engine itself runs on tiny-keccak (feature `tiny`).
+#[cfg(not(feature = "tiny"))]
 fn independent(b: &[u8]) -> B256 {
     use tiny_keccak::Hasher;
     let mut h = tiny_keccak::Keccak::v256();
@@ -35,6 +38,18 @@ fn independent(b: &[u8]) -> B256 {
     h.finalize(&mut o);
     B256::new(o)
 }
+
+#[cfg(not(feature = "tiny"))]
+const INDEPENDENT: &str = "tiny-keccak 2.0.2";
+
+#[cfg(feature = "tiny")]
+fn independent(b: &[u8]) -> B256 {
+    use sha3::Digest;
+    B256::new(sha3::Keccak256::digest(b).into())
+}
+
+#[cfg(feature = "tiny")]
+const INDEPENDENT: &str = "RustCrypto sha3 0.11.0";
 
 #[derive(Default)]
 struct State {
@@ -83,7 +98,7 @@ impl Inspector<MegaTypes> for Inspect {
         assert_eq!(
             result,
             independent(bytes),
-            "KECCAK256 result differs from tiny-keccak, len {len}"
+            "KECCAK256 result differs from {INDEPENDENT}, len {len}"
         );
         if let Some(w) = &mut s.trace {
             w.write_all(&(len as u32).to_le_bytes()).unwrap();
@@ -149,7 +164,7 @@ fn main() {
             }
             assert_eq!(
                 bloom, r.bloom,
-                "receipt Bloom differs from tiny-keccak's, block {}",
+                "receipt Bloom differs from {INDEPENDENT}'s, block {}",
                 block.number
             );
             receipts += 1;
@@ -180,10 +195,10 @@ fn main() {
     let s = state.borrow();
     eprintln!(
         "{}",
-        json!({"variant": VARIANT, "blocks": identities.len(), "included": included_total,
+        json!({"variant": kec_block::variant(), "blocks": identities.len(), "included": included_total,
             "refused": refused_total, "gas": gas_total, "keccak256_checked": s.hashes,
             "keccak256_64_bytes": s.hash64, "keccak256_failed": s.failed,
             "receipts_bloom_checked": receipts, "bloom_inputs": bloom_inputs,
-            "independent": "tiny-keccak 2.0.2"})
+            "independent": INDEPENDENT})
     );
 }
