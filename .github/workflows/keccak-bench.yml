@@ -1,0 +1,229 @@
+name: keccak-bench
+
+# Keccak-256 backends and Alloy's exact-input cache, measured for the Satin engine on GitHub's
+# hosted x86-64 and arm64 Linux runners (next/bench/keccak/README.md). Bench-only: this workflow
+# lives on the branch cz/bench/keccak-x86, runs on pushes to it (and when dispatched on it), and
+# is never merged.
+#
+# Each job, on one runner:
+#   1. records the CPU, the image, the compiler and the target flags;
+#   2. downloads the corpus the `next` workflow's full gate uses (a pinned release asset,
+#      checked by sha256);
+#   3. builds the micro benchmarks for every ISA variant the CPU supports and the block
+#      harness in its variants (default Alloy, asm-keccak, keccak-cache-global, both);
+#   4. validates before any timing: each backend on fixed vectors, every KECCAK256 result and
+#      receipt Bloom of the corpus against an independent Keccak, outcomes equal across variants,
+#      and the cache against uncached hashing on every captured input;
+#   5. times the micro benchmarks and the corpus on one pinned core, in alternating order, then
+#      the cache on all cores, and samples the Keccak share with perf when the kernel allows;
+#   6. uploads the raw CSV/JSON and writes a summary.
+
+on:
+  push:
+    branches: [cz/bench/keccak-x86]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keccak-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The corpus release the full gate's MEGA_EVM2_CORPUS_URL names, pinned with its digest.
+  CORPUS_URL: https://github.com/RealiCZ/mega-evm2-corpus/releases/download/corpus-2026-11-12/mega-evm2-corpus.tar.zst
+  CORPUS_SHA256: ac790883d4495f144558a90e961c2b88387f55b1a23d269649802a894a0ae2f0
+
+jobs:
+  bench:
+    name: bench (${{ matrix.arch }})
+    if: github.ref == 'refs/heads/cz/bench/keccak-x86'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86-64
+            runner: ubuntu-24.04
+            # Each ISA variant beyond generic is built and run only when the CPU has it.
+            isa_candidates: x86-64-v3,x86-64-v4
+            variants: baseline,asm,cache,asm-cache
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            # With +sha3 keccak-asm uses the SHA3 instructions; generic aarch64 uses NEON only.
+            isa_candidates: sha3
+            variants: baseline,asm,cache,asm-cache
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: mega-evm
+    env:
+      KEC: ${{ github.workspace }}/mega-evm/next/bench/keccak
+      OUT: ${{ github.workspace }}/out
+      BIN: ${{ github.workspace }}/bin
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      RUST_MIN_STACK: "8388608"
+    steps:
+      - name: Checkout mega-evm
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mega-evm
+          persist-credentials: false
+
+      - name: Check out the evm2 fork at its pin
+        run: bash next/scripts/fetch-evm2-fork.sh
+
+      - name: Install the toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          # Reads mega-evm/next/bench/keccak/rust-toolchain.toml (next/'s channel).
+          rust-src-dir: mega-evm/next/bench/keccak
+          rustflags: ""
+          # No target cache: four engine builds per job would crowd out the repository's other caches.
+          cache: false
+
+      - name: Install zstd
+        run: bash next/scripts/install-zstd.sh
+
+      - name: Install perf
+        # Sampling is optional: without perf, the profile step records why and the job goes on.
+        continue-on-error: true
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends linux-tools-common "linux-tools-$(uname -r)" ||
+            sudo apt-get install -y -q --no-install-recommends linux-tools-common linux-tools-azure
+          sudo sysctl -w kernel.perf_event_paranoid=-1
+          sudo sysctl -w kernel.kptr_restrict=0
+          perf --version
+
+      - name: Record the runner
+        working-directory: mega-evm/next/bench/keccak
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/env"
+          lscpu > "$OUT/env/lscpu.txt"
+          cp /proc/cpuinfo "$OUT/env/cpuinfo.txt"
+          nproc > "$OUT/env/nproc.txt"
+          uname -a > "$OUT/env/uname.txt"
+          cp /etc/os-release "$OUT/env/os-release.txt"
+          { cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo "no cgroup cpu.max"; } > "$OUT/env/cpu-quota.txt"
+          { cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "no cpufreq governor (VM)"; } > "$OUT/env/cpufreq.txt"
+          uptime > "$OUT/env/uptime-start.txt"
+          rustc -vV > "$OUT/env/rustc.txt"
+          cargo -V > "$OUT/env/cargo.txt"
+          for flags in "" "-C target-cpu=x86-64-v3" "-C target-cpu=x86-64-v4" "-C target-feature=+sha3"; do
+            name=${flags:-generic}
+            # shellcheck disable=SC2086
+            rustc --print cfg $flags 2>&1 | grep -E '^target_(arch|feature)' > "$OUT/env/cfg-${name//[ =+]/_}.txt" || true
+          done
+          python3 -I - "$OUT/env" <<'EOF'
+          import json, os, pathlib, sys
+          d = pathlib.Path(sys.argv[1])
+          lscpu = dict(l.split(":", 1) for l in (d / "lscpu.txt").read_text().splitlines() if ":" in l)
+          info = {
+              "cpu": lscpu.get("Model name", "?").strip(),
+              "arch": lscpu.get("Architecture", "?").strip(),
+              "nproc": int((d / "nproc.txt").read_text()),
+              "image": f"{os.environ.get('ImageOS', '?')} {os.environ.get('ImageVersion', '?')}",
+              "runner": os.environ.get("RUNNER_NAME", "?"),
+              "rustc": (d / "rustc.txt").read_text().splitlines()[0],
+              "flags": lscpu.get("Flags", "").strip(),
+          }
+          (d / "runner.json").write_text(json.dumps(info, indent=2))
+          print(json.dumps({k: v for k, v in info.items() if k != "flags"}, indent=2))
+          EOF
+
+      - name: Download the corpus
+        run: |
+          set -euo pipefail
+          work=$GITHUB_WORKSPACE/corpus
+          mkdir -p "$work/extract" "$work/reference"
+          curl -fsSL --retry 5 --retry-all-errors -o "$work/corpus.tar.zst" "$CORPUS_URL"
+          echo "$CORPUS_SHA256  $work/corpus.tar.zst" | sha256sum -c -
+          tar --zstd -xf "$work/corpus.tar.zst" -C "$work/extract"
+          mapfile -t found < <(find "$work/extract" -type d -name real-blocks | sort)
+          [ "${#found[@]}" = 1 ] || { echo "expected one real-blocks/ in the corpus, found ${#found[@]}" >&2; exit 1; }
+          blocks=${found[0]}
+          corpus=$(dirname "$blocks")
+          archive=$corpus/reference/reference-outputs.tar.zst
+          [ -f "$archive" ] || archive=$corpus/reference/q11-oracles.tar.zst
+          # The per-transaction reference files hold each transaction's exact bytes.
+          tar --zstd -xf "$archive" -C "$work/reference" raw/satin
+          {
+            echo "MEGA_EVM2_BLOCK_DIR=$blocks"
+            echo "MEGA_EVM2_REPLAY_REF=$work/reference/raw/satin"
+          } >> "$GITHUB_ENV"
+          echo "corpus $CORPUS_URL sha256 $CORPUS_SHA256" > "$OUT/env/corpus.txt"
+
+      - name: Choose the variants this CPU runs
+        working-directory: mega-evm/next/bench/keccak
+        env:
+          CANDIDATES: ${{ matrix.isa_candidates }}
+          VARIANTS: ${{ matrix.variants }}
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR=$CARGO_TARGET_DIR/micro-generic RUSTFLAGS="" \
+            cargo build --release --locked -p kec-micro --bin isa-probe
+          probe=$("$CARGO_TARGET_DIR/micro-generic/release/isa-probe" 2> "$OUT/env/isa-probe.json")
+          echo "$probe" | tee "$OUT/env/isa-probe.txt"
+          isas=generic
+          variants=$VARIANTS
+          : > "$OUT/env/skipped.txt"
+          for c in ${CANDIDATES//,/ }; do
+            if grep -qx "$c=yes" <<< "$probe"; then
+              isas="$isas,$c"
+              # On aarch64, also time the block harness with keccak-asm on the SHA3 instructions.
+              if [ "$c" = sha3 ]; then variants="$variants,asm-sha3"; fi
+            else
+              echo "$c: skipped, the CPU lacks it" | tee -a "$OUT/env/skipped.txt"
+            fi
+          done
+          {
+            echo "ISAS=$isas"
+            echo "VARIANTS=$variants"
+            # The last CPU: interrupts and the runner agent tend to land on the first.
+            echo "CORE=$(( $(nproc) - 1 ))"
+            echo "NPROC=$(nproc)"
+          } >> "$GITHUB_ENV"
+          echo "ISA variants: $isas; block variants: $variants"
+
+      - name: Build
+        run: bash "$KEC/scripts/build.sh" "$BIN" "$ISAS" "$VARIANTS"
+
+      - name: Validate the backends and the cache before timing
+        run: python3 -I "$KEC/scripts/kec.py" validate --bin "$BIN" --out "$OUT" --isas "$ISAS" --variants "$VARIANTS"
+
+      - name: Micro benchmarks (one pinned core)
+        run: python3 -I "$KEC/scripts/kec.py" micro --bin "$BIN" --out "$OUT" --isas "$ISAS" --core "$CORE" --rounds 2
+
+      - name: Blocks (one pinned core, alternating order)
+        run: python3 -I "$KEC/scripts/kec.py" blocks --bin "$BIN" --out "$OUT" --variants "$VARIANTS" --core "$CORE" --rounds 6 --runs 3
+
+      - name: Cache contention smoke test (all cores)
+        run: |
+          python3 -I "$KEC/scripts/kec.py" parallel --bin "$BIN" --out "$OUT" --variants "$VARIANTS" \
+            --configs "1:split,$NPROC:split,$NPROC:shared" --rounds 2 --runs 3
+
+      - name: Sample the Keccak share
+        continue-on-error: true
+        timeout-minutes: 25
+        run: python3 -I "$KEC/scripts/kec.py" profile --bin "$BIN" --out "$OUT" --variants baseline,asm --core "$CORE" --runs 5
+
+      - name: Summarize
+        if: always()
+        run: |
+          uptime > "$OUT/env/uptime-end.txt" || true
+          python3 -I "$KEC/scripts/kec.py" summarize --out "$OUT" --arch "${{ matrix.arch }}"
+          cat "$OUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keccak-bench-${{ matrix.arch }}
+          path: |
+            ${{ github.workspace }}/out
+            !${{ github.workspace }}/out/traces
+            !${{ github.workspace }}/out/perf-*.data
+          if-no-files-found: warn
