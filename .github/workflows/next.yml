@@ -371,7 +371,7 @@ jobs:
 
   mutants:
     name: mutants (${{ github.event_name == 'pull_request' && 'pr' || 'push' }})
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/cz/feat/satin-evm2' || github.ref == 'refs/heads/cz/ci/mutants-fresh-audit'))
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     defaults:
@@ -427,7 +427,8 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/mega-evm/next/target
           OUT: ${{ github.workspace }}/mega-evm/next/target/mutants-out
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BEFORE: ${{ github.event.before }}
+          # Temporary validation: a fixed base with a small engine diff (52 mutants).
+          BEFORE: ${{ github.ref == 'refs/heads/cz/ci/mutants-fresh-audit' && '97ba746e42daf9471e56fc9de59a37f22ba2dbc0' || github.event.before }}
         run: |
           set -euo pipefail
           # End before the job limit (330 minutes), leaving 20 for the steps after this one. A
@@ -489,7 +490,7 @@ jobs:
           overwrite: true
 
   mutants-audit-plan:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/cz/feat/satin-evm2')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/cz/feat/satin-evm2' || github.ref == 'refs/heads/cz/ci/mutants-fresh-audit'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -619,6 +620,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants@27.1.0
+
+      - name: Fail shard 7/8 before it runs, on the first attempt (temporary validation)
+        if: matrix.shard == '7/8' && github.run_attempt == '1'
+        run: |
+          echo "::error::validation: shard 7/8 fails before it runs on the run's first attempt; a rerun of the failed jobs runs it"
+          exit 1
 
       - name: Run the shard
         env:
