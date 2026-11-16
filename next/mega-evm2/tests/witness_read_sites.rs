@@ -510,7 +510,7 @@ fn witness_replay_of_a_due_registry_change() {
 /// without code holding storage is a prestate outside the specification (`SATIN-SYSC-005`); the
 /// test pins that the deployment over it, keeping that storage, still replays exactly.
 #[test]
-fn witness_replay_of_a_registry_seeded_over_a_wiped_or_absent_account() {
+fn witness_replay_of_a_registry_seeded_over_a_code_less_or_absent_account() {
     for leaf in [true, false] {
         let mut parent = chain_with(L1::Present, false);
         if leaf {
