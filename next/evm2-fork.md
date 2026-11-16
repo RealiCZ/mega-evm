@@ -1,55 +1,59 @@
 # The thin evm2 fork
 
-`next/` builds against a thin fork of [alloy-rs/evm2](https://github.com/alloy-rs/evm2): [`RealiCZ/evm2`](https://github.com/RealiCZ/evm2), branch `cz/wip/thin-fork-up2` (`390a3876`).
+`next/` builds against a thin fork of [alloy-rs/evm2](https://github.com/alloy-rs/evm2): [`RealiCZ/evm2`](https://github.com/RealiCZ/evm2), branch `cz/feat/thin-fork-v5` (`c0a91cbb`).
 `evm2-fork.env` holds the pin (`EVM2_FORK_REPO`, `EVM2_FORK_REV`); it is the only place CI reads it from.
-The series sits on upstream `66687c18`, upstream `main` on 2026-11-11.
-Since the previous base, `e0d398a6`, upstream has merged one patch of the series ([#1061](https://github.com/alloy-rs/evm2/pull/1061), see [Merged upstream](#merged-upstream)), moved `initial_call_depth` from `Version` to `Evm` ([#1056](https://github.com/alloy-rs/evm2/pull/1056)), and made the input of a call instruction's message a range of the caller's memory on every path ([#1046](https://github.com/alloy-rs/evm2/pull/1046)).
-The series before that sat on `e0d398a6` (branch `cz/feat/thin-fork-v3` at `c58811c2`), and the ones before on `85395c54` (branches `cz/feat/thin-fork` at `91576d1e` and `cz/feat/thin-fork-v2` at `28e20011`); they are left as they were, so earlier pins still resolve.
-`85395c54` is the evm2 revision reth's pull request #28276 moves reth to; until the node moves to `66687c18` or later, the node and the engine run different evm2 revisions.
+The series sits on upstream `e681662b`, upstream `main` on 2026-11-13: thirteen patches of evm2 (the table below) and two of `evm2-inspectors`' step tracers ([Inspector patches](#inspector-patches)).
+Since the previous base, `66687c18`, upstream has dropped the EIP-8037 state-gas refund of the pre-EIP-2780 EIP-7702 path, and with it the `GasSettlement` field that carried it ([#898](https://github.com/alloy-rs/evm2/pull/898)), and has kept the addresses of moved precompiles warm, which a provider that wraps another must delegate (`PrecompileProvider::warm_addresses`, [#1068](https://github.com/alloy-rs/evm2/pull/1068)); `op-evm2`'s `OpPrecompiles` delegates it.
+Its other changes are additions the engine does not call (`State::reload_storage_slot`, `State::cool_loaded`, `Evm::take_precompiles`, `Clone` for `BlockState`), a JIT fix, a transient-storage and bytecode-clone saving, the trace byte budget counting recorded steps, and benchmark and documentation changes; none moves an outcome of the engine.
+The series before that sat on `66687c18` (branch `cz/feat/thin-fork-v4` at `390a3876`), the one before on `e0d398a6` (branch `cz/feat/thin-fork-v3` at `c58811c2`), and the ones before on `85395c54` (branches `cz/feat/thin-fork` at `91576d1e` and `cz/feat/thin-fork-v2` at `28e20011`); they are left as they were, so earlier pins still resolve.
+`85395c54` is the evm2 revision reth's pull request #28276 moves reth to; until the node moves to `e681662b` or later, the node and the engine run different evm2 revisions.
 
 A patch exists only when the engine needs something evm2 cannot give it from outside: data from inside evm2's own flow, or a hook point.
 Every patch keeps stock behavior as its default, and each says what upstream change would let it go.
-One patch is a stock change instead, written to be proposed upstream as it is: `aa1c68ec` pins `Gas`'s layout at compile time.
+One patch is a stock change instead, written to be proposed upstream as it is: `0552c051` pins `Gas`'s layout at compile time.
 ModExp keeps upstream's order (its 500 minimum, its formula price, then EIP-7823's bound, upstream [#874](https://github.com/alloy-rs/evm2/pull/874)): the Satin specification follows upstream there, so the series carries no ModExp patch.
 The engine also uses upstream changes that are already in the base: `call_with` / `create_with` ([#887](https://github.com/alloy-rs/evm2/pull/887)), reservoir-funded state gas in `system_call` totals ([#842](https://github.com/alloy-rs/evm2/pull/842)), and two of the merged patches (#1023, #1025).
 
 | Patch | Adds | Size | Upstream | Drop when upstream |
 | --- | --- | --- | --- | --- |
-| `aa1c68ec` pin `Gas`'s layout at compile time | none (a compile-time assertion) | +9 | not yet proposed | pins the layout compiled code reads |
-| `49912d94` select consensus and observation message hooks statically | `MessageHooks`, a static per-message hook type | +860/−36 | none yet | has a static hook on every message, answers included, before the commit decision |
-| `296b54bc` price state charges by account and storage location | `EvmTypesHost::state_gas_price`, `StateGasSite` | +472/−34 | none yet | can price a state charge by its account or storage slot |
-| `4d8c0397` expose a code deposit admission hook | `MessageHooks::admit_code_deposit` | +83/−9 | none yet | has an admission hook whose revert restores the pre-charge gas |
-| `f8ce987d` retain failed debit before normalization on every interpreter path | `GasTracker::failed_charge` | +160/−6 | none yet | keeps the failed execution-gas debit on both paths after `remaining` is normalized |
-| `028563ec` let a type family hold a frame's gas in reserve | `gas_reserve` / `draw_gas_reserve`, `BudgetUse`, `ReserveDraw` | +768/−26 | none yet | lets execution gas outside `remaining` reach budget decisions and non-execution deductions |
-| `8c047ead` optionally read uncached storage of accounts the database reports absent | `CacheDB::read_absent_storage`, `State::set_read_absent_storage` | +61/−3 | none yet | reads that storage as revm does, or offers this switch |
-| `0ac96207` let a type family refuse an instruction's account load | `EvmTypesHost::before_account_load`, `AccountLoadSite` | +395/−5 | none yet | lets a type family stop an instruction at its own account load |
-| `ea0e14d4` let a type family act on the transaction before its first frame | `TxHandlerHooks::before_initial_frame` | +375/−45 | not yet proposed | has a handler hook before the first frame that can charge the transaction or settle it |
-| `b11152e8` let a version credit state-gas give-backs to the reservoir only | `EvmFeatures::EIP8037_RESERVOIR_REFILLS`, `give_back_state_gas`, `merge_returned_gas` | +603/−16 | the rule is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2 | has the reservoir-only give-back rule as a version option |
-| `3c350510` let a version take a legacy share of a state charge from execution gas | the four `GasId::*LegacyShare` parameters, `spend_state_with_share_reserve_first` | +232/−8 | the share is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2 | has a legacy share of the new-state charges as gas parameters |
-| `1439255f` pin the tracker's accessors and equality, and the handler's bounds and first-frame paths | tests only | +590 | none (tests of the series and of upstream paths) | tests |
-| `390a3876` make the message hooks' copy-skipping constant the no-op hooks' own | none (`MessageHooks::RUNS_BEFORE` hidden; documentation and tests) | +164/−6 | none (goes with `49912d94`) | goes with `49912d94` |
+| `0552c051` pin `Gas`'s layout at compile time | none (a compile-time assertion) | +9 | not yet proposed | pins the layout compiled code reads |
+| `39f2c8ad` select consensus and observation message hooks statically | `MessageHooks`, a static per-message hook type | +860/−36 | none yet | has a static hook on every message, answers included, before the commit decision |
+| `9a1aadf8` price state charges by account and storage location | `EvmTypesHost::state_gas_price`, `StateGasSite` | +472/−34 | none yet | can price a state charge by its account or storage slot |
+| `9ac93411` expose a code deposit admission hook | `MessageHooks::admit_code_deposit` | +83/−9 | none yet | has an admission hook whose revert restores the pre-charge gas |
+| `e527e43f` retain failed debit before normalization on every interpreter path | `GasTracker::failed_charge` | +160/−6 | none yet | keeps the failed execution-gas debit on both paths after `remaining` is normalized |
+| `891a8b15` let a type family hold a frame's gas in reserve | `gas_reserve` / `draw_gas_reserve`, `BudgetUse`, `ReserveDraw` | +768/−26 | none yet | lets execution gas outside `remaining` reach budget decisions and non-execution deductions |
+| `e1c91c19` optionally read uncached storage of accounts the database reports absent | `CacheDB::read_absent_storage`, `State::set_read_absent_storage` | +61/−3 | none yet | reads that storage as revm does, or offers this switch |
+| `f8f89b51` let a type family refuse an instruction's account load | `EvmTypesHost::before_account_load`, `AccountLoadSite` | +395/−5 | none yet | lets a type family stop an instruction at its own account load |
+| `3e49ce55` let a type family act on the transaction before its first frame | `TxHandlerHooks::before_initial_frame` | +375/−45 | not yet proposed | has a handler hook before the first frame that can charge the transaction or settle it |
+| `459c7b02` let a version credit state-gas give-backs to the reservoir only | `EvmFeatures::EIP8037_RESERVOIR_REFILLS`, `give_back_state_gas`, `merge_returned_gas` | +603/−16 | the rule is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2 | has the reservoir-only give-back rule as a version option |
+| `e081c58e` let a version take a legacy share of a state charge from execution gas | the four `GasId::*LegacyShare` parameters, `spend_state_with_share_reserve_first` | +232/−8 | the share is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; none in evm2 | has a legacy share of the new-state charges as gas parameters |
+| `97789048` pin the tracker's accessors and equality, and the handler's bounds and first-frame paths | tests only | +590 | none (tests of the series and of upstream paths) | tests |
+| `7a070df7` make the message hooks' copy-skipping constant the no-op hooks' own | none (`MessageHooks::RUNS_BEFORE` hidden; documentation and tests) | +164/−6 | none (goes with `39f2c8ad`) | goes with `39f2c8ad` |
+| `b7a8d8dd` show a child after any step that starts it in the step traces (`evm2-inspectors`) | none (the struct logger's and the Parity VM trace's builders) | +152/−17 | not yet proposed | enters a child after any step that starts it |
+| `c0a91cbb` leave spilled state gas out of the JavaScript and opcode gas step costs (`evm2-inspectors`) | none (`getCost` and `OpcodeGasInspector`'s gas) | +142/−8 | not yet proposed | leaves the spill out of those two step costs |
 
-Size is the commit's own stat against its parent; most of the insertions of `49912d94`, `028563ec`, `296b54bc`, `0ac96207`, `ea0e14d4`, `b11152e8`, `3c350510` and `390a3876` are tests, and all of `1439255f`'s.
-Upstream order, smallest and least contested first: `aa1c68ec`, `ea0e14d4`, `8c047ead`, `4d8c0397`, `f8ce987d` with the halt record of `028563ec`, `296b54bc`, the rest of `028563ec`, `0ac96207`, and `49912d94` last (with `390a3876`), because it runs on every message.
-`b11152e8` and `3c350510` follow ethereum/EIPs #12581: offered with it if Ethereum takes that rule into EIP-8037, kept as Satin's own departure if it does not.
+Size is the commit's own stat against its parent; most of the insertions of `39f2c8ad`, `891a8b15`, `9a1aadf8`, `f8f89b51`, `3e49ce55`, `459c7b02`, `e081c58e`, `7a070df7`, `b7a8d8dd` and `c0a91cbb` are tests, and all of `97789048`'s.
+The rebase onto `e681662b` carried the thirteen evm2 patches with their sizes unchanged; `9a1aadf8` met #898's `AuthRefunds` and keeps its signature on upstream's shorter refund.
+Upstream order, smallest and least contested first: `0552c051`, `3e49ce55`, `e1c91c19`, `9ac93411`, `e527e43f` with the halt record of `891a8b15`, `9a1aadf8`, the rest of `891a8b15`, `f8f89b51`, and `39f2c8ad` last (with `7a070df7`), because it runs on every message.
+`459c7b02` and `e081c58e` follow ethereum/EIPs #12581: offered with it if Ethereum takes that rule into EIP-8037, kept as Satin's own departure if it does not.
 
 ## The patches
 
-Each engine rule a patch serves sits behind a named switch with a negative control in `diff/negative-controls.toml` (a harness switch for `8c047ead`); turning the switch off makes the control's case differ from the reference.
-`aa1c68ec` changes no behavior; `ea0e14d4` carries the start-record charge, whose switches (`start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`) have their controls.
+Each engine rule a patch serves sits behind a named switch with a negative control in `diff/negative-controls.toml` (a harness switch for `e1c91c19`); turning the switch off makes the control's case differ from the reference.
+`0552c051` changes no behavior; `3e49ce55` carries the start-record charge, whose switches (`start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`) have their controls.
 
-### `aa1c68ec` `Gas`'s layout pinned
+### `0552c051` `Gas`'s layout pinned
 
 - **API.** None: a compile-time assertion beside `Gas` (`interpreter/gas.rs`) that `Gas` is 64 bytes, upstream's size, on 64-bit targets and that `tracker` is its first field.
   Compiled code loads the remaining gas as the first word of `Gas`, the first field of its `EvmContext`, and reads the context's later fields at offsets fixed when it was compiled; compiled artifacts are cached under `ABI_VERSION` (`evm2-jit-codegen`), so a layout change that does not move the version would load stale artifacts.
   The size is not pinned on 32-bit targets: `MemoryGas` holds a `usize`, and `Gas` is 60 bytes on i686.
-  `f8ce987d` grows `Gas` and moves the pinned size to 80.
-- **Why.** The series grows `Gas` (`f8ce987d`), and a later change of its layout that kept `ABI_VERSION` would compile and load stale artifacts; with the assertion it does not build until the version and the pinned size move.
+  `e527e43f` grows `Gas` and moves the pinned size to 80.
+- **Why.** The series grows `Gas` (`e527e43f`), and a later change of its layout that kept `ABI_VERSION` would compile and load stale artifacts; with the assertion it does not build until the version and the pinned size move.
   The engine does not need it; it keeps the series' own layout change honest.
 - **Upstream.** Not yet proposed; written against upstream, where it holds as it is.
 - **Drop** when upstream pins the layout compiled code reads.
 
-### `49912d94` static message hooks
+### `39f2c8ad` static message hooks
 
 - **API.** `EvmTypesHost::MessageHooks` is an associated type; `()` is the no-op, which the stock families, `op-evm2` and the JIT host tests use.
   The `MessageHooks` trait runs on every message, on the plain and the inspected path: consensus methods `before` (may answer the message), `started` (after the checkpoint, value transfer and creation setup), `frame_built`, `before_commit` (may rewrite the stop before commit or rollback) and `after`; observers `enter`, `unsettled` and `exit`.
@@ -59,7 +63,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Every hook runs while the caller is the running frame: before the callee's frame is entered (`enter`, `before`, `started`, `frame_built`) or after it returns (`before_commit`, `admit_code_deposit`, `unsettled`, `after`, `exit`), so `Evm::message_input` reads the input in any of them; `frame_built` runs before the frame resolves its input and becomes the running frame, so a message it sends gets the caller, never a frame whose input points into the caller's memory.
   A clone of a range is only the range, which reads whatever the caller holds there when it is read, so `before`, which gets the message by `&mut` and may keep its input, gets it as owned bytes: the message path copies a range before `before`, and `before`, every later hook and the callee see that copy (`kept_input::hooks_read_the_callers_bytes_and_before_keeps_them_past_an_overwrite_and_a_growth`, plain and inspected: `enter` reads the range, `before` the copy, which stays right after the caller overwrites its memory and grows it).
   The no-op `()`, which runs no `before`, skips both through `MessageHooks::RUNS_BEFORE = false`, so the stock families keep #1046's saving (`input_copy::the_no_op_hooks_leave_a_call_input_in_the_callers_memory`).
-  The constant is `#[doc(hidden)]` and `()`'s alone (`390a3876`): a family that overrides `before` leaves it at `true`, because with `false` its `before` would never be called and nothing would catch it.
+  The constant is `#[doc(hidden)]` and `()`'s alone (`7a070df7`): a family that overrides `before` leaves it at `true`, because with `false` its `before` would never be called and nothing would catch it.
   `enter` runs before that copy, so it can see a range; a message it runs gets the inspector's hooks, which can change or grow the caller's memory, and the entered message then reads what they left (`nested_enter::entered_input_reads_what_a_nested_inspector_leaves_in_the_moved_caller_memory`).
 - **Why.** Satin's frame-start rules stop a frame before its code runs, take back a success answer, and answer the system contracts before evm2 moves value.
   The engine's `StartHooks` implements them: `pre_frame_stop`, `tx_beneficiary`, `keyless`, `keyless_value_hold`, `access_control`, `oracle_hints`, `precompile_hold` and `top_precompile_hold` (`before`); `first_frame_hold` and `hold_start` (`started`); `hold` (`frame_built`); `classify`, `built_check`, `unbuilt_burn`, `deposit_loan_reset` and `first_frame_hold` (`before_commit`).
@@ -69,7 +73,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed.
 - **Drop** when upstream offers a static per-message hook that runs for every message, including answers with no interpreter frame, before the commit decision.
 
-### `296b54bc` state-gas price by location
+### `9a1aadf8` state-gas price by location
 
 - **API.** `EvmTypesHost::state_gas_price(host, id, site) -> Result<u64, ExecutionError>` prices one schedule entry at the state it touches; `StateGasSite` is `Account(address)` or `Storage(address, key)`.
   The default returns `gas_params.get(id)`.
@@ -82,18 +86,18 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed; the caller shape has to be agreed first, because every state-gas charge site calls it.
 - **Drop** when upstream can price a state charge by account and storage location.
 
-### `4d8c0397` code-deposit admission
+### `9ac93411` code-deposit admission
 
 - **API.** `MessageHooks::admit_code_deposit` runs after the code-deposit checks and charges, before installation and `before_commit`.
   `None` accepts; `Some((stop, output))` rejects with a non-success stop.
-  `Revert` restores `gas_before`, the frame's gas from before the deposit charges, except under the reservoir-only rule (`EvmFeatures::EIP8037_RESERVOIR_REFILLS`, `b11152e8`), where the charges stay and the revert's settlement gives the state charges into the reservoir while the hashing stays spent; other stops keep the charged gas until ordinary settlement.
+  `Revert` restores `gas_before`, the frame's gas from before the deposit charges, except under the reservoir-only rule (`EvmFeatures::EIP8037_RESERVOIR_REFILLS`, `459c7b02`), where the charges stay and the revert's settlement gives the state charges into the reservoir while the hashing stays spent; other stops keep the charged gas until ordinary settlement.
 - **Why.** Satin's admission charges the deposited bytes' history and refuses after the charges, restoring the pre-charge gas, which `before_commit` cannot see (`StartHooks::admit_code_deposit`).
   The deposit's state spill draws withheld gas through the gas reserve, and the admission settles that draw (`DepositLoan`), because `gas_before` does not hold it; under Satin's rule the drawn gas went into the reservoir with the spill, and the withheld gas does not get it back.
   Controls: `deposit_loan_back`, `deposit_site`, `keyless_empty_deposit`.
 - **Upstream.** None filed.
 - **Drop** when upstream offers an admission hook that can restore the pre-charge gas on revert.
 
-### `f8ce987d` failed-charge record
+### `e527e43f` failed-charge record
 
 - **API.** `GasTracker::failed_charge` returns the last failed execution-gas debit as `(remaining_before, cost)`; `record_failed_charge` and `clear_failed_charge` write and clear it.
   It is written on the failure side of `spend` and of the dispatcher's static gas, on both interpreter paths, before wrapping or inspector normalization zeroes `remaining`.
@@ -101,7 +105,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   The record is interpreter-only: the JIT builtins record no failed charge.
 - **Layout.** Compiled code loads and debits the remaining gas as the first word of `Gas` (at the `EvmContext`'s `gas` field), so `GasTracker` is `#[repr(C)]` with `remaining` first; Rust's default layout put the new record ahead of it.
   The record grows `Gas` from 64 to 80 bytes, which moves every `EvmContext` field after it, so the commit moves the compiled-artifact ABI (`evm2-jit-codegen`'s `ABI_VERSION`) from upstream's 8 (#1046 moved it from 7) to 9, and artifacts persisted at 8 are not loaded.
-  It moves `aa1c68ec`'s compile-time assertion to 80 bytes on 64-bit targets (76 on i686, where the size is not pinned), so a layout change does not build until `ABI_VERSION` and the assertion move.
+  It moves `0552c051`'s compile-time assertion to 80 bytes on 64-bit targets (76 on i686, where the size is not pinned), so a layout change does not build until `ABI_VERSION` and the assertion move.
   Tests: `test_remaining_gas_is_the_first_word` (`interpreter/gas.rs`) and `compiled_charge_debits_the_remaining_gas` (`evm2-jit-context`), which charge through the context's gas field as compiled code does.
 - **Why.** Detention classifies an out-of-gas halt by it: a debit that spendable plus withheld gas could pay is a crossing, anything else burns (`detention::before_commit`).
   Precompiles outside the engine's price table are priced by running them on a tracker with no gas and reading the record (`precompile_price_of`).
@@ -110,7 +114,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   [#752](https://github.com/alloy-rs/evm2/pull/752), in the base, reports the inspector's out-of-gas step cost; this is a separate, consensus-side ask.
 - **Drop** when upstream keeps the failed execution-gas debit, on both interpreter paths, after `remaining` is normalized.
 
-### `028563ec` gas reserve
+### `891a8b15` gas reserve
 
 - **API.** `EvmTypesHost::gas_reserve(host, BudgetUse) -> u64` reports execution gas the running frame holds outside `remaining`; `draw_gas_reserve(host, amount, ReserveDraw) -> u64` moves up to `amount` of it back and returns what it moved.
   Both default to no reserve and are `#[inline(always)]`.
@@ -125,7 +129,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed; it needs a design issue first, since the JIT builtins would need the same helpers.
 - **Drop** when upstream lets a type family keep execution gas outside `remaining` that budget decisions see and non-execution deductions draw first, with a halt record that survives the inspected path.
 
-### `8c047ead` reads of absent accounts' storage
+### `e1c91c19` reads of absent accounts' storage
 
 - **API.** `CacheDB::read_absent_storage`, default `false`: uncached storage of an account the cache holds as absent is answered as zero without a backing read.
   `State::set_read_absent_storage` turns it on; values stay the same for a consistent database, and the read is performed, as revm performs it (`absent_account_storage_is_read_only_when_asked`).
@@ -135,7 +139,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed.
 - **Drop** when upstream reads uncached storage of a database-absent account the way revm does, or offers this switch.
 
-### `0ac96207` account-load hook
+### `f8f89b51` account-load hook
 
 - **API.** `EvmTypesHost::before_account_load(state, address, AccountLoadSite) -> Result` runs where an instruction is about to load an account: after every charge the instruction makes before that load, before the load and its EIP-2929 skip-cold check.
   A stop it returns fails the instruction there, with nothing loaded; the default admits every load and is `#[inline(always)]`.
@@ -151,7 +155,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** None filed.
 - **Drop** when upstream lets a type family stop an instruction at each of its account loads, after the instruction's charges before the load and before its skip-cold check.
 
-### `ea0e14d4` the first-frame hook
+### `3e49ce55` the first-frame hook
 
 - **API.** `TxHandlerHooks::before_initial_frame(host, envelope, tx_gas) -> HandlerResult<Option<MessageResult<T>>>` runs in every standard `execute_prepared` (legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702) after the pre-execution changes and the transaction environment, immediately before `prepare_initial_frame`, on the transaction-level gas tracker; EIP-7702 runs it after its authorizations are applied, and not when their charges ran out of gas (that transaction settles as a halted first frame first).
   A family may charge `tx_gas` (the charge is the transaction's, kept whatever the first frame's execution does; its spill is unwound by a reservoir the first frame returns), or return a result that `settle_transaction` settles without a frame (an EIP-7702 transaction then keeps none of its delegations).
@@ -159,12 +163,12 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Tests cover the default's placement (after the environment, the nonce bump and the delegations, once, on the gas the first frame starts from) and both non-default uses on every envelope (`tests::before_initial_frame`).
 - **Why.** Satin validates a transaction's gas against the intrinsic gas and the body's history and charges the first frame's start record after validation, before the first frame; a transaction that cannot pay it is included as an out-of-gas that runs no frame.
   The engine charges it in `MegaHooks::before_initial_frame` and runs types 0, 1 and 2 through evm2's own `execute_prepared`, so a creation's address comes from the prepared state nonce, not the envelope, also with the nonce check off (`mega-evm2/tests/nonce_check_off.rs`).
-  Charging on the transaction's tracker records the record's spill where evm2's merge unwinds it with a reservoir the first frame returns, under EIP-8037's give-back rule, so a creation destroyed in its constructor needs no case of its own (`tx_spill_unwind`); under Satin's rule (`b11152e8`) a returned reservoir unwinds nothing, and the switch shows in the rerun of the class `reservoir_give_back`, which runs EIP-8037's.
+  Charging on the transaction's tracker records the record's spill where evm2's merge unwinds it with a reservoir the first frame returns, under EIP-8037's give-back rule, so a creation destroyed in its constructor needs no case of its own (`tx_spill_unwind`); under Satin's rule (`459c7b02`) a returned reservoir unwinds nothing, and the switch shows in the rerun of the class `reservoir_give_back`, which runs EIP-8037's.
   Controls: `start_at_runtime`, `start_reads_no_target`, `tx_spill_unwind`.
 - **Upstream.** Not yet proposed.
 - **Drop** when upstream has a handler hook before the first frame that can charge the transaction's gas or settle it without a frame.
 
-### `b11152e8` reservoir-only give-backs
+### `459c7b02` reservoir-only give-backs
 
 - **API.** `EvmFeatures::EIP8037_RESERVOIR_REFILLS`, off by default, credits every give-back of EIP-8037 state gas to a reservoir and never to execution gas.
   `GasTracker::refill_reservoir_only` is the refill: the reservoir rises by the amount and `state_gas_spent` falls by it; `remaining` does not move.
@@ -181,7 +185,7 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
 - **Upstream.** The rule is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; nothing filed in evm2.
 - **Drop** when evm2 carries the reservoir-only rule as a version option, or when EIP-8037 takes it and evm2 follows.
 
-### `3c350510` the legacy share
+### `e081c58e` the legacy share
 
 - **API.** Four gas parameters give a state charge an opcode makes for new state a legacy share, the part of the charge, at most all of it, that execution gas pays before the reservoir: `SstoreSetStateLegacyShare` (a fresh slot), `CallNewAccountStateLegacyShare` (a value call's new account, taken before the forward), `SelfdestructNewAccountStateLegacyShare` (a `SELFDESTRUCT`'s new beneficiary) and `CreateStateLegacyShare` (a creation's account, before the forward).
   They are zero in every Ethereum version.
@@ -190,27 +194,52 @@ Each engine rule a patch serves sits behind a named switch with a negative contr
   Tests: `test_spend_state_with_share_takes_the_share_first` and `tests::legacy_share_*` (each of the four sites, the call's and the creation's share before the forward, the `SELFDESTRUCT` entry kept apart from the call's).
 - **Why.** `SATIN-STATE-012`: the share is the pre-Satin price less the regular cost the schedule gives the component, flat — 10,000, 25,000, 16,000 and 20,000 with Satin's prices — so a contract written for Rex keeps paying at least that in regular gas for new state with a reservoir.
   `satin_version_at` sets the four parameters from the schedule, and KeylessDeploy's steps 10 and 14 take the call's and the creation's share (`keyless.rs`).
-  No switch, as for `b11152e8`; the class's rerun sets the shares to zero.
+  No switch, as for `459c7b02`; the class's rerun sets the shares to zero.
 - **Upstream.** The share is ethereum/EIPs [#12581](https://github.com/ethereum/EIPs/pull/12581), open; nothing filed in evm2.
-- **Drop** with `b11152e8`.
+- **Drop** with `459c7b02`.
 
-### `1439255f` tests
+### `97789048` tests
 
 - **Adds** tests only: the tracker's equality and hash over every counted field and its accessors; every `Transaction` accessor of `TxEnvelope`; the validation bounds at the limit itself; EIP-3607 and the balance top-up; warming; the upfront state gas taken from the reservoir first; a delegated recipient's warm and cold delegate under EIP-2780; the message of a first frame that runs out of gas in the runtime gas phase; a creation transaction's account charge, under both give-back rules; the result's refund; and the account charges a failed call or creation gives back.
-- **Why.** A mutation run over `interpreter/gas.rs`, `ethereum/mod.rs` and the lines `b11152e8` and `3c350510` change found these paths unpinned by the crate's tests; with these tests every mutant there is caught except ones that cannot change a result (a `<` against `<=` where both arms give the same value, a field whose default is the value it is set to).
+- **Why.** A mutation run over `interpreter/gas.rs`, `ethereum/mod.rs` and the lines `459c7b02` and `e081c58e` change found these paths unpinned by the crate's tests; with these tests every mutant there is caught except ones that cannot change a result (a `<` against `<=` where both arms give the same value, a field whose default is the value it is set to).
 - **Upstream.** Those of upstream paths can be offered as they are.
 - **Drop** with the patches they test, or once upstream has them.
 
-### `390a3876` the copy-skipping constant is the no-op hooks' own
+### `7a070df7` the copy-skipping constant is the no-op hooks' own
 
 - **API.** `MessageHooks::RUNS_BEFORE` is `#[doc(hidden)]`, documented as set by `()` alone (to `false`), and `before`'s documentation says that a family overriding `before` leaves the constant at `true`.
-  The message path is as `49912d94` has it; nothing behaves differently.
+  The message path is as `39f2c8ad` has it; nothing behaves differently.
 - **Why.** With `false`, an overridden `before` is never called and nothing catches it, so a rule written there would be silently off.
   The engine's `StartHooks` overrides `before` and keeps the default.
 - **Tests.** `input_copy::the_no_op_hooks_leave_a_call_input_in_the_callers_memory` (under `()` the callee's input is the caller's memory) and `input_copy::a_family_that_keeps_the_defaults_has_a_call_input_copied`; `hooks_run_for_every_message_on_both_paths` already pins that a family with the default runs `before`.
   The `nested_enter` test's family no longer sets the constant: it overrides no `before`, and its result does not depend on it.
-- **Upstream.** Goes with `49912d94`'s proposal.
-- **Drop** with `49912d94`, or when `before` gets the message by shared reference and the constant goes.
+- **Upstream.** Goes with `39f2c8ad`'s proposal.
+- **Drop** with `39f2c8ad`, or when `before` gets the message by shared reference and the constant goes.
+
+## Inspector patches
+
+What a tracer shows is outside the Satin specification (`SATIN-OUT-017`), which needs only the outcome, gas, state, logs and read set to agree; these two settle how the node's step tracers show Satin's frames.
+The engine's inspector tests (`mega-evm2/tests/inspectors`) pin both through every tracer and inspector of the crate.
+
+### `b7a8d8dd` a child after any step
+
+- **API.** None: the geth struct logger and the Parity VM trace enter a child recorded right after any step, not only after a call or create opcode; the VM trace keeps upstream's rules for a failed step (no sub) and for excluded precompiles, which only a call opcode is matched with.
+- **Why.** The frame of a native keyless deployment runs one instruction, the engine's dispatcher at an opcode no other code runs, which starts the creation; the step traces left the creation's steps out though the inspector recorded them and every frame tracer showed the creation (`inspector_keyless_step_traces_show_the_creation`).
+  The dispatcher itself still shows as an undefined opcode, `opcode 0xc not defined` in the struct logs and `UNKNOWN(0x0C)` in the VM trace, whose `push` is empty since an undefined opcode has no stack outputs.
+- **Tests.** `custom_call` (evm2's own `CALL` instruction installed at `0x0c`: both traces show the child as after a `CALL`).
+- **Upstream.** Not yet proposed; it holds for any type family's instruction that runs a message.
+- **Drop** when upstream enters a child after any step that starts it.
+
+### `c0a91cbb` every step cost leaves the spill out
+
+- **API.** None: the JavaScript tracer's `getCost()` and `OpcodeGasInspector`'s gas per opcode leave out the state gas a step charges, the part that spills past the reservoir into the remaining gas included, as `CallTraceStep::gas_cost` (the struct logger's `gasCost`, the Parity VM trace's `cost`) already does after go-ethereum `a0cba163`.
+  All four measure a step by the remaining gas plus the spilled state gas; the opcode gas inspector nets a call or a creation of its child's spent gas less the child's spill.
+  The step's state gas stays beside the struct logger's cost as `stateGasCost`, whichever pool paid it, and a spill shows as the gas the next step starts with.
+- **Why.** Upstream counted the spill in `getCost()` and the opcode gas and left it out of the other two, so the four step tracers disagreed on the same step whenever Satin's state or history gas spilled, which it does whenever the reservoir is short.
+  The engine's tracers follow go-ethereum and upstream's struct logger; the reference counts the spill below the cap, a difference of presentation only (`inspector_spilled_sstore_costs_the_same_in_every_step_tracer`: a fresh slot costs 12,100 in all four, with its 101,440 of state and history gas beside it, below the cap and above it).
+- **Tests.** `parity::state_gas_cost::step_tracers_agree_on_a_spilled_sstore` (an empty, a half and a full reservoir) and `opcode_gas_nets_a_call_of_its_child_without_the_child_spill`.
+- **Upstream.** Not yet proposed; it makes upstream's two step-cost conventions one.
+- **Drop** when upstream leaves the spill out of `getCost()` and the opcode gas.
 
 ## Merged upstream
 
@@ -302,7 +331,7 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
 - **Compiled code's fixed offsets keep their fields.**
   The JIT addresses `EvmContext` fields by `offset_of!` and reads the remaining gas as the first word of its `gas` field; `GasTracker` and `Gas` are `#[repr(C)]` with `remaining` first.
   A field added to `GasTracker`, `Gas`, `EvmContext`, or to a struct `HostLayout` takes offsets in (`Interpreter`'s message, `Message`, `TxEnv`, `BlockEnv`) must keep those offsets right, and a change of their size or order bumps `ABI_VERSION`.
-  `f8ce987d` must leave `ABI_VERSION` one above upstream's (9 against upstream's 8): when upstream bumps it to the value the series had, as #1030 and #1046 both did, the two bumps merge without a conflict and the series' layout change loses its bump; `aa1c68ec`'s assertion does not catch that case, since the size it pins moves with the series.
+  `e527e43f` must leave `ABI_VERSION` one above upstream's (9 against upstream's 8): when upstream bumps it to the value the series had, as #1030 and #1046 both did, the two bumps merge without a conflict and the series' layout change loses its bump; `0552c051`'s assertion does not catch that case, since the size it pins moves with the series.
   Run the JIT crates' tests and the EEST JIT suite with LLVM installed, against upstream's own failures: the interpreter suites cannot see a compiled-code regression.
 - **Every `execute_prepared` calls the first-frame hook.**
   Read every `execute_prepared` upstream has (and any new one): each must call `before_initial_frame` after the transaction environment and the pre-execution changes, immediately before `prepare_initial_frame` (EIP-7702's only when its authorization charges were paid), settle the result it returns without a frame, and recompute nothing from the envelope that `PreparedTx` holds (the creation nonce is the prepared state nonce); keep `tests::before_initial_frame` covering every envelope.
@@ -316,6 +345,13 @@ Textual conflicts are the easy part; these are the checks a clean merge does not
 - **The engine restates `create_with`'s steps for a CREATE2 short of its salt.**
   `create2_short_of_salt` (`mega-evm2/src/lib.rs`) makes the steps evm2's `create_with` makes before it pops the salt, in Satin's order (`SATIN-SIZE-005`); compare it with `create_with` after a rebase, as a clean merge does not, and keep `diff/tests/create2_salt_order.rs` and the `fxk` fuzz batch passing.
   If upstream ever pops the salt after the charges, the engine's copy can go.
+- **Every precompile provider that wraps another delegates `warm_addresses`.**
+  A moved precompile's address stays warm (upstream #1068), and a wrapper that falls back to the trait's default warms the moved addresses instead; `OpPrecompiles` delegates it (`moved_precompiles_keep_their_warm_addresses`).
+- **Every step cost leaves the spilled state gas out.**
+  The tracing inspector, the JavaScript tracer and the opcode gas inspector measure a step by `remaining_excluding_state_spill()`, and the opcode gas inspector nets a child of its spent gas less its spill (`c0a91cbb`); a new step-cost reading of `remaining()` or `spent()` that merges without a conflict counts the spill again on that path.
+  Keep `parity::state_gas_cost`, `custom_call` and the engine's inspector tests passing, and re-bless the engine's golden traces only for a reviewed change.
+- **The fork's own tests need a larger stack in a debug build.**
+  Upstream's `parity::failed_frames_use_parity_labels` overflows the default 2 MiB test thread on aarch64, at upstream's base as on the series; run the fork's tests with `RUST_MIN_STACK=16777216`, on a toolchain the workspace's `rust-version` accepts.
 - **Run the negative controls, not only the gates.**
   A fix the new upstream code no longer reaches shows up as a missed control while every gate still passes; `diff/scripts/ci-local.sh` runs the sample controls, `controls.sh full` the rest.
 
