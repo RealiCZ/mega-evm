@@ -62,7 +62,7 @@ A block's pre-block sequence (`mega-evm2/src/block/pre_block.rs`, `SATIN-PBLK-00
 3. in the block in which Satin activates and no other, the check that the EIP-7997 factory holds its code hash;
 4. the deployment of the Oracle, the High-Precision Timestamp, KeylessDeploy, MegaAccessControl and MegaLimitControl, each its own state: an absent one installed, one with other code given its code (nonce, balance and storage kept), a correct one read;
 5. the registry's due-change read, and its `applyPendingChanges()` call when a change is due;
-6. the registry's deployment: version 2.0.0 left as it is, 1.0.0 migrated writing slot 13 alone, an absent account or one without code seeded from the bootstrap values (an existing account's storage cleared), other code an invalid block;
+6. the registry's deployment: version 2.0.0 left as it is, 1.0.0 migrated writing slot 13 alone, an absent account or one without code given version 2.0.0 and seeded from the bootstrap values, the seed overwriting slots 0, 1, 2, 4, 5, 6 and 13 and an existing account's nonce, balance and other storage kept (`SATIN-REG-008`), other code an invalid block;
 7. the resolution of the block's live system address from the registry's account and slot 0, committed last.
 
 No step reads the L1 block contract: a transaction reads it when it needs it (see "State and witness exports").

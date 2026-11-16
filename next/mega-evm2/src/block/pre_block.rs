@@ -37,22 +37,8 @@ use crate::{
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use evm2::{
     bytecode::Bytecode,
-    evm::{AccountInfo, PendingState, StateChangeSink, StateChangeSource},
+    evm::{AccountInfo, PendingState},
 };
-
-/// A pre-block state whose account's earlier storage is cleared before the state's own changes
-/// apply: a new registry seeded over an account without code (`SATIN-REG-008`).
-struct Wiped<'s> {
-    address: Address,
-    state: &'s PendingState,
-}
-
-impl StateChangeSource for Wiped<'_> {
-    fn visit<S: StateChangeSink>(&self, sink: &mut S) -> Result<(), S::Error> {
-        sink.storage_wipe(self.address)?;
-        self.state.visit(sink)
-    }
-}
 
 /// `info` holding `contract`'s code, its nonce, balance and the rest kept.
 fn with_code(mut info: AccountInfo, contract: &SystemContract) -> AccountInfo {
@@ -117,12 +103,8 @@ impl BlockSession<'_> {
         }
         // Step 6: the registry's deployment.
         if deploys {
-            let (state, wipe) = self.deploy_registry()?;
-            if wipe {
-                self.commit_wiping(SEQUENCER_REGISTRY, state);
-            } else {
-                self.commit_pre_block_state(state);
-            }
+            let state = self.deploy_registry()?;
+            self.commit_pre_block_state(state);
         }
         // Step 7: the live system address, committed last.
         let (address, reads) = self.resolve_system_address()?;
@@ -130,15 +112,6 @@ impl BlockSession<'_> {
         self.system_address = address;
         self.evm.ext_mut().system_address = address;
         Ok(())
-    }
-
-    /// Commits `state` as [`Self::commit_pre_block_state`] does, `address`'s earlier storage
-    /// cleared first in the session's state and in the block's change set.
-    fn commit_wiping(&mut self, address: Address, state: PendingState) {
-        let source = Wiped { address, state: &state };
-        self.evm.commit_source(&source);
-        let _ = source.visit(&mut self.changes);
-        self.pre_block_states.push(state);
     }
 
     /// The EIP-7997 factory's check (`SATIN-ACT-005`): its address must hold an account with the
@@ -187,10 +160,18 @@ impl BlockSession<'_> {
     /// version 2.0.0 is left as it is (a read-only state); version 1.0.0 is migrated in place, its
     /// code replaced and slot 13 written with the configured minimum rotation delay, every other
     /// slot, its nonce and its balance kept; an address with no account, or an account without
-    /// code, receives version 2.0.0 as a new contract, an existing account's nonce and balance
-    /// kept and its storage cleared (the second value), and its storage seeded; any other code
-    /// makes the block invalid. A read the database cannot serve is an internal error.
-    fn deploy_registry(&mut self) -> Result<(PendingState, bool), BlockError> {
+    /// code, receives version 2.0.0 and the bootstrap seed in slots 0, 1, 2, 4, 5, 6 and 13; any
+    /// other code makes the block invalid. A read the database cannot serve is an internal error.
+    ///
+    /// An existing account without code keeps its nonce, its balance and its storage
+    /// (`SATIN-REG-008`), as the five flat contracts' accounts do (`SATIN-SYSC-003`): the seed
+    /// overwrites the seven slots it names, each read for its original, so a zero seed over a
+    /// non-zero value is a write, and every other slot stays, neither read nor written. Nothing is
+    /// cleared. A block-start state holding storage in an account without code at this address is
+    /// outside the specification (`SATIN-SYSC-005`), and no earlier step of the sequence writes
+    /// one, so on a valid chain the account this branch meets holds no storage to keep. An address
+    /// with no account holds no storage: the seeded slots' originals are zero, and none is read.
+    fn deploy_registry(&mut self) -> Result<PendingState, BlockError> {
         let registry = &SEQUENCER_REGISTRY_CONTRACT;
         let failed = |slot: Option<U256>| {
             move |e: evm2::DatabaseError| {
@@ -203,10 +184,9 @@ impl BlockSession<'_> {
         let state = self.evm.state_mut();
         let info = state.account_info_untracked(&SEQUENCER_REGISTRY).map_err(failed(None))?;
         let mut out = PendingState::default();
-        let wipe = match info {
+        match info {
             Some(info) if info.code_hash == registry.code_hash => {
                 out.insert_account(SEQUENCER_REGISTRY, Some(info.clone()), Some(info));
-                false
             }
             Some(info) if info.code_hash == SEQUENCER_REGISTRY_V1_CODE_HASH => {
                 let key = registry_slot::MIN_ROTATION_DELAY;
@@ -220,7 +200,6 @@ impl BlockSession<'_> {
                 );
                 let delay = U256::from(bootstrap.min_rotation_delay());
                 out.insert_storage(SEQUENCER_REGISTRY, key, original, delay);
-                false
             }
             Some(info) if !has_no_code(&info) => {
                 return Err(BlockError::unmigratable_registry(SEQUENCER_REGISTRY, info.code_hash));
@@ -240,12 +219,18 @@ impl BlockSession<'_> {
                     (registry_slot::INITIAL_FROM_BLOCK, number),
                     (registry_slot::MIN_ROTATION_DELAY, U256::from(bootstrap.min_rotation_delay())),
                 ] {
-                    out.insert_storage(SEQUENCER_REGISTRY, key, U256::ZERO, value);
+                    let original = if existed {
+                        state
+                            .storage_slot_untracked(&SEQUENCER_REGISTRY, &key)
+                            .map_err(failed(Some(key)))?
+                    } else {
+                        U256::ZERO
+                    };
+                    out.insert_storage(SEQUENCER_REGISTRY, key, original, value);
                 }
-                existed
             }
-        };
-        Ok((out, wipe))
+        }
+        Ok(out)
     }
 
     /// Whether the registry has a role change due in this block (`SATIN-PBLK-004`), with the
