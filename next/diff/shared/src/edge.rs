@@ -372,25 +372,6 @@ fn wide_limits() -> Vec<Scenario> {
     v
 }
 
-/// `keylessDeploy(bytes, uint256)` whose `bytes` offset word is `u64::MAX` (the largest `usize` of
-/// a 64-bit host), with nothing after the two head words, and the same call whose offset points
-/// past the input: both malformed encodings, refused after the call's overhead.
-fn keyless_offsets() -> Vec<Scenario> {
-    let mut v = Vec::new();
-    for (name, offset) in
-        [("edge_keyless_offset_u64_max", u64::MAX), ("edge_keyless_offset_past_input", 0x40)]
-    {
-        let mut data = alloy_primitives::keccak256("keylessDeploy(bytes,uint256)")[..4].to_vec();
-        data.extend_from_slice(&U256::from(offset).to_be_bytes::<32>());
-        data.extend_from_slice(&U256::from(1_000_000u64).to_be_bytes::<32>());
-        let mut s = edge(name, vec![], 5_000_000, Limits::default());
-        s.to = KEYLESS;
-        s.data = data;
-        v.push(s);
-    }
-    v
-}
-
 /// A deposit (mint 10) of 5 wei to an empty recipient: its first frame's runtime gas phase cannot
 /// pay the recipient's new-account state gas at gas 150,000 (and 300,000 with a created caller),
 /// and can at 1,000,000 (control).
@@ -896,8 +877,7 @@ const KEYLESS_WITH_VALUE_SIGNER: Address =
 /// A keyless deployment whose signer is the transaction's sender (at nonce 0, which validation
 /// bumps to 1, so the creation's bump is taken back): no record of the signer's nonce is charged,
 /// and none is given back, whether the creation succeeds, reverts or halts, carries a value or the
-/// transaction a gas price. The control: the same signer at nonce 1, from another sender, whose
-/// nonce record is charged and given back.
+/// transaction a gas price.
 fn keyless_signer_is_sender() -> Vec<Scenario> {
     let mut v = Vec::new();
     for (name, tx, gas_price) in [
@@ -906,28 +886,20 @@ fn keyless_signer_is_sender() -> Vec<Scenario> {
         ("edge_keyless_signer_is_sender_halt", "halt", 0),
         ("edge_keyless_signer_is_sender_value", "value", 0),
         ("edge_keyless_signer_is_sender_gas_price", "ok", 1),
-        ("edge_keyless_signer_at_nonce_1_other_sender", "ok", 0),
     ] {
         let (raw, signer) = if tx == "value" {
             (hex::decode(KEYLESS_WITH_VALUE).unwrap(), KEYLESS_WITH_VALUE_SIGNER)
         } else {
             super::q8::keyless_tx(tx)
         };
-        let other_sender = name.ends_with("other_sender");
-        let signer_account = Account {
-            address: signer,
-            nonce: other_sender as u64,
-            balance: U256::from(ONE_ETHER),
-            ..Account::default()
-        };
+        let signer_account =
+            Account { address: signer, balance: U256::from(ONE_ETHER), ..Account::default() };
         let mut s = edge(name, vec![signer_account], 1_000_000, Limits::default());
         s.to = KEYLESS;
         s.data = super::q8::keyless_call_raw(&raw, 1_000_000);
         s.gas_price = gas_price;
-        if !other_sender {
-            s.accounts.retain(|a| a.address != super::SENDER);
-            s.sender = signer;
-        }
+        s.accounts.retain(|a| a.address != super::SENDER);
+        s.sender = signer;
         v.push(s);
     }
     v
@@ -1150,7 +1122,6 @@ pub fn all() -> Vec<Scenario> {
     v.extend(top_level_precompile());
     v.extend(salt_below_minimum());
     v.extend(wide_limits());
-    v.extend(keyless_offsets());
     v.extend(deposit_first_frame());
     v.extend(gas_check_order());
     v.extend(deposit_rules());

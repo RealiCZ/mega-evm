@@ -14,12 +14,12 @@
 //!   included (`SATIN-DEP-003`, `SATIN-ACCT-015`).
 #![allow(dead_code)]
 use super::{
-    A, ABOVE_CAP, Account, Asm, Auth, B, BELOW_CAP, C, D, EMPTY, IDENTITY, KEYLESS, LIMIT_CONTROL,
-    Limits, ORACLE, SEQUENCER_REGISTRY, Scenario, acct, funded, op, scenario, spin_after,
+    A, ABOVE_CAP, Account, Asm, Auth, B, BELOW_CAP, C, D, EMPTY, IDENTITY, LIMIT_CONTROL, Limits,
+    ORACLE, SEQUENCER_REGISTRY, Scenario, acct, funded, op, scenario, spin_after,
 };
 use crate::{
     edge::{ONE_ETHER, registry_naming},
-    q8::{keyless_call, mem_call, sel},
+    q8::{mem_call, sel},
 };
 use alloy_primitives::{Address, B256, U256, hex, keccak256};
 
@@ -82,7 +82,6 @@ pub fn all() -> Vec<Scenario> {
     v.extend(prepaid_recipient());
     v.extend(giveback_frame());
     v.extend(history_contract());
-    v.extend(keyless_balance_only());
     v.extend(oracle_immediate_caller());
     v.extend(deposit_empty_leaf());
     v
@@ -199,27 +198,6 @@ fn history_contract() -> Vec<Scenario> {
         let mut s =
             rev(name, &rules, vec![acct(A, a), contract.clone()], 1_000_000, Limits::default());
         s.limits.block_env_cap = Some(10_000);
-        v.push(s);
-    }
-    v
-}
-
-/// blocks F1: the deploy address of a keyless deployment holds a balance and no code: the
-/// deployment goes ahead.
-fn keyless_balance_only() -> Vec<Scenario> {
-    let mut v = Vec::new();
-    let rules = ["SATIN-KEY-008", "SATIN-SD-016"];
-    for (name, funded_deploy) in
-        [("rev_keyless_balance_only_destination", true), ("rev_keyless_empty_destination", false)]
-    {
-        let (data, _signer, deploy) = keyless_call("ok", 1_000_000);
-        let mut accounts = Vec::new();
-        if funded_deploy {
-            accounts.push(funded(deploy, vec![], 1));
-        }
-        let mut s = rev(name, &rules, accounts, 5_000_000, Limits::default());
-        s.to = KEYLESS;
-        s.data = data;
         v.push(s);
     }
     v

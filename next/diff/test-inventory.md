@@ -2,6 +2,7 @@
 
 Every test function of the other implementation (mega-evm `5e3f30ad`, `crates/mega-evm/tests`) is `covered` by named scenarios or a fuzz mode, `ported` into a scenario of this change (group `port`, `rev`, `blk`), a `gap` (portable, no scenario does the same yet) or `not-portable` (the scenario format cannot express it, with the reason).
 A file whose tests are not classified yet is marked `unclassified`.
+A name of the form `satin/…` is a case of the Mega EEST conformance suite, at the revision `next/mega-eest.env` pins, that replaced the scenario of this change named there before.
 
 | File | Tests | Covered | Ported | Gap | Not portable | Unclassified |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -268,7 +269,7 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `satin/equivalence.rs` | `test_an_intercepted_call_diverges_from_op_revm` | covered | edge_sweep_tx0_funded_system_v0_runs (tx to MegaAccessControl isVolatileDataAccessDisabled, answered) |
 | `satin/equivalence.rs` | `test_a_system_address_transaction_diverges_from_op_revm` | covered | edge_system_legacy_oracle_promoted |
 | `satin/equivalence.rs` | `test_the_created_deposit_caller_diverges_from_op_revm` | covered | p6_deposit_new_caller_m1, rev_deposit_caller_absent_ample |
-| `satin/equivalence.rs` | `test_a_keyless_deployment_diverges_from_op_revm` | covered | k01_ok, k12_malformed_call, k13_call_value_refused (dispatch, refused call billed the overhead) |
+| `satin/equivalence.rs` | `test_a_keyless_deployment_diverges_from_op_revm` | covered | k01_ok, satin/keyless/abi/head-63-bytes, satin/interception/keyless/transaction-value, satin/keyless/reads/value-refused (dispatch, refused call billed the overhead) |
 | `satin/equivalence.rs` | `test_the_history_ledger_is_what_satin_adds_to_every_transaction` | covered | p6_stop, p6_floor_nonzero_calldata (body and calldata history) |
 | `satin/equivalence.rs` | `test_a_crowded_salt_bucket_is_where_satin_leaves_op_revm` | covered | p6_salt_sstore_set_m2, p6_salt_sstore_set_m8 |
 | `satin/equivalence.rs` | `test_a_creation_that_destroys_itself_diverges_from_op_revm` | covered | p6_destroy_in_constructor_m1 (constructor destroys the new contract: state gas and record given back) |
@@ -476,10 +477,10 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `satin/limit_matrix/forwarding.rs` | `test_a_returned_reservoir_unwinds_the_callers_spill` | ported | port_fwd_returned_reservoir_unwinds_spill |
 | `satin/limit_matrix/keyless.rs` | `test_an_authorization_list_of_1001_new_authorities_stops_before_the_first_frame` | covered | e11_list_skipped_growth, edge_sweep_auth_*_listgrowth (a list over the growth limit is skipped and the first frame stops; at small limits, not at 1,001 authorities) |
 | `satin/limit_matrix/keyless.rs` | `test_a_fitting_list_keeps_the_authorities_when_the_recipient_stops` | ported | port_depo_list_fits_recipient_stops |
-| `satin/limit_matrix/keyless.rs` | `test_a_keyless_creation_receives_the_reservoir_share_and_a_980_budget` | ported | port_klim_980_n0_above |
+| `satin/limit_matrix/keyless.rs` | `test_a_keyless_creation_receives_the_reservoir_share_and_a_980_budget` | ported | satin/keyless/budget/fresh-slots-980 |
 | `satin/limit_matrix/keyless.rs` | `test_authorization_list_boundaries` | covered | e02-e11b (existing authority, two entries, wrong nonce, other chain, invalid signature, code skipped, clear then set, sender authority, list rules); the nonce 2^64-1 and the db-fault rows are not covered |
-| `satin/limit_matrix/keyless.rs` | `test_a_keyless_creation_from_nonce_0_stopped_in_its_initcode` | ported | port_klim_980_n0_above, port_klim_980_n0_below |
-| `satin/limit_matrix/keyless.rs` | `test_a_keyless_creation_from_nonce_1_takes_the_bump_back` | ported | port_klim_980_n1_above, port_klim_980_n1_below |
+| `satin/limit_matrix/keyless.rs` | `test_a_keyless_creation_from_nonce_0_stopped_in_its_initcode` | ported | satin/keyless/budget/fresh-slots-980 |
+| `satin/limit_matrix/keyless.rs` | `test_a_keyless_creation_from_nonce_1_takes_the_bump_back` | ported | satin/keyless/refusal/nonce-and-override |
 | `satin/limit_matrix/keyless.rs` | `test_a_keyless_constructor_that_self_destructs_answers_empty_code` | ported | port_klim_constructor_selfdestructs |
 | `satin/limit_matrix/keyless.rs` | `test_an_authority_whose_state_gas_cannot_be_paid_is_taken_back` | covered | e17_authority_charges_out_of_gas |
 | `satin/limit_matrix/keyless.rs` | `test_a_list_that_does_not_fit_is_not_the_out_of_gas_path` | ported | port_depo_list_not_fitting |
@@ -745,7 +746,7 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `satin/synthetic_frame_gas.rs` | `test_an_intercepted_answer_keeps_the_reservoir` | ported | port_synth_intercepted_remaining_1000000, port_synth_intercepted_remaining_300000000, … (8 scenarios, `port_synth_intercepted_*`) |
 | `satin/synthetic_frame_gas.rs` | `test_an_intercepted_refusal_keeps_the_reservoir` | ported | port_synth_refused_remaining_1000000, port_synth_refused_remaining_300000000, … (8 scenarios, `port_synth_refused_*`) |
 | `satin/synthetic_frame_gas.rs` | `test_a_forwarded_hint_keeps_the_reservoir` | ported | port_synth_direct_hint_300m |
-| `satin/synthetic_frame_gas.rs` | `test_the_keyless_overhead_comes_out_of_regular_gas` | covered | k01_ok, k19_above_cap, k12_malformed_call (overhead charged, refusal answered) |
+| `satin/synthetic_frame_gas.rs` | `test_the_keyless_overhead_comes_out_of_regular_gas` | covered | k01_ok, satin/keyless/deploy/with-reservoir, satin/keyless/abi/head-63-bytes (overhead charged, refusal answered) |
 | `satin/synthetic_frame_gas.rs` | `test_the_keyless_value_refusal_keeps_the_reservoir` | ported | port_synth_keyless_value_refused_300m |
 | `satin/synthetic_frame_gas.rs` | `test_a_keyless_call_below_the_overhead_runs_out_of_gas` | not-portable | internal api (frame_init with a forward below the overhead; not reachable by a transaction) |
 | `satin/system_call.rs` | `test_a_system_call_above_30m_carries_the_excess_as_reservoir` | not-portable | internal api (system call entry point) |
@@ -939,54 +940,54 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `system/dispatch.rs` | `test_a_nested_static_call_is_intercepted` | ported | port_ctl_nested_static |
 | `system/dispatch.rs` | `test_a_transaction_that_touches_no_system_contract_is_untouched` | covered | ctl_sstore and every plain scenario |
 | `system/dispatch.rs` | `test_the_contracts_without_an_interceptor_run_their_bytecode` | covered | fz mode 5 (calls to the SequencerRegistry holding its trusted code), rev_oracle_write_through_timestamp_wrapper_unnamed (High-Precision Timestamp code) |
-| `system/keyless/charges.rs` | `test_every_charge_of_a_deployment_is_accounted_for` | covered | k01_ok (below the cap), k19_above_cap (above it) |
-| `system/keyless/charges.rs` | `test_an_empty_signer_is_charged_its_account_once` | covered | k01_ok (signer absent) vs k09_value_funded_signer, k16b_signer_funded_nonce_zero |
-| `system/keyless/charges.rs` | `test_the_created_account_is_charged_only_when_the_address_is_empty` | covered | rev_keyless_balance_only_destination vs rev_keyless_empty_destination |
-| `system/keyless/charges.rs` | `test_a_refused_call_keeps_the_overhead_alone` | covered | k12_malformed_call, k13_call_value_refused, k10_nonzero_tx_nonce |
-| `system/keyless/charges.rs` | `test_a_failed_deployment_gives_the_created_account_back` | covered | k02_revert, k03_halt |
-| `system/keyless/charges.rs` | `test_the_call_pays_the_create_opcodes_regular_gas` | ported | port_kdeploy_init_max, port_kdeploy_init_over, port_kdeploy_regular_gas_empty_init, port_kdeploy_regular_gas_ret1 |
-| `system/keyless/charges.rs` | `test_gas_used_counts_the_creations_spend_before_its_refund` | ported | port_kdeploy_refund_before_gas_used |
+| `system/keyless/charges.rs` | `test_every_charge_of_a_deployment_is_accounted_for` | covered | k01_ok (below the cap), satin/keyless/deploy/with-reservoir (above it) |
+| `system/keyless/charges.rs` | `test_an_empty_signer_is_charged_its_account_once` | covered | k01_ok (signer absent) vs satin/keyless/deploy/carried-value |
+| `system/keyless/charges.rs` | `test_the_created_account_is_charged_only_when_the_address_is_empty` | covered | satin/keyless/deploy/balance-only-address vs satin/keyless/deploy/absent-signer |
+| `system/keyless/charges.rs` | `test_a_refused_call_keeps_the_overhead_alone` | covered | satin/keyless/abi/head-63-bytes, satin/interception/keyless/transaction-value, satin/keyless/reads/value-refused, satin/keyless/refusal/nonce-and-override |
+| `system/keyless/charges.rs` | `test_a_failed_deployment_gives_the_created_account_back` | covered | satin/keyless/deploy/reverts-with-data, satin/keyless/deploy/halts |
+| `system/keyless/charges.rs` | `test_the_call_pays_the_create_opcodes_regular_gas` | ported | port_kdeploy_init_max, port_kdeploy_init_over, satin/keyless/signed-gas/zero-everything, satin/keyless/deploy/empty-code, satin/keyless/deploy/absent-signer, satin/keyless/deposit/ee-byte |
+| `system/keyless/charges.rs` | `test_gas_used_counts_the_creations_spend_before_its_refund` | ported | satin/keyless/deploy/refund-not-in-gas-used |
 | `system/keyless/charges.rs` | `test_the_upfront_charges_scale_with_their_buckets` | covered | k23_salt_m8 (signer m=8, deploy address m=2) |
 | `system/keyless/charges.rs` | `test_a_failed_deployment_gives_the_created_account_back_at_its_price` | ported | port_kdeploy_failed_gives_back_at_price |
-| `system/keyless/charges.rs` | `test_a_signer_that_sends_its_own_deployment_makes_no_record_of_its_own` | covered | edge_keyless_signer_is_sender_ok/_revert/_halt/_value/_gas_price, edge_keyless_signer_at_nonce_1_other_sender |
-| `system/keyless/charges.rs` | `test_the_creation_takes_the_reservoir_share_of_what_the_call_has_left` | covered | k19_above_cap (the frames field records the creation's reservoir share) |
+| `system/keyless/charges.rs` | `test_a_signer_that_sends_its_own_deployment_makes_no_record_of_its_own` | covered | edge_keyless_signer_is_sender_ok/_revert/_halt/_value/_gas_price, satin/keyless/deploy/signer-nonce-one |
+| `system/keyless/charges.rs` | `test_the_creation_takes_the_reservoir_share_of_what_the_call_has_left` | covered | satin/keyless/deploy/with-reservoir (the frames field records the creation's reservoir share) |
 | `system/keyless/deploy.rs` | `test_keyless_deploy_create2_factory` | ported | port_kdeploy_create2_factory_below, port_kdeploy_create2_factory_above |
 | `system/keyless/deploy.rs` | `test_keyless_deploy_eip1820` | ported | port_kdeploy_registry_sized |
 | `system/keyless/deploy.rs` | `test_the_deploy_address_is_the_signers_first_creation_address` | covered | k01_ok, k1_keyless_deploy |
 | `system/keyless/deploy.rs` | `test_a_deployment_survives_a_commit` | covered | blk_keyless_twice_t1/t2 |
-| `system/keyless/deploy.rs` | `test_keyless_deploy_execution_reverted` | covered | k02_revert |
-| `system/keyless/deploy.rs` | `test_keyless_deploy_execution_halted_invalid_opcode` | covered | k03_halt |
-| `system/keyless/deploy.rs` | `test_a_constructor_out_of_gas_is_execution_halted` | ported | port_kdeploy_constructor_oog_below, port_kdeploy_constructor_oog_above |
-| `system/keyless/deploy.rs` | `test_a_halted_deployment_is_paid_for_and_spends_the_nonce` | covered | k03_halt |
+| `system/keyless/deploy.rs` | `test_keyless_deploy_execution_reverted` | covered | satin/keyless/deploy/reverts-with-data |
+| `system/keyless/deploy.rs` | `test_keyless_deploy_execution_halted_invalid_opcode` | covered | satin/keyless/deploy/halts |
+| `system/keyless/deploy.rs` | `test_a_constructor_out_of_gas_is_execution_halted` | ported | satin/keyless/reads/override-refused, satin/keyless/refusal/override-and-signer-nonce |
+| `system/keyless/deploy.rs` | `test_a_halted_deployment_is_paid_for_and_spends_the_nonce` | covered | satin/keyless/deploy/halts |
 | `system/keyless/deploy.rs` | `test_keyless_deploy_empty_initcode` | covered | k04_empty_code |
 | `system/keyless/deploy.rs` | `test_an_empty_code_deployment_leaves_the_address_deployable` | ported | port_kdeploy_empty_then_deploys_t1, port_kdeploy_empty_then_deploys_t2 |
 | `system/keyless/deploy.rs` | `test_a_deploy_address_with_a_nonce_and_no_code_collides` | covered | bd_keyless_deploy_address_with_nonce |
-| `system/keyless/deploy.rs` | `test_a_constructors_own_creation_may_return_empty_code` | ported | port_kdeploy_constructor_child_empty |
+| `system/keyless/deploy.rs` | `test_a_constructors_own_creation_may_return_empty_code` | ported | satin/keyless/deploy/inner-empty-creation |
 | `system/keyless/deploy.rs` | `test_keyless_deploy_init_code_selfdestructs` | ported | port_kdeploy_selfdestructs_to_beneficiary |
 | `system/keyless/deploy.rs` | `test_a_constructor_destroyed_through_delegatecall_deploys_no_code` | ported | port_kdeploy_destroyed_via_delegatecall |
-| `system/keyless/deploy.rs` | `test_code_starting_with_ef_is_refused` | ported | port_kdeploy_code_ef |
+| `system/keyless/deploy.rs` | `test_code_starting_with_ef_is_refused` | ported | satin/keyless/deposit/ef-byte |
 | `system/keyless/deploy.rs` | `test_code_over_the_size_limit_is_refused` | ported | port_kdeploy_code_over_limit |
-| `system/keyless/deploy.rs` | `test_keyless_deploy_with_value_transfer` | covered | k09_value_funded_signer |
+| `system/keyless/deploy.rs` | `test_keyless_deploy_with_value_transfer` | covered | satin/keyless/deploy/carried-value |
 | `system/keyless/deploy.rs` | `test_keyless_deploy_modifies_other_contract_state` | ported | port_kdeploy_modifies_other_state |
 | `system/keyless/deploy.rs` | `test_keyless_deploy_creates_child_contract` | covered | k17_child_creation |
 | `system/keyless/deploy.rs` | `test_keyless_deploy_reads_existing_contract` | ported | port_kdeploy_reads_existing |
-| `system/keyless/deploy.rs` | `test_failed_initcode_keeps_no_storage` | ported | port_kdeploy_failed_init_no_storage |
-| `system/keyless/deploy.rs` | `test_keyless_deploy_emits_logs` | covered | k05_writes_logs |
-| `system/keyless/deploy.rs` | `test_an_empty_code_deployment_keeps_no_log` | ported | port_kdeploy_empty_code_no_log |
+| `system/keyless/deploy.rs` | `test_failed_initcode_keeps_no_storage` | ported | satin/keyless/deploy/fresh-slot-reverts |
+| `system/keyless/deploy.rs` | `test_keyless_deploy_emits_logs` | covered | satin/keyless/deploy/constructor-log, satin/keyless/budget/fresh-slots-979 |
+| `system/keyless/deploy.rs` | `test_an_empty_code_deployment_keeps_no_log` | ported | satin/keyless/empty-code/with-effects |
 | `system/keyless/deploy.rs` | `test_an_empty_code_deployment_adds_no_log` | covered | k04_empty_code |
 | `system/keyless/deploy.rs` | `test_a_failed_deployment_keeps_no_log` | ported | port_kdeploy_failed_no_log |
 | `system/keyless/deploy.rs` | `test_origin_and_gasprice_follow_the_outer_transaction` | covered | k1_keyless_deploy (init stores ORIGIN, GASPRICE and CALLER); a non-zero relayer gas price is not a scenario |
 | `system/keyless/deploy.rs` | `test_beneficiary_receives_fees_on_success` | covered | edge_keyless_signer_is_sender_gas_price (priced keyless deployment, fees to the beneficiary) |
 | `system/keyless/deploy.rs` | `test_beneficiary_receives_fees_on_execution_failure` | ported | port_kdeploy_beneficiary_fees_on_failure |
-| `system/keyless/deploy.rs` | `test_keyless_deploy_not_intercepted_for_inner_calls` | covered | k18_from_a_contract_not_dispatched |
-| `system/keyless/deploy.rs` | `test_keyless_deploy_nested_inside_a_keyless_deployment_is_not_intercepted` | ported | port_kdeploy_nested_keyless |
+| `system/keyless/deploy.rs` | `test_keyless_deploy_not_intercepted_for_inner_calls` | covered | satin/keyless/contract-call/no-value |
+| `system/keyless/deploy.rs` | `test_keyless_deploy_nested_inside_a_keyless_deployment_is_not_intercepted` | ported | satin/keyless/contract-call/from-constructor |
 | `system/keyless/deploy.rs` | `test_a_deployment_is_priced_by_the_transactions_salt_env` | covered | k23_salt_m8 |
 | `system/keyless/deploy.rs` | `test_a_constructor_reaches_the_oracle_service` | ported | port_kdeploy_constructor_hint |
-| `system/keyless/deploy.rs` | `test_a_deployment_is_counted_where_it_writes` | covered | k05_writes_logs (signer nonce, created account, slot, code counted) |
+| `system/keyless/deploy.rs` | `test_a_deployment_is_counted_where_it_writes` | covered | satin/keyless/deploy/constructor-log, satin/keyless/budget/fresh-slots-979 (signer nonce, created account, slot, code counted) |
 | `system/keyless/deploy.rs` | `test_a_retry_does_not_pay_for_the_signer_again` | covered | blk_keyless_twice_t2 (the signer's account exists for the retry) |
 | `system/keyless/deploy.rs` | `test_a_failed_keyless_transaction_leaves_nothing_for_the_next` | not-portable | db fault (an error inside a keyless deployment, then EVM reuse) |
-| `system/keyless/deploy.rs` | `test_a_deployment_carrying_value_logs_the_move` | covered | k09_value_funded_signer (transfer log of the endowment), edge_keyless_signer_is_sender_value |
-| `system/keyless/deploy.rs` | `test_a_creation_is_stopped_on_its_transfer_log_before_the_value_moves` | ported | port_kdeploy_value_transfer_log_holds_records_not_log, port_kdeploy_value_transfer_log_ample |
+| `system/keyless/deploy.rs` | `test_a_deployment_carrying_value_logs_the_move` | covered | satin/keyless/deploy/carried-value (transfer log of the endowment), edge_keyless_signer_is_sender_value |
+| `system/keyless/deploy.rs` | `test_a_creation_is_stopped_on_its_transfer_log_before_the_value_moves` | ported | port_kdeploy_value_transfer_log_holds_records_not_log, satin/keyless/deploy/carried-value |
 | `system/keyless/deploy.rs` | `test_a_destruction_an_earlier_transaction_made_is_not_the_deployments` | ported | port_kdeploy_earlier_destruction_t1, port_kdeploy_earlier_destruction_t2, port_kdeploy_earlier_destruction_t3 |
 | `system/keyless/detention.rs` | `test_a_signer_that_is_the_beneficiary_detains_its_deployment` | covered | k25_signer_is_beneficiary, k25b_signer_is_beneficiary_tight |
 | `system/keyless/detention.rs` | `test_a_constructor_that_reads_volatile_data_is_held_to_the_cap` | covered | k06_volatile_detained, k06b_volatile_crossing (constructor reads NUMBER under a cap) |
@@ -1001,24 +1002,24 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `system/keyless/detention.rs` | `test_a_failed_deployment_keeps_the_reads_its_creation_made` | ported | port_kdet_ctor_timestamp_empty_plain, port_kdet_ctor_timestamp_empty_capped, port_kdet_ctor_timestamp_empty_as_beneficiary |
 | `system/keyless/detention.rs` | `test_a_deployment_another_limit_stops_keeps_the_reads_its_creation_made` | ported | port_kdet_ctor_timestamp_then_fill_no_room_plain, port_kdet_ctor_timestamp_then_fill_no_room_capped, port_kdet_ctor_timestamp_then_fill_no_room_as_beneficiary |
 | `system/keyless/differential.rs` | `test_keyless_differential_record` | not-portable | snapshot (digest of a four-mode inspector record of keyless scenarios) |
-| `system/keyless/dispatch.rs` | `test_a_keyless_deploy_transaction_pays_the_overhead` | covered | k12_malformed_call |
-| `system/keyless/dispatch.rs` | `test_a_value_bearing_call_is_refused` | covered | k13_call_value_refused, k2_keyless_with_value_refused |
-| `system/keyless/dispatch.rs` | `test_a_call_from_a_contract_is_not_dispatched` | covered | k18_from_a_contract_not_dispatched |
-| `system/keyless/dispatch.rs` | `test_an_unknown_selector_is_not_dispatched` | ported | port_kframe_not_dispatched_unknown, port_kframe_not_dispatched_three_bytes |
-| `system/keyless/dispatch.rs` | `test_a_call_that_cannot_pay_the_overhead_runs_out_of_gas` | covered | k20_overhead_out_of_gas |
-| `system/keyless/dispatch.rs` | `test_the_overhead_does_not_depend_on_the_payload` | covered | k12_malformed_call, k24_not_preeip155, edge_keyless_offset_u64_max, edge_keyless_offset_past_input (refused payloads, one overhead) |
-| `system/keyless/dispatch.rs` | `test_a_truncated_payload_is_still_dispatched` | covered | k12_malformed_call (calldata truncated to 40 bytes) |
+| `system/keyless/dispatch.rs` | `test_a_keyless_deploy_transaction_pays_the_overhead` | covered | satin/keyless/abi/head-63-bytes |
+| `system/keyless/dispatch.rs` | `test_a_value_bearing_call_is_refused` | covered | satin/interception/keyless/transaction-value, satin/keyless/reads/value-refused, k2_keyless_with_value_refused |
+| `system/keyless/dispatch.rs` | `test_a_call_from_a_contract_is_not_dispatched` | covered | satin/keyless/contract-call/no-value |
+| `system/keyless/dispatch.rs` | `test_an_unknown_selector_is_not_dispatched` | ported | satin/keyless/recognition/unknown-selector, port_kframe_not_dispatched_three_bytes |
+| `system/keyless/dispatch.rs` | `test_a_call_that_cannot_pay_the_overhead_runs_out_of_gas` | covered | satin/keyless/reads/overhead-unpaid |
+| `system/keyless/dispatch.rs` | `test_the_overhead_does_not_depend_on_the_payload` | covered | satin/keyless/abi/head-63-bytes, satin/keyless/refusal/chain-id, satin/keyless/abi/offset-2-64-minus-1, satin/keyless/recognition/one-byte-short (refused payloads, one overhead) |
+| `system/keyless/dispatch.rs` | `test_a_truncated_payload_is_still_dispatched` | covered | satin/keyless/abi/head-63-bytes (calldata truncated to 40 bytes) |
 | `system/keyless/frame.rs` | `test_the_call_is_a_frame_on_revms_stack` | not-portable | internal api (drives revm's frame loop by hand) |
-| `system/keyless/frame.rs` | `test_the_inspector_sees_one_call_frame_in_which_nothing_runs` | covered | k01_ok, k12_malformed_call (the frames field: one call frame, the creation its child) |
-| `system/keyless/frame.rs` | `test_the_contracts_bytecode_never_runs_for_a_dispatched_call` | ported | port_kframe_bytecode_not_run_dispatched, port_kframe_bytecode_not_run_refused, port_kframe_bytecode_runs_other_selector, port_kframe_contract_call_not_dispatched |
+| `system/keyless/frame.rs` | `test_the_inspector_sees_one_call_frame_in_which_nothing_runs` | covered | k01_ok, satin/keyless/abi/head-63-bytes (the frames field: one call frame, the creation its child) |
+| `system/keyless/frame.rs` | `test_the_contracts_bytecode_never_runs_for_a_dispatched_call` | ported | satin/keyless/recognition/held-code-recognized, satin/keyless/reads/override-refused, satin/keyless/recognition/held-code-other-selector, satin/keyless/contract-call/no-value, satin/keyless/recognition/ordinary-contract |
 | `system/keyless/frame.rs` | `test_a_call_is_dispatched_where_the_state_holds_no_contract_code` | covered | k01_ok (no code at the KeylessDeploy address) |
 | `system/keyless/frame.rs` | `test_a_call_where_the_state_holds_no_contract_code_commits_nothing_for_it` | covered | k01_ok (the absent contract account is not in the changed accounts) |
-| `system/keyless/frame.rs` | `test_a_call_carrying_value_is_refused_before_its_start_is_counted` | ported | port_kframe_value_refused_holds_body, port_kframe_value_refused_ample |
-| `system/keyless/frame.rs` | `test_the_call_touches_the_contract_as_any_call_does` | ported | port_kframe_touches_contract |
+| `system/keyless/frame.rs` | `test_a_call_carrying_value_is_refused_before_its_start_is_counted` | ported | port_kframe_value_refused_holds_body, satin/interception/keyless/transaction-value, satin/keyless/reads/value-refused |
+| `system/keyless/frame.rs` | `test_the_call_touches_the_contract_as_any_call_does` | ported | satin/keyless/recognition/held-code-recognized |
 | `system/keyless/interface.rs` | `test_the_interface_declares_exactly_the_documented_errors` | not-portable | internal api (IKeylessDeploy errors against the spec page) |
-| `system/keyless/inspector.rs` | `test_the_inspector_sees_the_call_and_the_creation_it_starts` | covered | k01_ok, k05_writes_logs (the frames field: the call, then the creation one level below) |
-| `system/keyless/inspector.rs` | `test_a_refused_call_is_seen_as_a_call` | covered | k12_malformed_call, k13_call_value_refused (frames: one call, no creation) |
-| `system/keyless/inspector.rs` | `test_a_failed_deployment_ends_as_a_revert_in_the_trace` | covered | k02_revert (frames: the creation reverts, the call succeeds) |
+| `system/keyless/inspector.rs` | `test_the_inspector_sees_the_call_and_the_creation_it_starts` | covered | k01_ok, satin/keyless/deploy/constructor-log, satin/keyless/budget/fresh-slots-979 (the frames field: the call, then the creation one level below) |
+| `system/keyless/inspector.rs` | `test_a_refused_call_is_seen_as_a_call` | covered | satin/keyless/abi/head-63-bytes, satin/interception/keyless/transaction-value, satin/keyless/reads/value-refused (frames: one call, no creation) |
+| `system/keyless/inspector.rs` | `test_a_failed_deployment_ends_as_a_revert_in_the_trace` | covered | satin/keyless/deploy/reverts-with-data (frames: the creation reverts, the call succeeds) |
 | `system/keyless/inspector.rs` | `test_a_creation_an_inspector_answers_keeps_what_its_start_was_charged` | not-portable | other: a custom inspector that answers the creation |
 | `system/keyless/inspector.rs` | `test_an_answered_creation_gives_the_signers_account_back_at_its_price` | not-portable | other: a custom inspector that answers every creation with a revert |
 | `system/keyless/inspector.rs` | `test_a_rejected_transaction_is_seen_as_nothing` | ported | port_kframe_rejected_tx |
@@ -1031,58 +1032,58 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `system/keyless/limits.rs` | `test_the_creations_start_crossing_the_limit_stops_the_creation` | ported | port_klim_start_crossing |
 | `system/keyless/limits.rs` | `test_the_signers_record_can_put_the_call_over_its_budget` | ported | port_klim_signer_record_budget_0, port_klim_signer_record_budget_20, port_klim_signer_record_budget_40, port_klim_signer_record_budget_80 |
 | `system/keyless/limits.rs` | `test_a_hint_the_creation_sent_leaves_the_signers_record_over_the_transaction_limit` | ported | port_klim_hint_then_fail_0, port_klim_hint_then_fail_40, port_klim_hint_then_fail_400 |
-| `system/keyless/limits.rs` | `test_a_failure_from_nonce_one_leaves_the_call_within_its_budget` | ported | port_klim_980_n1_above, port_klim_980_n1_below, … (6 scenarios) |
+| `system/keyless/limits.rs` | `test_a_failure_from_nonce_one_leaves_the_call_within_its_budget` | ported | satin/keyless/refusal/nonce-and-override, … (6 scenarios) |
 | `system/keyless/limits.rs` | `test_a_new_signer_and_its_deploy_address_are_state_growth` | ported | port_klim_growth_8, port_klim_growth_9, port_klim_growth_8_existing, port_klim_growth_9_existing |
-| `system/keyless/limits.rs` | `test_a_deployment_within_every_limit_deploys` | covered | k01_ok, k05_writes_logs (default limits) |
-| `system/keyless/limits.rs` | `test_a_refusal_after_the_charges_gives_the_reservoir_back` | ported | port_klim_refusal_gives_back_250000000, port_klim_refusal_gives_back_300000000, port_klim_refusal_gives_back_400000000 |
-| `system/keyless/limits.rs` | `test_a_refusal_after_the_creations_charges_gives_the_reservoir_back` | ported | port_klim_refusal_gives_back_250000000, port_klim_refusal_gives_back_300000000, port_klim_refusal_gives_back_400000000 |
-| `system/keyless/limits.rs` | `test_the_unspent_forward_comes_back_on_success_and_revert_alike` | covered | k01_ok, k02_revert (below the cap), k19_above_cap |
+| `system/keyless/limits.rs` | `test_a_deployment_within_every_limit_deploys` | covered | k01_ok, satin/keyless/deploy/constructor-log, satin/keyless/budget/fresh-slots-979 (default limits) |
+| `system/keyless/limits.rs` | `test_a_refusal_after_the_charges_gives_the_reservoir_back` | ported | satin/keyless/deploy/with-reservoir, satin/keyless/reservoir/legacy-shares-from-regular |
+| `system/keyless/limits.rs` | `test_a_refusal_after_the_creations_charges_gives_the_reservoir_back` | ported | satin/keyless/deploy/with-reservoir, satin/keyless/reservoir/legacy-shares-from-regular |
+| `system/keyless/limits.rs` | `test_the_unspent_forward_comes_back_on_success_and_revert_alike` | covered | k01_ok, satin/keyless/deploy/reverts-with-data (below the cap), satin/keyless/deploy/with-reservoir |
 | `system/keyless/limits.rs` | `test_every_limit_stops_a_deployment_from_either_nonce_at_either_tier` | ported | port_klim_every_data_n0_below, port_klim_every_data_n0_above, … (16 scenarios, `port_klim_every_*`) |
 | `system/keyless/limits.rs` | `test_a_deployment_is_counted_but_not_stopped_under_the_exemption` | not-portable | internal api (keyless deployment run as a system call) |
-| `system/keyless/precedence.rs` | `test_a_call_two_rules_refuse_reports_the_first_the_legacy_engine_checked` | ported | port_kprec_two_rules_nonce_and_address_5m, port_kprec_two_rules_nonce_and_address_300m, … (6 scenarios, `port_kprec_two_rules_*`) |
-| `system/keyless/precedence.rs` | `test_a_value_bearing_call_that_does_not_decode_is_refused_for_the_value` | ported | port_kprec_value_not_decoding, port_kprec_value_bad_tx |
-| `system/keyless/precedence.rs` | `test_the_signers_account_and_the_forward_come_before_the_address_and_the_balance` | ported | port_kprec_forward_first_below_occupied, port_kprec_forward_first_below_plain |
-| `system/keyless/precedence.rs` | `test_the_forward_comes_before_the_address_and_the_balance_above_the_cap` | ported | port_kprec_forward_first_above_occupied, port_kprec_forward_first_above_plain |
-| `system/keyless/precedence.rs` | `test_the_creations_charges_can_refuse_a_call_no_rule_refuses` | ported | port_kprec_creation_charges_140000, port_kprec_creation_charges_160000, … (6 scenarios, `port_kprec_creation_charges_*`) |
+| `system/keyless/precedence.rs` | `test_a_call_two_rules_refuse_reports_the_first_the_legacy_engine_checked` | ported | satin/keyless/refusal/signer-nonce-two, satin/keyless/refusal/override-and-signer-nonce, … (6 scenarios, `port_kprec_two_rules_*`) |
+| `system/keyless/precedence.rs` | `test_a_value_bearing_call_that_does_not_decode_is_refused_for_the_value` | ported | port_kprec_value_not_decoding, satin/interception/keyless/transaction-value, satin/keyless/reads/value-refused |
+| `system/keyless/precedence.rs` | `test_the_signers_account_and_the_forward_come_before_the_address_and_the_balance` | ported | satin/keyless/refusal/step-11-before-taken, satin/keyless/halt/step-10-one-short, satin/keyless/deploy/with-reservoir, satin/keyless/refusal/taken-and-unfunded |
+| `system/keyless/precedence.rs` | `test_the_forward_comes_before_the_address_and_the_balance_above_the_cap` | ported | satin/keyless/refusal/step-11-before-taken, satin/keyless/halt/step-10-one-short, satin/keyless/deploy/with-reservoir, satin/keyless/refusal/taken-and-unfunded |
+| `system/keyless/precedence.rs` | `test_the_creations_charges_can_refuse_a_call_no_rule_refuses` | ported | satin/keyless/halt/step-14-one-short, satin/keyless/refusal/step-15-one-short, satin/keyless/refusal/step-11-one-short, … (6 scenarios, `port_kprec_creation_charges_*`) |
 | `system/keyless/precedence.rs` | `test_an_out_of_gas_at_the_creations_charges_consumes_the_regular_gas_alone` | ported | port_kprec_oog_creation_absent_30000, port_kprec_oog_creation_one_wei_30000, … (12 scenarios, `port_kprec_oog_creation_*`) |
-| `system/keyless/rules.rs` | `test_keyless_deploy_gas_limit_too_low` | covered | k11_override_below_tx_gas |
-| `system/keyless/rules.rs` | `test_keyless_deploy_gas_limit_exactly_equal` | ported | port_krule_override_equals_signed |
-| `system/keyless/rules.rs` | `test_a_forward_capped_below_the_signed_gas_limit_is_refused` | ported | port_krule_forward_150000, port_krule_forward_200000, port_krule_forward_250000 |
-| `system/keyless/rules.rs` | `test_a_forward_at_the_signed_gas_limit_deploys` | ported | port_krule_forward_300000, port_krule_forward_400000 |
-| `system/keyless/rules.rs` | `test_the_signers_account_can_take_the_forward_below_the_signed_gas_limit` | ported | port_krule_forward_absent_signer_150000, port_krule_forward_absent_signer_200000, … (5 scenarios, `port_krule_forward_absent_signer_*`) |
+| `system/keyless/rules.rs` | `test_keyless_deploy_gas_limit_too_low` | covered | satin/keyless/reads/override-refused |
+| `system/keyless/rules.rs` | `test_keyless_deploy_gas_limit_exactly_equal` | ported | satin/keyless/signed-gas/zero-everything, satin/keyless/refusal/override-and-signer-nonce |
+| `system/keyless/rules.rs` | `test_a_forward_capped_below_the_signed_gas_limit_is_refused` | ported | satin/keyless/halt/step-10-one-short, satin/keyless/refusal/step-11-one-short, satin/keyless/refusal/step-15-one-short, satin/keyless/deploy/forward-at-signed-gas, satin/keyless/deploy/carried-value |
+| `system/keyless/rules.rs` | `test_a_forward_at_the_signed_gas_limit_deploys` | ported | satin/keyless/halt/step-10-one-short, satin/keyless/refusal/step-11-one-short, satin/keyless/refusal/step-15-one-short, satin/keyless/deploy/forward-at-signed-gas, satin/keyless/deploy/carried-value |
+| `system/keyless/rules.rs` | `test_the_signers_account_can_take_the_forward_below_the_signed_gas_limit` | ported | satin/keyless/halt/step-10-one-short, satin/keyless/refusal/step-11-one-short, satin/keyless/refusal/step-15-one-short, satin/keyless/deploy/forward-at-signed-gas, satin/keyless/deploy/carried-value, … (5 scenarios, `port_krule_forward_absent_signer_*`) |
 | `system/keyless/rules.rs` | `test_keyless_deploy_invalid_signature` | ported | port_krule_r_over_order |
-| `system/keyless/rules.rs` | `test_keyless_deploy_rejects_corrupted_signature` | ported | port_krule_r_zero |
-| `system/keyless/rules.rs` | `test_keyless_deploy_modified_s_changes_signer` | ported | port_krule_modified_s |
-| `system/keyless/rules.rs` | `test_keyless_deploy_malformed_encoding` | covered | k12_malformed_call, edge_keyless_offset_u64_max |
-| `system/keyless/rules.rs` | `test_keyless_deploy_rejects_eip2718_typed_envelope` | ported | port_krule_typed_envelope |
-| `system/keyless/rules.rs` | `test_keyless_deploy_not_contract_creation` | ported | port_krule_not_creation |
-| `system/keyless/rules.rs` | `test_keyless_deploy_not_pre_eip155` | covered | k24_not_preeip155 |
-| `system/keyless/rules.rs` | `test_keyless_deploy_non_zero_tx_nonce` | covered | k10_nonzero_tx_nonce |
+| `system/keyless/rules.rs` | `test_keyless_deploy_rejects_corrupted_signature` | ported | satin/keyless/signature/r-zero |
+| `system/keyless/rules.rs` | `test_keyless_deploy_modified_s_changes_signer` | ported | satin/keyless/deploy/high-s |
+| `system/keyless/rules.rs` | `test_keyless_deploy_malformed_encoding` | covered | satin/keyless/abi/head-63-bytes, satin/keyless/abi/offset-2-64-minus-1 |
+| `system/keyless/rules.rs` | `test_keyless_deploy_rejects_eip2718_typed_envelope` | ported | satin/keyless/recognition/unpadded-bytes, satin/keyless/recognition/offset-into-head, satin/keyless/rlp/trailing-byte |
+| `system/keyless/rules.rs` | `test_keyless_deploy_not_contract_creation` | ported | satin/keyless/refusal/to-and-chain-id |
+| `system/keyless/rules.rs` | `test_keyless_deploy_not_pre_eip155` | covered | satin/keyless/refusal/chain-id |
+| `system/keyless/rules.rs` | `test_keyless_deploy_non_zero_tx_nonce` | covered | satin/keyless/refusal/nonce-and-override |
 | `system/keyless/rules.rs` | `test_init_code_over_the_limit_is_refused` | ported | port_krule_init_over_5m |
 | `system/keyless/rules.rs` | `test_init_code_at_the_limit_is_admitted` | ported | port_krule_init_max_5m |
-| `system/keyless/rules.rs` | `test_keyless_deploy_signer_nonce_too_high` | covered | k15_signer_nonce_too_high |
+| `system/keyless/rules.rs` | `test_keyless_deploy_signer_nonce_too_high` | covered | satin/keyless/refusal/signer-nonce-two |
 | `system/keyless/rules.rs` | `test_failing_attempts_by_anybody_leave_the_address_deployable` | ported | port_krule_failing_attempts_t1, port_krule_failing_attempts_t2, port_krule_failing_attempts_t3 |
 | `system/keyless/rules.rs` | `test_a_resubmission_after_failures_and_a_deployment_finds_the_address_taken` | covered | blk_keyless_twice_t2 (ContractAlreadyExists on the resubmission) |
-| `system/keyless/rules.rs` | `test_a_success_from_nonce_one_leaves_the_nonce_at_one` | covered | edge_keyless_signer_at_nonce_1_other_sender, k16_signer_nonce_one_taken_back |
-| `system/keyless/rules.rs` | `test_a_failure_from_nonce_one_keeps_no_record_of_the_signer` | ported | port_krule_nonce_one_revert |
-| `system/keyless/rules.rs` | `test_every_way_a_deployment_from_nonce_one_fails_leaves_the_nonce_at_one` | ported | port_krule_nonce_one_revert, port_krule_nonce_one_halt, port_krule_nonce_one_empty, port_krule_nonce_one_stopped_at_start |
+| `system/keyless/rules.rs` | `test_a_success_from_nonce_one_leaves_the_nonce_at_one` | covered | satin/keyless/deploy/signer-nonce-one, k16_signer_nonce_one_taken_back |
+| `system/keyless/rules.rs` | `test_a_failure_from_nonce_one_keeps_no_record_of_the_signer` | ported | satin/keyless/refusal/nonce-and-override |
+| `system/keyless/rules.rs` | `test_every_way_a_deployment_from_nonce_one_fails_leaves_the_nonce_at_one` | ported | satin/keyless/refusal/nonce-and-override, port_krule_nonce_one_stopped_at_start |
 | `system/keyless/rules.rs` | `test_a_signer_that_sends_its_failing_deployment_ends_at_nonce_one` | covered | edge_keyless_signer_is_sender_revert, edge_keyless_signer_is_sender_halt |
-| `system/keyless/rules.rs` | `test_a_signer_with_code_is_refused` | covered | k16c_signer_has_code, port_keyless_signer_code_3607_on |
+| `system/keyless/rules.rs` | `test_a_signer_with_code_is_refused` | covered | satin/keyless/refusal/signer-has-code, port_keyless_signer_code_3607_on |
 | `system/keyless/rules.rs` | `test_disabling_eip3607_disables_the_signer_code_rule` | ported | port_keyless_signer_code_3607_on, port_keyless_signer_code_3607_off |
 | `system/keyless/rules.rs` | `test_a_disabled_eip3607_reads_no_signer_code` | covered | port_keyless_signer_code_3607_off (the read set holds no signer code) |
 | `system/keyless/rules.rs` | `test_a_delegated_signer_deploys` | covered | port_keyless_signer_delegated |
-| `system/keyless/rules.rs` | `test_nonces_a_delegated_signer_spends_in_its_deployment_stay_spent` | ported | port_krule_delegated_signer_creates_twice |
-| `system/keyless/rules.rs` | `test_a_delegated_signer_whose_creation_reverts_keeps_every_bump` | ported | port_krule_delegated_signer_reverting_create |
-| `system/keyless/rules.rs` | `test_keyless_deploy_contract_already_exists` | covered | k14_contract_already_exists |
+| `system/keyless/rules.rs` | `test_nonces_a_delegated_signer_spends_in_its_deployment_stay_spent` | ported | satin/keyless/nonce-rule/delegate-spends-two |
+| `system/keyless/rules.rs` | `test_a_delegated_signer_whose_creation_reverts_keeps_every_bump` | ported | satin/keyless/nonce-rule/delegate-spends-one-failed |
+| `system/keyless/rules.rs` | `test_keyless_deploy_contract_already_exists` | covered | satin/keyless/refusal/taken-and-unfunded |
 | `system/keyless/rules.rs` | `test_keyless_deploy_twice_fails_second_time` | covered | blk_keyless_twice_t1/t2 |
-| `system/keyless/rules.rs` | `test_keyless_deploy_insufficient_balance_zero` | covered | k08_value_unfunded_signer |
-| `system/keyless/rules.rs` | `test_keyless_deploy_insufficient_balance_partial` | ported | port_krule_balance_partial |
-| `system/keyless/rules.rs` | `test_keyless_deploy_balance_exactly_sufficient` | ported | port_krule_balance_exact |
+| `system/keyless/rules.rs` | `test_keyless_deploy_insufficient_balance_zero` | covered | satin/keyless/refusal/insufficient-balance |
+| `system/keyless/rules.rs` | `test_keyless_deploy_insufficient_balance_partial` | ported | satin/keyless/refusal/insufficient-balance, satin/keyless/deploy/carried-value |
+| `system/keyless/rules.rs` | `test_keyless_deploy_balance_exactly_sufficient` | ported | satin/keyless/deploy/carried-value |
 | `system/keyless/rules.rs` | `test_a_signer_with_nothing_deploys_what_carries_no_value` | covered | k01_ok (absent signer deploys) |
-| `system/keyless/rules.rs` | `test_a_call_below_the_overhead_reads_nothing` | covered | k20_overhead_out_of_gas (read set without the signer) |
-| `system/keyless/rules.rs` | `test_a_call_that_cannot_pay_the_signers_account_runs_out_of_gas` | ported | port_krule_cannot_pay_signer_account_60000, port_krule_cannot_pay_signer_account_80000, … (5 scenarios, `port_krule_cannot_pay_signer_account_*`) |
-| `system/keyless/rules.rs` | `test_a_call_refused_after_its_charges_keeps_their_regular_gas_alone` | ported | port_krule_refused_after_charges_150000, port_krule_refused_after_charges_170000, … (5 scenarios, `port_krule_refused_after_charges_*`) |
-| `system/keyless/rules.rs` | `test_the_signers_account_is_charged_exactly_when_its_nonce_is_spent` | covered | k13_call_value_refused, k10_nonzero_tx_nonce (refused: no charge) vs k02_revert, k03_halt (failed at run time: charged) |
+| `system/keyless/rules.rs` | `test_a_call_below_the_overhead_reads_nothing` | covered | satin/keyless/reads/overhead-unpaid (read set without the signer) |
+| `system/keyless/rules.rs` | `test_a_call_that_cannot_pay_the_signers_account_runs_out_of_gas` | ported | port_krule_cannot_pay_signer_account_60000, satin/keyless/reads/overhead-unpaid, satin/keyless/halt/step-10-one-short, satin/keyless/refusal/step-10-paid-exactly, … (5 scenarios, `port_krule_cannot_pay_signer_account_*`) |
+| `system/keyless/rules.rs` | `test_a_call_refused_after_its_charges_keeps_their_regular_gas_alone` | ported | satin/keyless/halt/step-14-one-short, satin/keyless/refusal/step-14-paid-exactly, … (5 scenarios, `port_krule_refused_after_charges_*`) |
+| `system/keyless/rules.rs` | `test_the_signers_account_is_charged_exactly_when_its_nonce_is_spent` | covered | satin/interception/keyless/transaction-value, satin/keyless/reads/value-refused, satin/keyless/refusal/nonce-and-override (refused: no charge) vs satin/keyless/deploy/reverts-with-data, satin/keyless/deploy/halts (failed at run time: charged) |
 | `system/keyless/rules.rs` | `test_a_failed_read_of_the_deploy_address_fails_the_transaction` | not-portable | db fault (the deploy address's read) |
 | `system/keyless/rules.rs` | `test_the_occupancy_read_needs_no_code` | not-portable | db fault (a database missing the deploy address's bytecode) |
 | `system/keyless/rules.rs` | `test_a_failed_read_of_the_signer_fails_the_transaction` | not-portable | db fault (the signer's read) |
@@ -1376,7 +1377,7 @@ A file whose tests are not classified yet is marked `unclassified`.
 | `tracers/scenarios.rs` | `test_create_deploys_runtime_code` | covered | p6_salt_code_deposit_m1 (creation tx depositing runtime; tracer snapshots not portable) |
 | `tracers/scenarios.rs` | `test_nested_call_inner_reverts` | covered | s3_value_call_reverting_child_res, p6_history_child_reverts (callee writes and logs then reverts, caller logs; tracer snapshots not portable) |
 | `tracers/scenarios.rs` | `test_keyless_deploy_succeeds` | covered | k01_ok (tracer snapshots not portable) |
-| `tracers/scenarios.rs` | `test_keyless_deploy_refused` | covered | k08_value_unfunded_signer (tracer snapshots not portable) |
+| `tracers/scenarios.rs` | `test_keyless_deploy_refused` | covered | satin/keyless/refusal/insufficient-balance (tracer snapshots not portable) |
 | `tracers/scenarios.rs` | `test_data_size_limit_stops_the_first_frame_at_its_start` | ported | port_trace_first_frame_start |
 | `tracers/scenarios.rs` | `test_data_size_limit_stop_is_caught_by_the_parent` | ported | port_trace_child_log_tx_limit |
 | `tracers/scenarios.rs` | `test_frame_budget_reverts_the_child_alone` | ported | port_trace_child_log_budget |

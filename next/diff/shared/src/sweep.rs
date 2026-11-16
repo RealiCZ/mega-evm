@@ -396,7 +396,9 @@ fn authorization_list(s: Sender, t: Target, value: u64, p: AuthPoint) -> Scenari
 }
 
 /// Every keyless cell: sender × value × signer state × point (the intrinsic gas with the body's
-/// history, the start record of a value, gas to run).
+/// history, the start record of a value, gas to run). A funded sender's call with gas to run is
+/// the Mega EEST keyless cases' (a deployment from each signer state, the value refused), so its
+/// cells stop at the start record.
 pub fn keyless() -> Vec<Scenario> {
     let mut v = Vec::new();
     let (data, signer, _) = super::q8::keyless_call("ok", 1_000_000);
@@ -416,7 +418,9 @@ pub fn keyless() -> Vec<Scenario> {
                 if start > 0 {
                     points.push(("start", i + history + start - 1));
                 }
-                points.push(("runs", 2_000_000));
+                if s != Sender::Funded {
+                    points.push(("runs", 2_000_000));
+                }
                 for (point, gas) in points {
                     let from = match (signer_state, s) {
                         ("sender", _) => signer,

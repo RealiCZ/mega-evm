@@ -272,23 +272,17 @@ fn refusals() -> Vec<Scenario> {
 }
 
 /// A `keylessDeploy` call whose arguments do not decode (an offset past the input) is not a
-/// deployment: it runs KeylessDeploy's code (none here) and pays no overhead, with value or not.
+/// deployment: it runs KeylessDeploy's code (none here) and pays no overhead, here carrying value.
 fn keyless() -> Vec<Scenario> {
     let rules = &["SATIN-ICPT-006", "SATIN-KEY-005"];
     let mut input = sel("keylessDeploy(bytes,uint256)").to_vec();
     input.extend_from_slice(&U256::from(0x40).to_be_bytes::<32>());
     input.extend_from_slice(&U256::from(1_000_000u64).to_be_bytes::<32>());
-    let mut v = Vec::new();
-    for (name, value) in
-        [("par_keyless_undecodable_arguments", 0u64), ("par_keyless_undecodable_with_value", 1)]
-    {
-        let mut s = par(name, rules, vec![], BELOW_CAP);
-        s.to = KEYLESS;
-        s.data = input.clone();
-        s.value = U256::from(value);
-        v.push(s);
-    }
-    v
+    let mut s = par("par_keyless_undecodable_with_value", rules, vec![], BELOW_CAP);
+    s.to = KEYLESS;
+    s.data = input;
+    s.value = U256::from(1u64);
+    vec![s]
 }
 
 /// A `sendHint` call carrying value is admitted, forwarded and counted (its bytes on the

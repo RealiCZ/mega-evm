@@ -4,7 +4,7 @@
 //! [`crate::port_keyless_txs`].
 #![allow(dead_code)]
 use super::{
-    A, Account, Asm, B, C, KEYLESS, LIMIT_CONTROL, ORACLE, Scenario, acct, block, funded, op, pp::*,
+    A, Account, Asm, B, KEYLESS, LIMIT_CONTROL, ORACLE, Scenario, acct, block, funded, op, pp::*,
 };
 use crate::{
     port_keyless_txs::{BIG, KTXS},
@@ -79,26 +79,11 @@ fn deploys() -> Vec<Scenario> {
         20_000_000,
     );
     v.push(s);
-    // the call pays the CREATE opcode's regular gas: init code of the maximum size and none
+    // the call pays the CREATE opcode's regular gas: init code of the maximum size and one byte
+    // over
     for name in ["init_max", "init_over"] {
         let (raw, _) = big(name);
         v.push(kl(format!("port_kdeploy_{name}"), &R_KEY, &raw, 5_000_000, 300_000_000));
-    }
-    for (tag, tx) in [("empty_init", "returns_empty"), ("ret1", "noop_ret1")] {
-        let (s, _) =
-            kt(format!("port_kdeploy_regular_gas_{tag}"), &R_KEY, tx, 1_000_000, 20_000_000);
-        v.push(s);
-    }
-    // gas used counts the creation's spend before its refund
-    {
-        let (s, _) = kt(
-            "port_kdeploy_refund_before_gas_used".to_string(),
-            &R_KEY,
-            "refund",
-            1_000_000,
-            20_000_000,
-        );
-        v.push(s);
     }
     // a failed deployment gives the created account back at its price (SALT on both)
     {
@@ -112,11 +97,6 @@ fn deploys() -> Vec<Scenario> {
         );
         s.salt = vec![(signer.create(0), None, 8), (signer, None, 2)];
         v.push(s);
-    }
-    // a constructor out of gas is an execution halt, below and above the cap
-    for (tag, gas) in [("below", 20_000_000u64), ("above", 300_000_000)] {
-        let (raw, _) = keyless_tx("loop");
-        v.push(kl(format!("port_kdeploy_constructor_oog_{tag}"), &R_KEY, &raw, 100_000, gas));
     }
     // an empty-code deployment leaves the address deployable (a block of two)
     {
@@ -135,19 +115,14 @@ fn deploys() -> Vec<Scenario> {
             })],
         ));
     }
-    // the constructor's own creation may return empty code; an init that destroys itself
+    // an init that destroys itself, and constructors that touch other accounts or code
     for (name, tx, value) in [
-        ("port_kdeploy_constructor_child_empty", "child_empty", 0u64),
-        ("port_kdeploy_selfdestructs_to_beneficiary", "selfdestruct_beneficiary", 5),
+        ("port_kdeploy_selfdestructs_to_beneficiary", "selfdestruct_beneficiary", 5u64),
         ("port_kdeploy_destroyed_via_delegatecall", "destroyed_delegate", 0),
-        ("port_kdeploy_code_ef", "ef_code", 0),
         ("port_kdeploy_code_over_limit", "oversize_code", 0),
         ("port_kdeploy_modifies_other_state", "call_writes", 0),
         ("port_kdeploy_reads_existing", "reads_other", 0),
-        ("port_kdeploy_failed_init_no_storage", "sstore_revert", 0),
-        ("port_kdeploy_empty_code_no_log", "log_empty_code", 0),
         ("port_kdeploy_failed_no_log", "log_then_revert", 0),
-        ("port_kdeploy_nested_keyless", "nested_keyless", 0),
         ("port_kdeploy_constructor_hint", "hint_ok", 0),
     ] {
         let (mut s, signer) =
@@ -175,11 +150,10 @@ fn deploys() -> Vec<Scenario> {
         v.push(s);
     }
     // a creation stopped on its transfer log before the value moves
-    for (tag, limit) in [("holds_records_not_log", 310 + 3_000u64), ("ample", 1_000_000)] {
+    {
         let (raw, signer, _, _) = ktx("value5");
-        let (raw, signer) = (raw, signer);
         let mut s = kl(
-            format!("port_kdeploy_value_transfer_log_{tag}"),
+            "port_kdeploy_value_transfer_log_holds_records_not_log".to_string(),
             &R_KEY,
             &raw,
             1_000_000,
@@ -187,7 +161,7 @@ fn deploys() -> Vec<Scenario> {
         );
         s.data = keyless_call_raw(&raw, 1_000_000);
         s.accounts.push(funded(signer, vec![], 5));
-        s.limits.data = Some(limit);
+        s.limits.data = Some(310 + 3_000);
         v.push(s);
     }
     // a destruction an earlier transaction made is not the deployment's
@@ -220,37 +194,10 @@ fn deploys() -> Vec<Scenario> {
 
 fn rules() -> Vec<Scenario> {
     let mut v = Vec::new();
-    // the override equal to the signed gas limit; a forward capped below the signed gas limit
+    // a signature whose r is at or above the curve order
     {
-        let (raw, _, g, _) = ktx("short_spend");
-        let _ = g;
-        v.push(kl(
-            "port_krule_override_equals_signed".to_string(),
-            &R_KEY,
-            &raw,
-            60_000,
-            20_000_000,
-        ));
-        for gas in [150_000u64, 200_000, 250_000, 300_000, 400_000] {
-            let (raw, signer) = keyless_tx("ok");
-            let mut s = kl(format!("port_krule_forward_{gas}"), &R_KEY, &raw, 200_000, gas);
-            s.accounts.push(funded(signer, vec![], 1));
-            v.push(s);
-            let mut s =
-                kl(format!("port_krule_forward_absent_signer_{gas}"), &R_KEY, &raw, 200_000, gas);
-            s.name = nm(format!("port_krule_forward_absent_signer_{gas}"));
-            v.push(s);
-        }
-    }
-    // signatures and envelopes
-    for (name, tx) in [
-        ("port_krule_r_over_order", "r_over_order"),
-        ("port_krule_r_zero", "r_zero"),
-        ("port_krule_modified_s", "ok_other_s"),
-        ("port_krule_typed_envelope", "typed_envelope"),
-        ("port_krule_not_creation", "not_creation"),
-    ] {
-        let (s, _) = kt(name.to_string(), &R_KEY, tx, 1_000_000, 5_000_000);
+        let (s, _) =
+            kt("port_krule_r_over_order".to_string(), &R_KEY, "r_over_order", 1_000_000, 5_000_000);
         v.push(s);
     }
     // init code over / at the limit
@@ -275,146 +222,59 @@ fn rules() -> Vec<Scenario> {
             ],
         ));
     }
-    // a failure from nonce one keeps no record of the signer; every failure from nonce one leaves
-    // it at one
-    for (name, tx) in [
-        ("port_krule_nonce_one_revert", "revert_n1"),
-        ("port_krule_nonce_one_halt", "halt_n1"),
-        ("port_krule_nonce_one_empty", "empty_n1"),
-        ("port_krule_nonce_one_stopped_at_start", "noop_ret1_n1"),
-    ] {
-        let (mut s, signer) = kt(name.to_string(), &R_KEY, tx, 1_000_000, 5_000_000);
+    // a deployment from nonce one stopped at its start keeps no record of the signer
+    {
+        let (mut s, signer) = kt(
+            "port_krule_nonce_one_stopped_at_start".to_string(),
+            &R_KEY,
+            "noop_ret1_n1",
+            1_000_000,
+            5_000_000,
+        );
         s.accounts.push(crate::Account {
             address: signer,
             nonce: 1,
             balance: U256::from(3u64),
             ..Account::default()
         });
-        if name.ends_with("stopped_at_start") {
-            s.limits.data = Some(310 + 1_000 + 200);
-        }
+        s.limits.data = Some(310 + 1_000 + 200);
         v.push(s);
     }
-    // a delegated signer's nonces stay spent
-    for (tag, delegate) in [
-        (
-            "creates_twice",
-            Asm::new()
-                .create(&[op::STOP], 0)
-                .op(op::POP)
-                .create(&[op::STOP], 0)
-                .op(op::POP)
-                .stop()
-                .build(),
-        ),
-        (
-            "reverting_create",
-            Asm::new().create(&[op::PUSH0, op::PUSH0, op::REVERT], 0).op(op::POP).stop().build(),
-        ),
-    ] {
-        let (mut s, signer) = kt(
-            format!("port_krule_delegated_signer_{tag}"),
-            &R_KEY,
-            "calls_signer",
-            1_000_000,
-            5_000_000,
-        );
-        let mut code = vec![0xef, 0x01, 0x00];
-        code.extend_from_slice(C.as_slice());
-        s.accounts.push(Account { address: signer, code, ..Account::default() });
-        s.accounts.push(acct(C, delegate));
-        v.push(s);
-    }
-    // the signer's balance and a call that cannot pay the signer's account
-    for (tag, bal) in [("partial", 3u64), ("exact", 5)] {
-        let (mut s, signer) =
-            kt(format!("port_krule_balance_{tag}"), &R_KEY, "value5", 1_000_000, 5_000_000);
-        s.accounts.push(funded(signer, vec![], bal));
-        v.push(s);
-    }
-    for gas in [60_000u64, 80_000, 100_000, 120_000, 140_000] {
+    // a call that cannot pay the signer's account
+    {
         let (raw, _) = keyless_tx("ok");
         v.push(kl(
-            format!("port_krule_cannot_pay_signer_account_{gas}"),
+            "port_krule_cannot_pay_signer_account_60000".to_string(),
             &R_KEY,
             &raw,
             200_000,
-            gas,
+            60_000,
         ));
     }
-    for gas in [150_000u64, 170_000, 190_000, 210_000, 230_000] {
-        let (raw, _) = keyless_tx("ok");
-        v.push(kl(format!("port_krule_refused_after_charges_{gas}"), &R_KEY, &raw, 200_000, gas));
-    }
-    // an unknown selector is not dispatched; a 3-byte input is not either
-    for (tag, data) in
-        [("unknown", sel("unknown()").to_vec()), ("three_bytes", vec![0x01, 0x02, 0x03])]
+    // a 3-byte input is not dispatched
     {
         let mut s = scn(
-            format!("port_kframe_not_dispatched_{tag}"),
+            "port_kframe_not_dispatched_three_bytes".to_string(),
             &R_KEY,
             vec![acct(KEYLESS, vec![op::PUSH0, op::PUSH0, op::REVERT])],
             1_000_000,
         );
         s.to = KEYLESS;
-        s.data = data;
-        v.push(s);
-    }
-    // the contract's bytecode never runs for a dispatched call
-    {
-        let (raw, _) = keyless_tx("ok");
-        let code = Asm::new().sstore(0, 1).stop().build();
-        let mut s = kl(
-            "port_kframe_bytecode_not_run_dispatched".to_string(),
-            &R_KEY,
-            &raw,
-            1_000_000,
-            5_000_000,
-        );
-        s.accounts.push(acct(KEYLESS, code.clone()));
-        v.push(s);
-        let mut s = kl(
-            "port_kframe_bytecode_not_run_refused".to_string(),
-            &R_KEY,
-            &raw,
-            100_000,
-            5_000_000,
-        );
-        s.accounts.push(acct(KEYLESS, code.clone()));
-        v.push(s);
-        let mut s = scn(
-            "port_kframe_bytecode_runs_other_selector".to_string(),
-            &R_KEY,
-            vec![acct(KEYLESS, code.clone())],
-            1_000_000,
-        );
-        s.to = KEYLESS;
-        s.data = sel("other()").to_vec();
-        v.push(s);
-        let caller = call_all(Asm::new(), KEYLESS, 0).stop().build();
-        let mut s = scn(
-            "port_kframe_contract_call_not_dispatched".to_string(),
-            &R_KEY,
-            vec![acct(A, caller), acct(KEYLESS, code)],
-            1_000_000,
-        );
-        s.data = vec![];
+        s.data = vec![0x01, 0x02, 0x03];
         v.push(s);
     }
     // a call carrying value is refused before its start is counted
     {
         let (raw, _) = keyless_tx("ok");
-        for (tag, limit) in [("holds_body", 310 + raw.len() as u64 + 200), ("ample", 1_000_000)] {
-            let mut s =
-                kl(format!("port_kframe_value_refused_{tag}"), &R_KEY, &raw, 1_000_000, 5_000_000);
-            s.value = U256::from(1u64);
-            s.limits.data = Some(limit);
-            v.push(s);
-        }
-        // the call touches the contract as any call does
-        let mut s =
-            kl("port_kframe_touches_contract".to_string(), &R_KEY, &raw, 1_000_000, 5_000_000);
-        s.accounts.push(acct(KEYLESS, vec![op::STOP]));
+        let mut s = kl(
+            "port_kframe_value_refused_holds_body".to_string(),
+            &R_KEY,
+            &raw,
+            1_000_000,
+            5_000_000,
+        );
+        s.value = U256::from(1u64);
+        s.limits.data = Some(310 + raw.len() as u64 + 200);
         v.push(s);
         // a rejected transaction is seen as nothing
         let mut s = kl("port_kframe_rejected_tx".to_string(), &R_KEY, &raw, 1_000_000, 5_000_000);
@@ -426,15 +286,6 @@ fn rules() -> Vec<Scenario> {
         s.data.truncate(40);
         s.value = U256::from(1u64);
         v.push(s);
-        let mut s = kl(
-            "port_kprec_value_bad_tx".to_string(),
-            &R_KEY,
-            &[0x01, 0x02, 0x03],
-            1_000_000,
-            5_000_000,
-        );
-        s.value = U256::from(1u64);
-        v.push(s);
     }
     v
 }
@@ -442,22 +293,6 @@ fn rules() -> Vec<Scenario> {
 fn limits() -> Vec<Scenario> {
     let mut v = Vec::new();
     let rules = R_KLIM;
-    // a keyless creation receives the reservoir share and a 980 budget; from nonce 0 and nonce 1
-    for (tag, tx, nonce) in [("n0", "slots_980", 0u64), ("n1", "slots_980_n1", 1)] {
-        for (gtag, gas) in [("above", 400_000_000u64), ("below", 150_000_000)] {
-            let (mut s, signer) =
-                kt(format!("port_klim_980_{tag}_{gtag}"), &rules, tx, 140_000_000, gas);
-            if nonce == 1 {
-                s.accounts.push(Account {
-                    address: signer,
-                    nonce: 1,
-                    balance: U256::from(3u64),
-                    ..Account::default()
-                });
-            }
-            v.push(s);
-        }
-    }
     // the signer's record and the deploy address are state growth (growth limit 10)
     for (tag, tx, present) in [
         ("8", "slots_8", false),
@@ -515,11 +350,6 @@ fn limits() -> Vec<Scenario> {
         s.accounts.push(acct(ORACLE, vec![op::STOP]));
         s.limits.data = Some(310 + 1_700 + d);
         v.push(s);
-    }
-    // a refusal after the charges gives the reservoir back (above the cap)
-    for gas in [250_000_000u64, 300_000_000, 400_000_000] {
-        let (raw, _) = keyless_tx("ok");
-        v.push(kl(format!("port_klim_refusal_gives_back_{gas}"), &rules, &raw, 199_999_000, gas));
     }
     // every limit stops a deployment from either nonce at either tier
     for (dim, tx) in [
@@ -637,71 +467,9 @@ fn detention() -> Vec<Scenario> {
 
 fn precedence() -> Vec<Scenario> {
     let mut v = Vec::new();
-    // a call two rules refuse reports the first of the legacy order
+    // a call below its intrinsic gas, from an absent signer and from one that holds one wei
     {
         let (raw, signer) = keyless_tx("ok");
-        let deploy = signer.create(0);
-        let combos: Vec<(&'static str, Vec<Account>, u64)> = vec![
-            (
-                "nonce_and_address",
-                vec![
-                    Account { address: signer, nonce: 2, ..Account::default() },
-                    acct(deploy, vec![op::STOP]),
-                ],
-                0,
-            ),
-            ("code_and_unfunded", vec![acct(signer, vec![op::STOP])], 1),
-            (
-                "nonce_and_address_2",
-                vec![
-                    Account {
-                        address: signer,
-                        nonce: 1,
-                        balance: U256::from(5u64),
-                        ..Account::default()
-                    },
-                    acct(deploy, vec![op::STOP]),
-                ],
-                0,
-            ),
-        ];
-        for (tag, accounts, value) in combos {
-            for (gtag, gas) in [("5m", 5_000_000u64), ("300m", 300_000_000)] {
-                let (vraw, vsigner) = if value > 0 { ktx_value() } else { (raw.clone(), signer) };
-                let mut s =
-                    kl(format!("port_kprec_two_rules_{tag}_{gtag}"), &R_KEY, &vraw, 1_000_000, gas);
-                s.accounts.extend(accounts.iter().cloned());
-                if value > 0 {
-                    s.accounts.retain(|a| a.address != signer);
-                    s.accounts.push(acct(vsigner, vec![op::STOP]));
-                }
-                v.push(s);
-            }
-        }
-        // the signer's account and the forward come before the address and the balance
-        for (tag, gas) in [("below", 160_000u64), ("above", 300_000_000)] {
-            for (extra, accounts) in
-                [("occupied", vec![acct(deploy, vec![op::STOP])]), ("plain", vec![])]
-            {
-                let mut s = kl(
-                    format!("port_kprec_forward_first_{tag}_{extra}"),
-                    &R_KEY,
-                    &raw,
-                    199_999_900,
-                    gas,
-                );
-                s.accounts.extend(accounts);
-                v.push(s);
-            }
-        }
-        // the creation's charges can refuse a call no rule refuses; an out of gas consumes the
-        // regular gas alone
-        for gas in [140_000u64, 160_000, 180_000, 200_000, 215_000, 225_000] {
-            let mut s =
-                kl(format!("port_kprec_creation_charges_{gas}"), &R_KEY, &raw, 200_000, gas);
-            s.accounts.push(funded(signer, vec![], 1));
-            v.push(s);
-        }
         for gas in [30_000u64, 40_000, 48_000, 52_000, 56_000, 60_000] {
             for (stag, present) in [("absent", false), ("one_wei", true)] {
                 let mut s =
@@ -714,11 +482,6 @@ fn precedence() -> Vec<Scenario> {
         }
     }
     v
-}
-
-fn ktx_value() -> (Vec<u8>, Address) {
-    let (raw, signer, _, _) = ktx("value5");
-    (raw, signer)
 }
 
 fn oracle() -> Vec<Scenario> {
