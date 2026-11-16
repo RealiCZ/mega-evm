@@ -115,10 +115,14 @@ fn park_start(host: &mut Evm<'_, MegaTypes>, target: Address, value: U256) {
     }
 }
 
-/// The start records [`park_start`] parked, made pending once nothing before the first frame can
-/// fail any more: the target's account is read here, for whether the start creates it. Drawn on
-/// the first frame's pool once evm2 decided its start (`started` / `before_commit` message
-/// hooks).
+/// The start records [`park_start`] parked, made pending once the charges of steps 1 to 3 of
+/// `SATIN-SCHED-008` are paid: the target's account is read here, for whether the start creates
+/// it, the load of step 4 and no earlier. A charge of step 4 (the new-account state gas of the
+/// recipient or the created account) or of step 5 (a delegated recipient's delegate access) can
+/// still fail after this read; a deposit that fails there is a failed deposit, and the read stays
+/// in its state: the boundary of `SATIN-DEP-012`, which only a deposit failing before step 4
+/// leaves without a load for its start. Drawn on the first frame's pool once evm2 decided its
+/// start (`started` / `before_commit` message hooks).
 pub(crate) fn start_pending(host: &mut Evm<'_, MegaTypes>) {
     let Some((target, records, log)) = host.ext_mut().mechanisms.start_records.take() else {
         return;
