@@ -181,6 +181,16 @@ name = "once_per_block_resolution"
 why = "SATIN-REG-002: a block resolves its live system address once, after its other pre-block steps, as a read-only pre-block state, and a single transaction's EVM once, when it is made, by a direct read of the state; every transaction is classified against it, and no transaction reads the registry, or finds its account or slot 0 warm, for its classification. The other implementation still reads both for every transaction, warm for the rest of it, and has not made this change yet; a transaction that reads the registry, as every Mega System Transaction does through the Oracle's check of its caller, then pays their cold access here, and what that moves (its gas used, a receipt's cumulative gas, which later transaction the block's gas limit refuses) is the transaction's or the block's to decide. A case, a recorded transaction or a recorded block is of this class only when the engine, run again with that per-transaction read, has no difference from the reference at all."
 signoff = "owner decision 2026-11-09 (SATIN-REG-002)"
 
+# A call refused at its target's EIP-7702 delegate pays its static cost, its memory expansion and
+# its target's access. The reference predates the rule; until it makes the change, the gates accept
+# exactly the difference the rule makes: a case is of the class only when the engine, run again
+# with the reference's settlement, has no difference from the reference at all, and its inspected
+# run holds the refusal's outcome (`gate::delegate_refusal_outcome`).
+[[class]]
+name = "c2_delegate_refusal"
+why = "SATIN-MAC-004, SATIN-MAC-007, SATIN-WIT-012, SATIN-OUT-008 and SATIN-DET-018: in a frame whose volatile-data access is off, a call whose target operand is not the block beneficiary makes its steps as with access on (static cost, static-context check, memory expansion, value-transfer cost, the target's load, the delegation guard) and is refused at its delegate's load when that delegate is the beneficiary; its gas is put back to what it held just after its memory expansion, the value-transfer cost given back, and its target's cold surcharge, COLD_ACCOUNT_ACCESS - WARM_STORAGE_READ_COST for a target that was not warm, is charged last: it reverts with VolatileDataAccessDisabled(10), or stops with MegaLimitExceeded(2, limit) when that surcharge is gas detention's crossing, its completed read of the target kept. The reference the gates pin predates this rule: it reverts such a call on the gas it held after its static cost, giving its memory expansion back and charging no surcharge. A case is of this class only when the engine, run again with that settlement, has no difference from the reference at all, and its inspected run holds a frame that reverted with VolatileDataAccessDisabled(10) or stopped with MegaLimitExceeded(2, limit)."
+signoff = "owner sign-off 2026-11-16"
+
 # --- refusal labels: cases found by the ported tests where both sides refuse the transaction
 # before it runs, with no state change, and only the error name differs (the owner's rule for
 # label-only differences). Each entry pins the two whole records of one case.

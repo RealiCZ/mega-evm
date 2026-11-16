@@ -2,11 +2,12 @@
 //! unlisted difference, a mismatching value or frame and a stale entry all fail.
 
 use mega_evm2_diff::gate::{
-    AUTH_PREFLIGHT_READS, DEPOSIT_HISTORY, DUP_STACK_LABEL, HALTED_FIRST_FRAME,
-    INVALID_IMMEDIATE_LABEL, Known, MODEXP_FORMULA_PRICE, MST_PACKING_BUDGETS,
+    AUTH_PREFLIGHT_READS, DELEGATE_REFUSAL, DEPOSIT_HISTORY, DUP_STACK_LABEL, HALTED_FIRST_FRAME,
+    INVALID_IMMEDIATE_LABEL, Known, LIMIT_EXCEEDED, MODEXP_FORMULA_PRICE, MST_PACKING_BUDGETS,
     ONCE_PER_BLOCK_RESOLUTION, ORACLE_READ_BEFORE_CHARGE, REFUSAL_COSTS_NOTHING,
-    RESERVOIR_GIVE_BACK, SYSTEM_CONTRACT_DEPLOYMENT, Verdict, classify, compared_frames,
-    known_classes, known_differences, known_replay_differences,
+    RESERVOIR_GIVE_BACK, SYSTEM_CONTRACT_DEPLOYMENT, VOLATILE_DATA_ACCESS_DISABLED, Verdict,
+    classify, compared_frames, delegate_refusal_outcome, known_classes, known_differences,
+    known_replay_differences,
 };
 use serde_json::{Value, json};
 
@@ -214,6 +215,7 @@ fn test_known_differences_file_lists_exactly_its_entries() {
             MST_PACKING_BUDGETS,
             SYSTEM_CONTRACT_DEPLOYMENT,
             ONCE_PER_BLOCK_RESOLUTION,
+            DELEGATE_REFUSAL,
         ]
     );
     let text = include_str!("../known-differences.toml");
@@ -240,6 +242,9 @@ fn test_known_differences_file_lists_exactly_its_entries() {
         assert_eq!(text.matches(&format!("owner decision 2026-11-09 ({rule})")).count(), 1);
     }
     assert_eq!(text.matches("2026-11-09").count(), 7);
+    // The delegate refusal's class, signed off on 2026-11-16, and no entry of its own.
+    assert_eq!(text.matches("owner sign-off 2026-11-16").count(), 1);
+    assert_eq!(text.matches("2026-11-16").count(), 1);
     // No entry waits for a fix.
     assert_eq!(text.matches("pending fix (").count(), 0);
 }
@@ -550,6 +555,7 @@ fn test_a_rerun_class_takes_a_case_whose_only_difference_is_its_rule() {
         DEPOSIT_HISTORY,
         ORACLE_READ_BEFORE_CHARGE,
         REFUSAL_COSTS_NOTHING,
+        DELEGATE_REFUSAL,
     ]
     .map(String::from)
     .to_vec();
@@ -607,6 +613,19 @@ fn test_a_rerun_class_takes_a_case_whose_only_difference_is_its_rule() {
             ReferenceRule::RefusalAfterStaticGas,
             REFUSAL_COSTS_NOTHING,
         ),
+        // A call refused at its target's delegate: a warm target's in the transaction's own
+        // frame, cold targets' after the guard and with gas to spare.
+        (
+            "t05_call_follows_delegation_refused",
+            ReferenceRule::DelegateRefusalOnStaticGas,
+            DELEGATE_REFUSAL,
+        ),
+        (
+            "bd_staticcall_delegated_cold_guard_at",
+            ReferenceRule::DelegateRefusalOnStaticGas,
+            DELEGATE_REFUSAL,
+        ),
+        ("z4_cold_target_5400", ReferenceRule::DelegateRefusalOnStaticGas, DELEGATE_REFUSAL),
     ] {
         let s = scenario(name);
         // The reference runs under its own rule: the engine's run under that rule.
@@ -748,4 +767,68 @@ fn test_a_rerun_class_combines_with_the_give_back_rule() {
         [DEPOSIT_HISTORY, RESERVOIR_GIVE_BACK],
         DEPOSIT_HISTORY,
     );
+}
+
+// --- the class `c2_delegate_refusal`
+// ---------------------------------------------------------------
+
+/// The outcome a delegate refusal gives, which the class's case must hold: a frame reverted with
+/// `VolatileDataAccessDisabled(10)`, or stopped with `MegaLimitExceeded(2, limit)`.
+#[test]
+fn test_the_delegate_refusal_class_needs_the_refusals_outcome() {
+    use alloy_primitives::keccak256;
+    let selector = |signature: &str| {
+        format!("0x{}", alloy_primitives::hex::encode(&keccak256(signature)[..4]))
+    };
+    assert_eq!(VOLATILE_DATA_ACCESS_DISABLED, selector("VolatileDataAccessDisabled(uint8)"));
+    assert_eq!(LIMIT_EXCEEDED, selector("MegaLimitExceeded(uint8,uint64)"));
+    let word = |v: u64| format!("{v:064x}");
+    let frames = |status: &str, output: String| {
+        json!({"frames": [
+            {"status": "success", "output": "0x"},
+            {"status": status, "output": output},
+        ]})
+    };
+    let refused = format!("{VOLATILE_DATA_ACCESS_DISABLED}{}", word(10));
+    let stopped = format!("{LIMIT_EXCEEDED}{}{}", word(2), word(6_269));
+    assert!(delegate_refusal_outcome(&frames("revert", refused.clone())));
+    assert!(delegate_refusal_outcome(&frames("revert", stopped)));
+    // Another access type, another limit, a halt, or no such frame: not the outcome.
+    let other_type = format!("{VOLATILE_DATA_ACCESS_DISABLED}{}", word(2));
+    assert!(!delegate_refusal_outcome(&frames("revert", other_type)));
+    let other_limit = format!("{LIMIT_EXCEEDED}{}{}", word(1), word(6_269));
+    assert!(!delegate_refusal_outcome(&frames("revert", other_limit)));
+    assert!(!delegate_refusal_outcome(&frames("halt", refused)));
+    assert!(!delegate_refusal_outcome(&frames("revert", "0x".into())));
+    assert!(!delegate_refusal_outcome(&json!({"frames": []})));
+}
+
+/// A case whose rerun under the delegate refusal's settlement matches the reference is not the
+/// class's when the engine's run holds no refusal's outcome; with the outcome it is.
+#[test]
+fn test_the_delegate_refusal_class_takes_a_case_only_with_the_refusals_outcome() {
+    use mega_evm2::ReferenceRule;
+    use mega_evm2_diff::gate::scenario_verdict;
+    let s = scenario("t05_call_follows_delegation_refused");
+    let classes = vec![DELEGATE_REFUSAL.to_string()];
+    let rule = [ReferenceRule::DelegateRefusalOnStaticGas];
+    let reference = as_reference(mega_evm2_diff::driver::runs_under(&s, &rule));
+    let (plain, inspected) = engine_runs(&s);
+    assert!(delegate_refusal_outcome(&inspected));
+    let under = |rules: &[ReferenceRule]| mega_evm2_diff::driver::runs_under(&s, rules);
+    let verdict = scenario_verdict(&[], &classes, s.name, &reference, &plain, &inspected, under);
+    assert_eq!(verdict, Verdict::Class(DELEGATE_REFUSAL));
+    // The same records with the refusal's frame output erased: no class.
+    let erase = |mut v: Value| {
+        for f in v["frames"].as_array_mut().unwrap() {
+            if f["status"] == "revert" {
+                f["output"] = json!("0x");
+            }
+        }
+        v
+    };
+    let (plain, inspected) = (erase(plain), erase(inspected));
+    assert!(!delegate_refusal_outcome(&inspected));
+    let verdict = scenario_verdict(&[], &classes, s.name, &reference, &plain, &inspected, under);
+    assert!(matches!(verdict, Verdict::Differ(_)), "{verdict:?}");
 }

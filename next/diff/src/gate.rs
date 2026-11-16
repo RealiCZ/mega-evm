@@ -14,7 +14,8 @@
 //! [`HALTED_FIRST_FRAME`], [`INVALID_IMMEDIATE_LABEL`], [`DUP_STACK_LABEL`],
 //! [`AUTH_PREFLIGHT_READS`], [`MODEXP_FORMULA_PRICE`], [`RESERVOIR_GIVE_BACK`],
 //! [`DEPOSIT_HISTORY`], [`ORACLE_READ_BEFORE_CHARGE`], [`REFUSAL_COSTS_NOTHING`],
-//! [`MST_PACKING_BUDGETS`], [`SYSTEM_CONTRACT_DEPLOYMENT`], [`ONCE_PER_BLOCK_RESOLUTION`]).
+//! [`MST_PACKING_BUDGETS`], [`SYSTEM_CONTRACT_DEPLOYMENT`], [`ONCE_PER_BLOCK_RESOLUTION`],
+//! [`DELEGATE_REFUSAL`]).
 use mega_evm2::ReferenceRule;
 use mega_evm2_scenarios::record::{self, Harness};
 use serde_json::{Value, json};
@@ -271,8 +272,25 @@ pub const SYSTEM_CONTRACT_DEPLOYMENT: &str = "system_contract_deployment";
 /// ([`ReferenceRule::RegistryReadPerTransaction`]).
 pub const ONCE_PER_BLOCK_RESOLUTION: &str = "once_per_block_resolution";
 
+/// A call refused at its target's EIP-7702 delegate in a frame whose volatile-data access is off
+/// pays its static cost, its memory expansion and its target's access (`SATIN-MAC-004`,
+/// `SATIN-MAC-007`): its gas is put back to what it held just after its memory expansion, the
+/// value-transfer cost given back, and its target's cold surcharge, for a target that was not
+/// warm, is charged last, where it may be gas detention's crossing, the stop
+/// `MegaLimitExceeded(2, limit)` (`SATIN-OUT-008`, `SATIN-DET-018`). The reference predates the
+/// rule: it reverts such a call on the gas it held after its static cost. What that moves — the
+/// gas the frame hands back, a revert that becomes a stop, what the program then does with the
+/// gas — is the program's to decide, so the shape is checked by running the case again on the
+/// engine with the reference's settlement ([`ReferenceRule::DelegateRefusalOnStaticGas`]): the
+/// case is of the class when that run, plain and inspected, has no difference from the reference
+/// at all ([`scenario_verdict`]), and when the engine's inspected run holds the outcome the rule
+/// gives, a frame that reverted with `VolatileDataAccessDisabled(10)` or stopped with
+/// `MegaLimitExceeded(2, limit)` ([`delegate_refusal_outcome`]). The rule changes nothing in a run
+/// that makes no such refusal, so no other case is of the class.
+pub const DELEGATE_REFUSAL: &str = "c2_delegate_refusal";
+
 /// The classes the gate knows the shape of; a `[[class]]` table names one of them.
-const CLASSES: [&str; 12] = [
+const CLASSES: [&str; 13] = [
     HALTED_FIRST_FRAME,
     INVALID_IMMEDIATE_LABEL,
     DUP_STACK_LABEL,
@@ -285,6 +303,7 @@ const CLASSES: [&str; 12] = [
     MST_PACKING_BUDGETS,
     SYSTEM_CONTRACT_DEPLOYMENT,
     ONCE_PER_BLOCK_RESOLUTION,
+    DELEGATE_REFUSAL,
 ];
 
 /// The accepted classes of `known-differences.toml` (`[[class]]`): each names a class of
@@ -551,12 +570,13 @@ pub fn candidate_fault(case: &str, plain: &mut Value, inspected: &mut Value) {
 /// The classes checked by running the case again on the engine under the reference's rule, each
 /// with that rule. The give-back rule comes last: a case that meets it and another class's change
 /// is that other class's ([`rerun_class`]).
-pub const RERUN_CLASSES: [(&str, ReferenceRule); 7] = [
+pub const RERUN_CLASSES: [(&str, ReferenceRule); 8] = [
     (AUTH_PREFLIGHT_READS, ReferenceRule::ShortListUnsimulated),
     (MODEXP_FORMULA_PRICE, ReferenceRule::ModexpBoundFirst),
     (DEPOSIT_HISTORY, ReferenceRule::DepositHistoryExempt),
     (ORACLE_READ_BEFORE_CHARGE, ReferenceRule::OracleColdSkip),
     (REFUSAL_COSTS_NOTHING, ReferenceRule::RefusalAfterStaticGas),
+    (DELEGATE_REFUSAL, ReferenceRule::DelegateRefusalOnStaticGas),
     (ONCE_PER_BLOCK_RESOLUTION, ReferenceRule::RegistryReadPerTransaction),
     (RESERVOIR_GIVE_BACK, ReferenceRule::Eip8037GiveBack),
 ];
@@ -661,8 +681,32 @@ pub fn scenario_verdict(
         let (plain, inspected) = under(rules);
         rerun_matches(classes, name, reference, &plain, &inspected)
     });
+    // A delegate refusal's case must also show the outcome the rule gives.
+    let class = class.filter(|c| *c != DELEGATE_REFUSAL || delegate_refusal_outcome(inspected));
     class.map_or(verdict, Verdict::Class)
 }
+
+/// Whether the engine's inspected record `inspected` holds a frame that ended as a call refused
+/// at its target's delegate ends (`SATIN-MAC-004`, `SATIN-OUT-008`): reverted with
+/// `VolatileDataAccessDisabled(10)`, or stopped with `MegaLimitExceeded(2, limit)`, the stop its
+/// cold surcharge's crossing makes.
+pub fn delegate_refusal_outcome(inspected: &Value) -> bool {
+    let stop = format!("{LIMIT_EXCEEDED}{:064x}", 2);
+    inspected["frames"].as_array().is_some_and(|frames| {
+        frames.iter().any(|f| {
+            f["status"] == record::REVERT &&
+                f["output"].as_str().is_some_and(|o| {
+                    o == format!("{VOLATILE_DATA_ACCESS_DISABLED}{:064x}", 10) ||
+                        (o.len() == 2 + 2 * 68 && o.starts_with(&stop))
+                })
+        })
+    })
+}
+
+/// The selectors of `VolatileDataAccessDisabled(uint8)` and `MegaLimitExceeded(uint8,uint64)`, as
+/// a frame's recorded output starts.
+pub const VOLATILE_DATA_ACCESS_DISABLED: &str = "0x09416ebd";
+pub const LIMIT_EXCEEDED: &str = "0x84b90267";
 
 /// Whether the engine's run of scenario `name` under a reference's rules, `plain` and `inspected`,
 /// leaves no difference from the reference's record `reference`, or exactly the shape of a class
