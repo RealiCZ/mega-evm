@@ -622,8 +622,9 @@ fn access_off_then_call(child: Address, gas: u64) -> Vec<u8> {
 
 /// In a frame whose volatile-data access is off, an Oracle read is refused before it loads
 /// (`SATIN-MAC-003`), so the slot is in no state and no witness; and a call whose code source
-/// delegates to the block beneficiary is refused after its completed read of the source's account
-/// and code, which stays in the witness and is required (`SATIN-WIT-012`, `SATIN-MAC-007`).
+/// delegates to the block beneficiary is refused at its delegate's load, after its completed read
+/// of the source's account and code, which stays in the witness and is required (`SATIN-WIT-012`,
+/// `SATIN-MAC-007`).
 #[test]
 fn witness_replay_of_reads_refused_with_volatile_access_off() {
     let (caller, reader, refuser, source) = (
@@ -638,9 +639,9 @@ fn witness_replay_of_reads_refused_with_volatile_access_off() {
         [get_slot_in_memory(ORACLE_SLOT), asm::call(ORACLE, None, 36), vec![0x00]].concat();
     parent.insert_account_info(&reader, contract(read_oracle));
     let other_caller = Address::with_last_byte(0xde);
-    parent.insert_account_info(&other_caller, contract(access_off_then_call(refuser, 1_000)));
-    // CALLCODE(GAS, source, 0, 0, 1 MiB, 0, 0).
-    let mut callcode = vec![0x5f, 0x5f, 0x62, 0x10, 0x00, 0x00, 0x5f, 0x5f, 0x73];
+    parent.insert_account_info(&other_caller, contract(access_off_then_call(refuser, 10_000)));
+    // CALLCODE(GAS, source, 0, 0, 0, 0, 0).
+    let mut callcode = vec![0x5f, 0x5f, 0x5f, 0x5f, 0x5f, 0x73];
     callcode.extend_from_slice(source.as_slice());
     callcode.extend_from_slice(&[0x5a, 0xf2, 0x00]);
     parent.insert_account_info(&refuser, contract(callcode));

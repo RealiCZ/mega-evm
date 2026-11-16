@@ -1,11 +1,11 @@
 //! In a frame whose volatile-data access `MegaAccessControl` switched off, a read of the block
-//! beneficiary's account is refused before the opcode charges or checks anything, and costs
-//! nothing (`SATIN-MAC-003`, `SATIN-MAC-004`): a CALL of an account whose EIP-7702 delegate is the
-//! beneficiary is refused, its delegate found by reading the target, before its memory expansion
-//! (`SATIN-MAC-007`), so one whose return range ends near 2^40 bytes (a memory cost whose
-//! quadratic term does not fit in a `u64`) is refused rather than halting on the memory limit; and
-//! an `EXTCODECOPY` of the beneficiary with a 1 MiB length on 1,000 of regular gas is refused
-//! keeping all of its gas.
+//! beneficiary's account its operands name is refused before the opcode charges or checks
+//! anything, and costs nothing (`SATIN-MAC-003`, `SATIN-MAC-004`): an `EXTCODECOPY` of the
+//! beneficiary with a 1 MiB length on 1,000 of regular gas is refused keeping all of its gas. A
+//! CALL of an account whose EIP-7702 delegate is the beneficiary makes its steps as with access on
+//! and is refused at its delegate's load (`SATIN-MAC-007`), so one whose return range ends near
+//! 2^40 bytes (a memory cost whose quadratic term does not fit in a `u64`) halts on its memory
+//! expansion, as it would with access on, before its target is read.
 
 mod common;
 
@@ -114,13 +114,13 @@ fn refusal(access: u64) -> Bytes {
     refusal.into()
 }
 
-/// The refusal comes before the CALL's memory expansion: a return range ending near 2^40 bytes is
-/// refused rather than halting on the memory limit.
+/// The CALL's memory expansion comes before its delegate's load: a return range ending near 2^40
+/// bytes halts the call as with access on, with no refusal.
 #[test]
-fn test_call_with_a_2_40_return_range_is_refused_before_its_memory_when_access_is_off() {
+fn test_call_with_a_2_40_return_range_halts_on_its_memory_before_its_delegate_when_access_is_off() {
     let result = run(1 << 40);
-    assert_eq!(result.stop, InstrStop::Revert, "{result:?}");
-    assert_eq!(result.output, refusal(10));
+    assert!(result.stop.is_halt(), "{result:?}");
+    assert!(result.output.is_empty());
 }
 
 /// `SATIN-MAC-004`'s expected result: with access off, an `EXTCODECOPY(beneficiary, 0, 0, 1 MiB)`

@@ -271,6 +271,10 @@ pub enum ReferenceRule {
     /// A refused volatile read is refused after the opcode's static gas, an account opcode's at
     /// its load once its body's charges are made, and the opcode's operands checked first.
     RefusalAfterStaticGas,
+    /// A call refused at its target's EIP-7702 delegate reverts on the gas it had after its static
+    /// gas: its memory expansion and value-transfer cost are given back, and its target's cold
+    /// surcharge is not charged.
+    DelegateRefusalOnStaticGas,
     /// A Mega System Transaction is not held to the block's data-size, KV-update and
     /// state-growth budgets.
     MstPackingExempt,

@@ -60,6 +60,11 @@ pub struct MechanismState {
     /// The running opcode's load of the block beneficiary was refused
     /// (`MegaTypes::before_account_load`), waiting for the opcode's wrapper to revert the frame.
     pub load_refused: bool,
+    /// The refused load was a call's load of its target's EIP-7702 delegate.
+    pub delegate_refused: bool,
+    /// In a frame whose volatile access is off, whether the running call's target was warm when
+    /// the call reached its load, the call's own load not counted (`SATIN-MAC-007`).
+    pub target_warm: bool,
 }
 
 impl MechanismState {

@@ -1,10 +1,11 @@
 //! In a frame whose volatile-data access is off, a call opcode reads its target's account and
-//! code to find whether the target delegates to the block beneficiary, before it charges anything
-//! (`SATIN-MAC-007`); that read is required: a failure of it gives the transaction no outcome
-//! (`SATIN-VAL-010`), never a target taken as delegating nowhere. The specification's example: an
-//! access-off `CALLCODE` with all seven operands, no value, a 1 MiB input range and 1,000 of
-//! regular gas, whose code-source address delegates to the beneficiary, is refused for free when
-//! the address can be read, and has no outcome — not a memory out-of-gas halt — when it cannot.
+//! code only at the target's load, after its earlier steps, and is refused at its delegate's load
+//! when that delegate is the block beneficiary (`SATIN-MAC-007`); a load it makes is required: a
+//! failure of it gives the transaction no outcome (`SATIN-VAL-010`), never a target taken as
+//! delegating nowhere. The specification's example: an access-off `CALLCODE` with all seven
+//! operands, no value, a 1 MiB input range and 1,000 of regular gas, whose code-source address
+//! delegates to the beneficiary, halts out of gas on its memory on every node and reads nothing,
+//! whether or not the node could read that address.
 
 mod common;
 
@@ -15,7 +16,7 @@ use evm2::{
     bytecode::Bytecode,
     env::BlockEnv,
     evm::{AccountInfo, Database, Db, InMemoryDB},
-    interpreter::{InstrStop, Word},
+    interpreter::Word,
 };
 use mega_evm2::MegaTypes;
 use op_evm2::OpTxEnvelope;
@@ -76,8 +77,8 @@ fn code(c: Vec<u8>) -> AccountInfo {
 }
 
 /// `disableVolatileDataAccess()` through a CALL of 100,000 gas, then
-/// `CALL(1_000, CHILD, 0, 0, 0, 0, 0)`, returning that call's success word.
-fn caller() -> Vec<u8> {
+/// `CALL(child_gas, CHILD, 0, 0, 0, 0, 0)`, returning that call's success word.
+fn caller(child_gas: u16) -> Vec<u8> {
     let mut c = vec![0x63];
     c.extend_from_slice(&keccak256("disableVolatileDataAccess()")[..4]);
     c.extend_from_slice(&[0x60, 0xe0, 0x1b, 0x60, 0x00, 0x52]);
@@ -86,18 +87,26 @@ fn caller() -> Vec<u8> {
     c.extend_from_slice(&[0x62, 0x01, 0x86, 0xa0, 0xf1, 0x50]);
     c.extend_from_slice(&[0x5f, 0x5f, 0x5f, 0x5f, 0x5f, 0x73]);
     c.extend_from_slice(CHILD.as_slice());
-    c.extend_from_slice(&[0x61, 0x03, 0xe8, 0xf1, 0x5f, 0x52, 0x60, 0x20, 0x5f, 0xf3]);
+    c.push(0x61);
+    c.extend_from_slice(&child_gas.to_be_bytes());
+    c.extend_from_slice(&[0xf1, 0x5f, 0x52, 0x60, 0x20, 0x5f, 0xf3]);
     c
 }
 
-/// `CALLCODE(GAS, SOURCE, 0, 0, 1 MiB, 0, 0)`; the refusal reverts with its own data, so the
-/// caller reads the child's failure either way and the transaction's result tells them apart.
-fn child() -> Vec<u8> {
-    let mut c = vec![0x5f, 0x5f, 0x62, 0x10, 0x00, 0x00, 0x5f, 0x5f, 0x73];
+/// `CALLCODE(GAS, SOURCE, 0, 0, input, 0, 0)` with an input range of `input` bytes (at most 1
+/// MiB); the caller reads the child's failure either way and the transaction's result tells
+/// them apart.
+fn child(input: u32) -> Vec<u8> {
+    let mut c = vec![0x5f, 0x5f, 0x62];
+    c.extend_from_slice(&input.to_be_bytes()[1..]);
+    c.extend_from_slice(&[0x5f, 0x5f, 0x73]);
     c.extend_from_slice(SOURCE.as_slice());
     c.extend_from_slice(&[0x5a, 0xf2, 0x00]);
     c
 }
+
+/// The specification's example: a 1 MiB input range on 1,000 of gas.
+const MIB: u32 = 0x10_0000;
 
 /// A Satin EVM over `backend`, the block's beneficiary [`BENEFICIARY`].
 fn evm_over(backend: Backend) -> Evm<'static, MegaTypes> {
@@ -126,11 +135,17 @@ fn tx() -> Recovered<OpTxEnvelope> {
     Recovered::new_unchecked(OpTxEnvelope::from_signed(tx.into_signed(signature)), SENDER)
 }
 
-/// The transaction's outcome and the child's frame (its stop and the gas it left), or the error.
-fn run(fail: bool, delegates: bool) -> Result<(bool, common::Frame), String> {
+/// The transaction's outcome and the child's frame (its stop and the gas it left), or the error;
+/// the child given `child_gas` and an input range of `input` bytes.
+fn run(
+    fail: bool,
+    delegates: bool,
+    child_gas: u16,
+    input: u32,
+) -> Result<(bool, common::Frame), String> {
     let mut inner = InMemoryDB::default();
-    inner.insert_account_info(&CALLER, code(caller()));
-    inner.insert_account_info(&CHILD, code(child()));
+    inner.insert_account_info(&CALLER, code(caller(child_gas)));
+    inner.insert_account_info(&CHILD, code(child(input)));
     let source = if delegates { Bytecode::new_eip7702(BENEFICIARY) } else { Bytecode::default() };
     inner.insert_account_info(&SOURCE, AccountInfo::default().with_nonce(1).with_code(source));
     let mut evm = evm_over(Backend { inner, fail });
@@ -139,30 +154,30 @@ fn run(fail: bool, delegates: bool) -> Result<(bool, common::Frame), String> {
     let result =
         evm.transact(&tx).map(|executed| executed.commit()).map_err(|e| format!("{e:?}"))?;
     let frames = evm.clear_inspector_as::<common::Frames>().expect("the inspector").frames;
-    let child = *frames.iter().find(|f| f.gas_limit == 1_000).expect("the child's frame");
+    let child =
+        *frames.iter().find(|f| f.gas_limit == u64::from(child_gas)).expect("the child's frame");
     Ok((result.status, child))
 }
 
-/// The delegate found, the `CALLCODE` is refused before its memory: the child reverts on the 984
-/// of gas its eight pushes and `GAS` left. A source that delegates nowhere (control) is not
-/// refused: the child halts on the 1 MiB memory expansion.
+/// The specification's example: the `CALLCODE` makes its memory expansion before its target's
+/// load, and halts on it, whether its source delegates to the beneficiary or delegates nowhere.
 #[test]
-fn test_a_call_whose_source_delegates_to_the_beneficiary_is_refused_before_its_memory() {
-    let (status, child) = run(false, true).expect("an outcome");
-    assert!(status);
-    assert_eq!((child.stop, child.gas_left), (Some(InstrStop::Revert), 984));
-    let (status, child) = run(false, false).expect("an outcome");
-    assert!(status);
-    assert_eq!(child.stop, Some(InstrStop::MemoryOOG));
+fn test_a_call_whose_source_delegates_to_the_beneficiary_halts_on_its_memory_first() {
+    for delegates in [true, false] {
+        let (status, child) = run(false, delegates, 1_000, MIB).expect("an outcome");
+        assert!(status);
+        assert!(child.stop.expect("the child ended").is_halt(), "{child:?}");
+        assert_eq!(child.gas_left, 0);
+    }
 }
 
-/// The read that found the delegate lands in the transaction's read set: the source's account is in
-/// the state the refused call's transaction returns, though the call never ran.
+/// The call halted on its memory reads nothing: the source's account is in no state the
+/// transaction returns.
 #[test]
-fn test_the_delegate_lookup_lands_in_the_read_set() {
+fn test_a_call_halted_on_its_memory_reads_nothing() {
     let mut inner = InMemoryDB::default();
-    inner.insert_account_info(&CALLER, code(caller()));
-    inner.insert_account_info(&CHILD, code(child()));
+    inner.insert_account_info(&CALLER, code(caller(1_000)));
+    inner.insert_account_info(&CHILD, code(child(MIB)));
     inner.insert_account_info(
         &SOURCE,
         AccountInfo::default().with_nonce(1).with_code(Bytecode::new_eip7702(BENEFICIARY)),
@@ -170,13 +185,17 @@ fn test_the_delegate_lookup_lands_in_the_read_set() {
     let mut evm = evm_over(Backend { inner, fail: false });
     let out = evm.transact(&tx()).expect("an outcome").detach();
     assert!(out.result.status);
-    let source = out.pending_state.account_changes_for(&SOURCE).expect("the source was read");
-    assert!(!source.is_changed());
+    assert!(out.pending_state.account_changes_for(&SOURCE).is_none(), "the source was not read");
 }
 
-/// The source's account cannot be read: the transaction has no outcome.
+/// The source's account cannot be read: the call of the example never reads it, so the
+/// transaction has the same outcome; a call that reaches the source's load (no input range,
+/// 10,000 of gas) has none.
 #[test]
-fn test_an_unreadable_delegate_lookup_gives_the_transaction_no_outcome() {
-    let error = run(true, true).expect_err("no outcome");
+fn test_an_unreadable_source_fails_the_transaction_only_when_its_load_is_reached() {
+    let (status, child) = run(true, true, 1_000, MIB).expect("an outcome");
+    assert!(status);
+    assert!(child.stop.expect("the child ended").is_halt());
+    let error = run(true, true, 10_000, 0).expect_err("no outcome");
     assert!(error.contains("Unreadable"), "{error}");
 }

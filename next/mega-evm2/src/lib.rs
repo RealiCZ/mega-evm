@@ -161,16 +161,25 @@ impl EvmTypesHost for MegaTypes {
     /// Satin refuses a read of the block beneficiary's account in a frame whose volatile access
     /// is off where the load happens (its Host refuses the load): evm2 offers every load of its
     /// instructions here, after the charges the instruction makes before it and before its
-    /// skip-cold check. The opcode's wrapper then reverts the frame ([`settle_refusal`]).
+    /// skip-cold check. The opcode's wrapper then reverts the frame ([`settle_refusal`]). A
+    /// call's target that is not refused has its warmth noted first, for a refusal at its
+    /// delegate ([`note_target_warmth`]).
     #[inline(always)]
     fn before_account_load(
         state: &mut InterpreterState<'_, '_, Self>,
         address: &Address,
         site: AccountLoadSite,
     ) -> Result {
-        if crate::satin_ext::refused_here(state) && refuses_load(state, address, site) {
-            state.host().ext_mut().mechanisms.load_refused = true;
-            return Err(InstrStop::Revert);
+        if crate::satin_ext::refused_here(state) {
+            if refuses_load(state, address, site) {
+                let mechanisms = &mut state.host().ext_mut().mechanisms;
+                mechanisms.load_refused = true;
+                mechanisms.delegate_refused = matches!(site, AccountLoadSite::CallDelegate);
+                return Err(InstrStop::Revert);
+            }
+            if matches!(site, AccountLoadSite::CallTarget) {
+                note_target_warmth(state, address)?;
+            }
         }
         Ok(())
     }
@@ -610,7 +619,8 @@ pub fn mega_sload(cx: _) -> Result {
 
 /// Whether Satin refuses the load of `address`'s account at `site` in a frame whose volatile
 /// access is off: a read of the block beneficiary's account. A creation's loads of its creator and
-/// of the created address are no reads; a call's load of its target's EIP-7702 delegate is.
+/// of the created address are no reads; a call's load of its target's EIP-7702 delegate is
+/// (`SATIN-MAC-007`, settled by [`refuse_at_delegate`]).
 #[inline(never)]
 fn refuses_load(
     state: &mut InterpreterState<'_, '_, MegaTypes>,
@@ -623,6 +633,28 @@ fn refuses_load(
         _ => true,
     };
     read && *address == state.host().block().beneficiary
+}
+
+/// Notes, in a frame whose volatile access is off, whether a call's target is warm as the call
+/// reaches its load, before that load warms it (`SATIN-MAC-007`): EIP-2929's accessed addresses as
+/// they stand, those warm from the transaction's start and every warming no rollback took back. A
+/// cold target is not read here: the call's own load decides on its cold surcharge whether it
+/// reads it. A warm one is loaded as that load, which never skips a warm account, loads it, so the
+/// call reads nothing it would not; a failed read is the transaction's (`SATIN-VAL-010`), as the
+/// call's own load's would be.
+#[inline(never)]
+fn note_target_warmth(
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    address: &Address,
+) -> Result {
+    let probe = state.host().state_mut().account_with_skip(address, true).map(|_| ());
+    let warm = match probe {
+        Ok(()) => true,
+        Err(evm2::LoadError::ColdLoadSkipped) => false,
+        Err(error) => return Err(state.fail(evm2::HostError::from(error))),
+    };
+    state.host().ext_mut().mechanisms.target_warm = warm;
+    Ok(())
 }
 
 /// The gas a refused load hands back, kept as a refusable opcode's body starts: what the frame
@@ -651,6 +683,60 @@ fn settle_refusal(
         }
         _ => result,
     }
+}
+
+/// Settles a call opcode's body: a load refused at the target's EIP-7702 delegate pays as
+/// [`refuse_at_delegate`] states, `value_cost` being the value-transfer cost the call charged
+/// before it; any other result as [`settle_refusal`]. Under the reference's rule (comparison only)
+/// a refusal at the delegate reverts on the gas the call had after its static gas, as any other
+/// refused load.
+#[inline(always)]
+fn settle_call_refusal(
+    gas: &mut Gas,
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    kept: Option<Gas>,
+    value_cost: u64,
+    result: Result,
+) -> Result {
+    if kept.is_some() &&
+        core::mem::take(&mut state.host().ext_mut().mechanisms.delegate_refused) &&
+        !under_reference_rule(state.host().ext(), ReferenceRule::DelegateRefusalOnStaticGas)
+    {
+        state.host().ext_mut().mechanisms.load_refused = false;
+        return refuse_at_delegate(gas, state, value_cost);
+    }
+    settle_refusal(gas, state, kept, result)
+}
+
+/// A call refused at its target's EIP-7702 delegate (`SATIN-MAC-004`, `SATIN-MAC-007`): it has
+/// made its earlier steps and read its target's account and code, which is no volatile read, and
+/// pays its static cost, its memory expansion and its target's access, nothing else. Nothing it
+/// does between its memory expansion and its delegate's load is charged but the value-transfer
+/// cost of a call that carries value (its target's surcharge is not yet deducted, the reservoir
+/// is untouched), so giving `value_cost` back leaves its gas, both parts, as it was just after its
+/// memory expansion: the static cost and the memory expansion stay charged and count as compute.
+/// When the target was not warm its cold surcharge is then charged, last, as a regular charge held
+/// to the spendable part: one the spendable part cannot pay is gas detention's crossing, which the
+/// frame's end turns into the stop `MegaLimitExceeded(2, limit)` on the gas it had before the
+/// charge (`SATIN-DET-018`). The delegation guard held the whole regular gas to the surcharge plus
+/// `WARM_STORAGE_READ_COST`, so the charge never runs out of gas. Otherwise the frame reverts with
+/// `VolatileDataAccessDisabled(10)`.
+#[cold]
+#[inline(never)]
+fn refuse_at_delegate(
+    gas: &mut Gas,
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    value_cost: u64,
+) -> Result {
+    gas.tracker_mut().erase_cost(value_cost);
+    if !state.host().ext().mechanisms.target_warm {
+        gas.spend(state.gas_params().cold_account_additional_cost())?;
+    }
+    revert_with(
+        gas,
+        state,
+        &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
+    )
 }
 
 #[cold]
@@ -1121,33 +1207,29 @@ fn start_charge_or_hand_back(
 }
 
 /// Whether a call opcode of `operands` operands is refused before it charges or checks anything
-/// (`SATIN-MAC-003`, `SATIN-MAC-007`): in a frame whose volatile access is off, once its operands
-/// are on the stack, when its target is the block beneficiary or delegates to it by EIP-7702, one
-/// hop. The delegate is found by reading the target's account and code into the transaction's
-/// state, so the read lands in its read set, which warms neither; the read is required, a failure
-/// of it the transaction's (`SATIN-VAL-010`).
+/// (`SATIN-MAC-003`): in a frame whose volatile access is off, once its operands are on the stack,
+/// when its target operand is the block beneficiary. A target that delegates to the beneficiary
+/// by EIP-7702 is not read here: the call makes its steps as with access on and is refused at its
+/// delegate's load (`SATIN-MAC-007`, [`refuse_at_delegate`]).
 fn call_refused_up_front(
     state: &mut InterpreterState<'_, '_, MegaTypes>,
     stack: &StackMut<'_>,
     operands: usize,
-) -> Result<bool> {
+) -> bool {
     let target = stack.peek(1).map(|w| w.to_address()).unwrap_or_default();
-    if refused_up_front(state, stack.len(), operands, &[target]) {
-        return Ok(true);
-    }
-    if stack.len() < operands ||
-        !crate::satin_ext::refused_here(state) ||
-        under_reference_rule(state.host().ext(), ReferenceRule::RefusalAfterStaticGas) ||
-        off("delegate_refusal")
-    {
-        return Ok(false);
-    }
-    let read: core::result::Result<_, evm2::DatabaseError> = (|| {
-        let mut account = state.host().state_mut().account(&target)?;
-        Ok(account.load_code()?.eip7702_address())
-    })();
-    let delegate = read.map_err(|e| state.fail(evm2::HostError::from(e)))?;
-    Ok(delegate == Some(state.host().block().beneficiary))
+    refused_up_front(state, stack.len(), operands, &[target])
+}
+
+/// The value-transfer cost a call opcode charges before its target's load: a `CALL` or a
+/// `CALLCODE` whose value operand is not zero.
+fn call_value_cost(
+    state: &mut InterpreterState<'_, '_, MegaTypes>,
+    stack: &StackMut<'_>,
+    kind: MessageKind,
+) -> u64 {
+    let carries_value = matches!(kind, MessageKind::Call | MessageKind::CallCode) &&
+        stack.peek(2).is_some_and(|value| !value.is_zero());
+    if carries_value { state.gas_params().get(GasId::TransferValueCost) } else { 0 }
 }
 
 fn mega_call_impl(
@@ -1162,7 +1244,7 @@ fn mega_call_impl(
         MessageKind::DelegateCall => (6, const { static_gas(op::DELEGATECALL) }),
         _ => (6, const { static_gas(op::STATICCALL) }),
     };
-    if call_refused_up_front(state, &stack, operands)? {
+    if call_refused_up_front(state, &stack, operands) {
         return refuse_up_front(gas, state);
     }
     gas.spend(static_gas)?;
@@ -1173,10 +1255,11 @@ fn mega_call_impl(
             &crate::satin_ext::disabled_revert(crate::satin_ext::access::BENEFICIARY),
         );
     }
-    // Under the reference's rule (comparison only), evm2's body offers the load of the target, and
-    // of its EIP-7702 delegate, to `before_account_load`, which refuses the block beneficiary's in
-    // a frame whose volatile access is off.
+    // evm2's body offers the load of the target's EIP-7702 delegate (under the reference's rule,
+    // comparison only, of the target too) to `before_account_load`, which refuses the block
+    // beneficiary's in a frame whose volatile access is off.
     let kept = refusal_gas(gas, state);
+    let value_cost = if kept.is_some() { call_value_cost(state, &stack, kind) } else { 0 };
     let result = call_with(
         stack,
         gas,
@@ -1292,7 +1375,7 @@ fn mega_call_impl(
             Ok(())
         },
     );
-    settle_refusal(gas, state, kept, result)?;
+    settle_call_refusal(gas, state, kept, value_cost, result)?;
     detention::on_resume(gas, state)
 }
 
