@@ -155,7 +155,7 @@
         1,
         0,
         9935484,
-        9935484,
+        9561244,
         0,
         0
       ],
@@ -358,7 +358,7 @@
           1,
           0,
           9935484,
-          9935484,
+          9561244,
           0,
           0
         ],
@@ -564,7 +564,108 @@
           },
           "op": "UNKNOWN(0x0C)",
           "pc": 0,
-          "sub": null
+          "sub": {
+            "code": "0x600361000b5f3960035ff35f5ff3",
+            "ops": [
+              {
+                "cost": 3,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0x3"
+                  ],
+                  "store": null,
+                  "used": 9449239
+                },
+                "op": "PUSH1",
+                "pc": 0,
+                "sub": null
+              },
+              {
+                "cost": 3,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0xb"
+                  ],
+                  "store": null,
+                  "used": 9449236
+                },
+                "op": "PUSH2",
+                "pc": 2,
+                "sub": null
+              },
+              {
+                "cost": 2,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0x0"
+                  ],
+                  "store": null,
+                  "used": 9449234
+                },
+                "op": "PUSH0",
+                "pc": 5,
+                "sub": null
+              },
+              {
+                "cost": 9,
+                "ex": {
+                  "mem": {
+                    "data": "0x5f5ff3",
+                    "off": 0
+                  },
+                  "push": [],
+                  "store": null,
+                  "used": 9449225
+                },
+                "op": "CODECOPY",
+                "pc": 6,
+                "sub": null
+              },
+              {
+                "cost": 3,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0x3"
+                  ],
+                  "store": null,
+                  "used": 9449222
+                },
+                "op": "PUSH1",
+                "pc": 7,
+                "sub": null
+              },
+              {
+                "cost": 2,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0x0"
+                  ],
+                  "store": null,
+                  "used": 9449220
+                },
+                "op": "PUSH0",
+                "pc": 9,
+                "sub": null
+              },
+              {
+                "cost": 0,
+                "ex": {
+                  "mem": null,
+                  "push": [],
+                  "store": null,
+                  "used": 9449220
+                },
+                "op": "RETURN",
+                "pc": 10,
+                "sub": null
+              }
+            ]
+          }
         }
       ]
     }
@@ -625,6 +726,83 @@
         "stack": [],
         "stateGasCost": 379094,
         "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449242,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 0,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449239,
+        "gasCost": 3,
+        "op": "PUSH2",
+        "pc": 2,
+        "stack": [
+          "0x3"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449236,
+        "gasCost": 2,
+        "op": "PUSH0",
+        "pc": 5,
+        "stack": [
+          "0x3",
+          "0xb"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449234,
+        "gasCost": 9,
+        "op": "CODECOPY",
+        "pc": 6,
+        "stack": [
+          "0x3",
+          "0xb",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449225,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 7,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449222,
+        "gasCost": 2,
+        "op": "PUSH0",
+        "pc": 9,
+        "stack": [
+          "0x3"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449220,
+        "gasCost": 0,
+        "op": "RETURN",
+        "pc": 10,
+        "stack": [
+          "0x3",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
       }
     ]
   },
@@ -644,6 +822,92 @@
         "pc": 0,
         "stack": [],
         "stateGasCost": 379094,
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449242,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 0,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449239,
+        "gasCost": 3,
+        "op": "PUSH2",
+        "pc": 2,
+        "stack": [
+          "0x3"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449236,
+        "gasCost": 2,
+        "op": "PUSH0",
+        "pc": 5,
+        "stack": [
+          "0x3",
+          "0xb"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449234,
+        "gasCost": 9,
+        "op": "CODECOPY",
+        "pc": 6,
+        "stack": [
+          "0x3",
+          "0xb",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449225,
+        "gasCost": 3,
+        "memory": [
+          "0x5f5ff30000000000000000000000000000000000000000000000000000000000"
+        ],
+        "op": "PUSH1",
+        "pc": 7,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449222,
+        "gasCost": 2,
+        "memory": [
+          "0x5f5ff30000000000000000000000000000000000000000000000000000000000"
+        ],
+        "op": "PUSH0",
+        "pc": 9,
+        "stack": [
+          "0x3"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9449220,
+        "gasCost": 0,
+        "memory": [
+          "0x5f5ff30000000000000000000000000000000000000000000000000000000000"
+        ],
+        "op": "RETURN",
+        "pc": 10,
+        "stack": [
+          "0x3",
+          "0x0"
+        ],
         "stateGasReservoir": 0
       }
     ]

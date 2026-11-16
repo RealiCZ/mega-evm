@@ -161,7 +161,7 @@
         1,
         0,
         9938440,
-        9938440,
+        9564200,
         0,
         0
       ],
@@ -357,7 +357,7 @@
           1,
           0,
           9938440,
-          9938440,
+          9564200,
           0,
           0
         ],
@@ -537,7 +537,94 @@
           },
           "op": "UNKNOWN(0x0C)",
           "pc": 0,
-          "sub": null
+          "sub": {
+            "code": "0x63deadbeef6000526004601cfd",
+            "ops": [
+              {
+                "cost": 3,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0xdeadbeef"
+                  ],
+                  "store": null,
+                  "used": 9452195
+                },
+                "op": "PUSH4",
+                "pc": 0,
+                "sub": null
+              },
+              {
+                "cost": 3,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0x0"
+                  ],
+                  "store": null,
+                  "used": 9452192
+                },
+                "op": "PUSH1",
+                "pc": 5,
+                "sub": null
+              },
+              {
+                "cost": 6,
+                "ex": {
+                  "mem": {
+                    "data": "0x00000000000000000000000000000000000000000000000000000000deadbeef",
+                    "off": 0
+                  },
+                  "push": [],
+                  "store": null,
+                  "used": 9452186
+                },
+                "op": "MSTORE",
+                "pc": 7,
+                "sub": null
+              },
+              {
+                "cost": 3,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0x4"
+                  ],
+                  "store": null,
+                  "used": 9452183
+                },
+                "op": "PUSH1",
+                "pc": 8,
+                "sub": null
+              },
+              {
+                "cost": 3,
+                "ex": {
+                  "mem": null,
+                  "push": [
+                    "0x1c"
+                  ],
+                  "store": null,
+                  "used": 9452180
+                },
+                "op": "PUSH1",
+                "pc": 10,
+                "sub": null
+              },
+              {
+                "cost": 0,
+                "ex": {
+                  "mem": null,
+                  "push": [],
+                  "store": null,
+                  "used": 9452180
+                },
+                "op": "REVERT",
+                "pc": 12,
+                "sub": null
+              }
+            ]
+          }
         }
       ]
     }
@@ -594,6 +681,70 @@
         "stack": [],
         "stateGasCost": 187120,
         "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452198,
+        "gasCost": 3,
+        "op": "PUSH4",
+        "pc": 0,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452195,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 5,
+        "stack": [
+          "0xdeadbeef"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452192,
+        "gasCost": 6,
+        "op": "MSTORE",
+        "pc": 7,
+        "stack": [
+          "0xdeadbeef",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452186,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 8,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452183,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 10,
+        "stack": [
+          "0x4"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452180,
+        "gasCost": 0,
+        "op": "REVERT",
+        "pc": 12,
+        "stack": [
+          "0x4",
+          "0x1c"
+        ],
+        "stateGasReservoir": 0
       }
     ]
   },
@@ -613,6 +764,79 @@
         "pc": 0,
         "stack": [],
         "stateGasCost": 187120,
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452198,
+        "gasCost": 3,
+        "op": "PUSH4",
+        "pc": 0,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452195,
+        "gasCost": 3,
+        "op": "PUSH1",
+        "pc": 5,
+        "stack": [
+          "0xdeadbeef"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452192,
+        "gasCost": 6,
+        "op": "MSTORE",
+        "pc": 7,
+        "stack": [
+          "0xdeadbeef",
+          "0x0"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452186,
+        "gasCost": 3,
+        "memory": [
+          "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+        ],
+        "op": "PUSH1",
+        "pc": 8,
+        "stack": [],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452183,
+        "gasCost": 3,
+        "memory": [
+          "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+        ],
+        "op": "PUSH1",
+        "pc": 10,
+        "stack": [
+          "0x4"
+        ],
+        "stateGasReservoir": 0
+      },
+      {
+        "depth": 2,
+        "gas": 9452180,
+        "gasCost": 0,
+        "memory": [
+          "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+        ],
+        "op": "REVERT",
+        "pc": 12,
+        "stack": [
+          "0x4",
+          "0x1c"
+        ],
         "stateGasReservoir": 0
       }
     ]

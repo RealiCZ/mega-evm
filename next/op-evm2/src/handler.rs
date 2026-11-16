@@ -326,7 +326,6 @@ pub fn execute_deposit_tx<T: OpTypes>(
             gas_limit: tx.gas_limit,
             floor_gas,
             initial_state_gas: 0,
-            state_refund: 0,
             result,
         },
     )?;
