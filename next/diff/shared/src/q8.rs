@@ -320,9 +320,14 @@ fn keyless() -> Vec<Scenario> {
         s.data = data;
         (s, signer, deploy)
     };
-    for (name, tx) in
-        [("k01_ok", "ok"), ("k04_empty_code", "empty"), ("k17_child_creation", "child")]
-    {
+    for (name, tx) in [
+        ("k01_ok", "ok"),
+        ("k02_revert", "revert"),
+        ("k03_halt", "halt"),
+        ("k04_empty_code", "empty"),
+        ("k05_writes_logs", "writes"),
+        ("k17_child_creation", "child"),
+    ] {
         v.push(mk(name, tx, 1_000_000, 5_000_000).0);
     }
     let (mut s, _, _) = mk("k06_volatile_detained", "volatile", 1_000_000, 5_000_000);
@@ -334,6 +339,24 @@ fn keyless() -> Vec<Scenario> {
     v.push(mk("k07_loop", "loop", 5_000_000, 20_000_000).0);
     let (s, _, _) = mk("k07b_loop_override_capped", "loop", 50_000_000, 4_000_000);
     v.push(s);
+    v.push(mk("k08_value_unfunded_signer", "value", 1_000_000, 5_000_000).0);
+    let (mut s, signer, _) = mk("k09_value_funded_signer", "value", 1_000_000, 5_000_000);
+    s.accounts.push(funded(signer, vec![], 1_000));
+    v.push(s);
+    v.push(mk("k10_nonzero_tx_nonce", "nonce1", 1_000_000, 5_000_000).0);
+    v.push(mk("k11_override_below_tx_gas", "ok", 100_000, 5_000_000).0);
+    let (mut s, _, _) = mk("k12_malformed_call", "ok", 1_000_000, 5_000_000);
+    s.data.truncate(40);
+    v.push(s);
+    let (mut s, _, _) = mk("k13_call_value_refused", "ok", 1_000_000, 5_000_000);
+    s.value = U256::from(1);
+    v.push(s);
+    let (mut s, _, deploy) = mk("k14_contract_already_exists", "ok", 1_000_000, 5_000_000);
+    s.accounts.push(acct(deploy, vec![0x00]));
+    v.push(s);
+    let (mut s, signer, _) = mk("k15_signer_nonce_too_high", "ok", 1_000_000, 5_000_000);
+    s.accounts.push(Account { address: signer, nonce: 2, ..Account::default() });
+    v.push(s);
     let (mut s, signer, _) = mk("k16_signer_nonce_one_taken_back", "ok", 1_000_000, 5_000_000);
     s.accounts.push(Account {
         address: signer,
@@ -342,6 +365,32 @@ fn keyless() -> Vec<Scenario> {
         ..Account::default()
     });
     v.push(s);
+    let (mut s, signer, _) = mk("k16b_signer_funded_nonce_zero", "ok", 1_000_000, 5_000_000);
+    s.accounts.push(funded(signer, vec![], 5));
+    v.push(s);
+    let (mut s, signer, _) = mk("k16c_signer_has_code", "ok", 1_000_000, 5_000_000);
+    s.accounts.push(acct(signer, vec![0x00]));
+    v.push(s);
+    // A contract calls keylessDeploy (depth 1): not dispatched, the contract's own code runs.
+    let (data, _, _) = keyless_call("ok", 1_000_000);
+    let mut s = q8(
+        "k18_from_a_contract_not_dispatched",
+        vec![acct(
+            A,
+            mem_call(Asm::new(), op::CALL, KEYLESS, 0, 2_000_000, &data)
+                .record_call(1)
+                .stop()
+                .build(),
+        )],
+        5_000_000,
+        Limits::default(),
+    );
+    s.to = A;
+    v.push(s);
+    let (mut s, _, _) = mk("k19_above_cap", "writes", 1_000_000, ABOVE_CAP);
+    s.salt = vec![];
+    v.push(s);
+    v.push(mk("k20_overhead_out_of_gas", "ok", 1_000_000, 90_000).0);
     let (mut s, _, _) = mk("k21_growth_limit_one", "ok", 1_000_000, 5_000_000);
     s.limits = Limits { growth: Some(1), ..Limits::default() };
     v.push(s);
@@ -350,6 +399,22 @@ fn keyless() -> Vec<Scenario> {
     v.push(s);
     let (mut s, signer, deploy) = mk("k23_salt_m8", "writes", 1_000_000, 5_000_000);
     s.salt = vec![(signer, None, 8), (deploy, None, 2), (deploy, Some(1), 4)];
+    v.push(s);
+    let (mut s, _, _) = mk("k24_not_preeip155", "ok", 1_000_000, 5_000_000);
+    s.data = {
+        let raw = hex::decode("f856808504a817c800830186a0808085608060405226a0fceb37453e90ac5ec2780748b7a4907b1dcfb87708697de2e6be19831938c77ba0224ee4c1aaa6a1490b4e3a1fbed7c5151668a12b6f6e3227c2692a64cf79e81f").unwrap();
+        abi_bytes(sel("keylessDeploy(bytes,uint256)"), &[], &raw).to_vec()
+    };
+    // abi_bytes puts the offset first; keylessDeploy wants (offset, gas override): rebuild.
+    let raw = hex::decode("f856808504a817c800830186a0808085608060405226a0fceb37453e90ac5ec2780748b7a4907b1dcfb87708697de2e6be19831938c77ba0224ee4c1aaa6a1490b4e3a1fbed7c5151668a12b6f6e3227c2692a64cf79e81f").unwrap();
+    let mut c = sel("keylessDeploy(bytes,uint256)").to_vec();
+    c.extend_from_slice(&word(0x40));
+    c.extend_from_slice(&word(1_000_000));
+    c.extend_from_slice(&word(raw.len() as u64));
+    let mut d = raw.clone();
+    d.resize(raw.len().div_ceil(32) * 32, 0);
+    c.extend_from_slice(&d);
+    s.data = c;
     v.push(s);
     v
 }
