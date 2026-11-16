@@ -452,9 +452,10 @@ fn lifecycle_absent_registry_is_seeded_from_the_bootstrap_values() {
     assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
 }
 
-/// An account without code at the registry's address, as a genesis may hold one: nonce 2, balance
-/// 3, a pending admin (slot 3) and a slot past the registry's layout (slot 20), which no seed
-/// writes, and an earlier admin in slot 2, which the seed overwrites.
+/// An account without code at the registry's address, holding storage as a genesis allocation or
+/// a fixture can (a prestate outside the specification, `SATIN-SYSC-005`): nonce 2, balance 3, a
+/// pending admin (slot 3) and a slot past the registry's layout (slot 20), which no seed writes,
+/// and an earlier admin in slot 2, which the seed overwrites.
 fn without_code(mut db: InMemoryDB) -> InMemoryDB {
     db.insert_account_info(
         &SEQUENCER_REGISTRY,
@@ -489,9 +490,10 @@ fn seed(number: u64) -> [(u64, U256); 7] {
     ]
 }
 
-/// An account without code at the registry's address receives version 2.0.0 (`SATIN-REG-008`, as
-/// the owner decided): its nonce, balance and storage kept, the seven seeded slots written over
-/// whatever they held, and nothing else written.
+/// An account without code at the registry's address receives version 2.0.0 (`SATIN-REG-008`):
+/// its nonce, balance and storage kept, the seven seeded slots written over whatever they held,
+/// and nothing else written. That prestate is outside the specification (`SATIN-SYSC-005`); the
+/// test pins that the deployment never wipes storage.
 #[test]
 fn lifecycle_registry_without_code_keeps_its_nonce_balance_and_unseeded_storage() {
     let mut block =
@@ -516,7 +518,8 @@ fn lifecycle_registry_without_code_keeps_its_nonce_balance_and_unseeded_storage(
 
 /// A seed that is zero is written over a non-zero value all the same: at block zero, slot 6
 /// (`_initialFromBlock`) is seeded with the block's number, zero, over the 77 an account without
-/// code held there.
+/// code held there. That prestate is outside the specification (`SATIN-SYSC-005`); the test pins
+/// that the deployment never wipes storage: the seed is written over the slot's own value.
 #[test]
 fn lifecycle_registry_seed_overwrites_a_non_zero_slot_with_a_zero_seed() {
     let zero = BlockInput {
@@ -540,7 +543,8 @@ fn lifecycle_registry_seed_overwrites_a_non_zero_slot_with_a_zero_seed() {
 /// The kept storage persists: the block's exported change set, applied to its parent state,
 /// builds the next block's state, which holds the kept slots, the seed and the account's nonce
 /// and balance; in the next block the registry, version 2.0.0 now, is left as it is, and its code
-/// reads the kept pending admin.
+/// reads the kept pending admin. That prestate is outside the specification (`SATIN-SYSC-005`); the
+/// test pins that the deployment never wipes storage, in the block or in what it exports.
 #[test]
 fn lifecycle_registry_without_code_keeps_its_storage_into_the_next_block() {
     let parent = without_code(world());
@@ -582,7 +586,8 @@ fn lifecycle_registry_without_code_keeps_its_storage_into_the_next_block() {
 /// No registry deployment clears storage, whatever the address holds: no account, an account
 /// without code with a nonce, a balance and storage, or an empty account holding storage. The
 /// step's state marks no wipe, and neither the session's change set nor the exported one reports
-/// one.
+/// one. The two prestates holding storage are outside the specification (`SATIN-SYSC-005`); the
+/// test pins that the deployment never wipes storage.
 #[test]
 fn lifecycle_registry_deployment_reports_no_storage_wipe() {
     let mut empty = world();
@@ -610,7 +615,8 @@ fn lifecycle_registry_deployment_reports_no_storage_wipe() {
 /// slots, each with the value the account held as its original (the earlier admin in slot 2, the
 /// delay in a slot 13 already holding it, which is a read, zero elsewhere), and none of the slots
 /// it keeps. The block's witness names no kept slot, and a replay on the witness alone makes the
-/// same states and change set.
+/// same states and change set. That prestate is outside the specification (`SATIN-SYSC-005`); the
+/// test pins that the deployment never wipes storage, so the witness need name no slot it keeps.
 #[test]
 fn lifecycle_registry_witness_names_the_account_and_the_seven_seeded_slots() {
     let mut parent = without_code(world());
@@ -669,7 +675,9 @@ fn lifecycle_registry_witness_names_the_account_and_the_seven_seeded_slots() {
 
 /// The deployment over an account without code reads each slot it seeds, and a read the database
 /// fails there is an internal error, whatever the database declares (`SATIN-PBLK-006`); over an
-/// address with no account it reads none of them, their originals being zero.
+/// address with no account it reads none of them, their originals being zero. The account here
+/// holds storage, a prestate outside the specification (`SATIN-SYSC-005`); the reads are made over
+/// any existing account without code, with storage or without.
 #[test]
 fn lifecycle_a_failed_read_of_a_seeded_slot_is_internal_and_an_absent_registry_reads_none() {
     let db = without_code(world());

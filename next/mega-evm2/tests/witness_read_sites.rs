@@ -2,7 +2,7 @@
 //! rows, a keyless deployment refused at each of its steps and one whose constructor fails, the
 //! Oracle read through `multiCall` and on a delegating contract's storage, with its own write and
 //! in a batch that reverts, the pre-block steps of the activation block, of block zero and of a
-//! registry with a due change or a wiped account, a type-1 transaction's access list, and the reads
+//! registry with a due change or with no code, a type-1 transaction's access list, and the reads
 //! gas or a limit skips (`SATIN-WIT-012`). Each block replays with the same receipts, states,
 //! per-transaction ledgers and counters, and each piece of evidence it reads, removed, fails it
 //! with a typed missing-evidence error ([`assert_exact_replay`]); a read that was skipped is in no
@@ -504,9 +504,11 @@ fn witness_replay_of_a_due_registry_change() {
     }
 }
 
-/// A registry deployment over an account without code seeds the registry and wipes the account's
-/// earlier storage, and over an absent address seeds it: the witness holds the account as the
-/// chain held it, a leaf or an absence, and both blocks replay exactly.
+/// A registry deployment over an account without code seeds the registry and keeps the account's
+/// earlier storage (`SATIN-REG-008`), and over an absent address seeds it: the witness holds the
+/// account as the chain held it, a leaf or an absence, and both blocks replay exactly. An account
+/// without code holding storage is a prestate outside the specification (`SATIN-SYSC-005`); the
+/// test pins that the deployment over it, keeping that storage, still replays exactly.
 #[test]
 fn witness_replay_of_a_registry_seeded_over_a_wiped_or_absent_account() {
     for leaf in [true, false] {

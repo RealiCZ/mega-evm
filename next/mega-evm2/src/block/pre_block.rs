@@ -163,12 +163,14 @@ impl BlockSession<'_> {
     /// code, receives version 2.0.0 and the bootstrap seed in slots 0, 1, 2, 4, 5, 6 and 13; any
     /// other code makes the block invalid. A read the database cannot serve is an internal error.
     ///
-    /// An existing account without code keeps its nonce, its balance and its storage, by the
-    /// owner's decision on `SATIN-REG-008`, as the five flat contracts' accounts do
-    /// (`SATIN-SYSC-003`): the seed overwrites the seven slots it names, each read for its
-    /// original, so a zero seed over a non-zero value is a write, and every other slot stays,
-    /// neither read nor written. Nothing is cleared. An address with no account holds no storage:
-    /// the seeded slots' originals are zero, and none is read.
+    /// An existing account without code keeps its nonce, its balance and its storage
+    /// (`SATIN-REG-008`), as the five flat contracts' accounts do (`SATIN-SYSC-003`): the seed
+    /// overwrites the seven slots it names, each read for its original, so a zero seed over a
+    /// non-zero value is a write, and every other slot stays, neither read nor written. Nothing is
+    /// cleared. A block-start state holding storage in an account without code at this address is
+    /// outside the specification (`SATIN-SYSC-005`), and no earlier step of the sequence writes
+    /// one, so on a valid chain the account this branch meets holds no storage to keep. An address
+    /// with no account holds no storage: the seeded slots' originals are zero, and none is read.
     fn deploy_registry(&mut self) -> Result<PendingState, BlockError> {
         let registry = &SEQUENCER_REGISTRY_CONTRACT;
         let failed = |slot: Option<U256>| {
