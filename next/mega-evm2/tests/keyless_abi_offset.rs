@@ -5,8 +5,8 @@
 //! (`SATIN-ICPT-006`, `SATIN-KEY-005` step 3): it runs KeylessDeploy's bytecode — here a stub that
 //! reverts with no data — and is charged no dispatch overhead.
 //!
-//! The differential gate runs the same input (`edge_keyless_offset_u64_max`) in release builds,
-//! where an unchecked addition would wrap rather than panic.
+//! The Mega EEST case `satin/keyless/abi/offset-2-64-minus-1` runs the same offset, and its
+//! sibling cases pin the other undecodable arguments, through the conformance adapter.
 
 mod common;
 
@@ -82,25 +82,4 @@ fn assert_malformed(result: &evm2::TxResult<MegaTypes>) {
 fn test_offset_at_the_top_of_usize_is_malformed() {
     assert_malformed(&run(call_with_offset(U256::from(usize::MAX))));
     assert_malformed(&run(call_with_offset(U256::from(usize::MAX - 31))));
-}
-
-/// The control: an offset that only points past the input is malformed the same way.
-#[test]
-fn test_offset_past_the_input_is_malformed() {
-    assert_malformed(&run(call_with_offset(U256::from(0x40))));
-}
-
-/// The control: arguments that decode, whose `bytes` holds no transaction, are a deployment,
-/// dispatched and charged the overhead before the transaction is decoded and refused.
-#[test]
-fn test_decoded_arguments_are_dispatched_and_charged_the_overhead() {
-    let mut input = selector("keylessDeploy(bytes,uint256)").to_vec();
-    input.extend_from_slice(&U256::from(0x40).to_be_bytes::<32>());
-    input.extend_from_slice(&U256::from(1_000_000u64).to_be_bytes::<32>());
-    input.extend_from_slice(&U256::from(1).to_be_bytes::<32>());
-    input.extend_from_slice(&[0x01; 32]);
-    let result = run(input.into());
-    assert_eq!(result.stop, InstrStop::Revert, "{result:?}");
-    assert_eq!(result.output.as_ref(), selector("MalformedEncoding()"), "{result:?}");
-    assert!(result.total_gas_spent > 100_000, "{result:?}");
 }

@@ -3,10 +3,11 @@
 //! off the signer's code is neither loaded nor checked, and the deployment goes on.
 //!
 //! The differential gates run Satin's version, where EIP-3607 is on, and the scenario format
-//! cannot turn it off, so this file runs the gate's `k16c_signer_has_code` input (the `ok` keyless
-//! transaction, a gas override of 1,000,000, its signer holding the code `0x00`) with the feature
-//! on and off. The expected outcomes are the Satin implementation's under review for the same
-//! input, the off case with `CfgEnv::disable_eip3607` set.
+//! cannot turn it off, so this file runs the `ok` keyless transaction, a gas override of 1,000,000,
+//! its signer holding the code `0x00`, with the feature off (and, for the code read, on). The
+//! refusal with the feature on is the Mega EEST case `satin/keyless/refusal/signer-has-code`. The
+//! expected outcomes are the Satin implementation's under review for the same input, the off case
+//! with `CfgEnv::disable_eip3607` set.
 
 mod common;
 
@@ -172,18 +173,6 @@ fn test_keyless_signer_code_is_not_checked_with_eip3607_disabled() {
     assert_eq!(signer.nonce, 1);
     let deployed = evm.state_mut().account(&DEPLOY).unwrap().get().cloned().unwrap();
     assert_eq!((deployed.nonce, deployed.code_hash), (1, keccak256([0x00])));
-}
-
-/// The control, the gate's own configuration: with EIP-3607 on the signer's code is refused, as
-/// the reference refuses it (`SignerHasCode()`, 161,452 gas used, nothing deployed).
-#[test]
-fn test_keyless_signer_with_code_is_refused_with_eip3607_enabled() {
-    let mut evm = satin_evm(true, Backend::new(&[0x00], false));
-    let result = evm.transact(&keyless_tx()).expect("a valid transaction").commit();
-    assert_eq!(result.stop, InstrStop::Revert, "{result:?}");
-    assert_eq!(result.output.as_ref(), selector("SignerHasCode()"));
-    assert_eq!(result.tx_gas_used(), 161_452);
-    assert!(evm.state_mut().account(&DEPLOY).unwrap().get().is_none());
 }
 
 /// With EIP-3607 disabled the signer's code is not even read: a database that cannot serve it does
