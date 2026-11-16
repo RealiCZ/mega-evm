@@ -15,7 +15,7 @@ use alloy_primitives::{Address, B256, Bytes, KECCAK256_EMPTY, TxKind, U256, hex,
 use evm2::{
     DatabaseError,
     bytecode::Bytecode,
-    evm::{AccountInfo, Database, Db, InMemoryDB},
+    evm::{AccountInfo, Database, Db, InMemoryDB, StateChangeSource},
     inspector::Inspector,
     interpreter::{Interpreter, Message, MessageResult, Word},
 };
@@ -29,11 +29,13 @@ use mega_evm2::{
         CREATE2_FACTORY, FLAT_SYSTEM_CONTRACTS, HIGH_PRECISION_TIMESTAMP, MEGA_SYSTEM_ADDRESS,
         SEQUENCER_REGISTRY_CODE, SEQUENCER_REGISTRY_CODE_HASH, address_word,
     },
+    witness::{Witness, WitnessDb, WitnessKeys},
 };
 use op_evm2::OpTxEnvelope;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::Arc,
 };
 
 const CHAIN_ID: u64 = 1;
@@ -450,32 +452,242 @@ fn lifecycle_absent_registry_is_seeded_from_the_bootstrap_values() {
     assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
 }
 
-/// An account without code at the registry's address receives version 2.0.0 as a new contract: its
-/// nonce and balance kept, its earlier storage cleared, then seeded.
-#[test]
-fn lifecycle_registry_without_code_is_seeded_over_its_cleared_storage() {
-    let mut db = world();
+/// An account without code at the registry's address, as a genesis may hold one: nonce 2, balance
+/// 3, a pending admin (slot 3) and a slot past the registry's layout (slot 20), which no seed
+/// writes, and an earlier admin in slot 2, which the seed overwrites.
+fn without_code(mut db: InMemoryDB) -> InMemoryDB {
     db.insert_account_info(
         &SEQUENCER_REGISTRY,
         AccountInfo::default().with_nonce(2).with_balance(U256::from(3)),
     );
-    // `_pendingAdmin` and a slot no seed writes.
-    set_slot(&mut db, 3, address_word(Address::repeat_byte(0x99)));
-    set_slot(&mut db, 20, U256::from(21));
-    let mut block = start(&genesis_chain(), &block_input(), db).expect("the block starts");
+    for (slot, value) in kept_slots() {
+        set_slot(&mut db, slot, value);
+    }
+    set_slot(&mut db, 2, address_word(EARLIER_ADMIN));
+    db
+}
+
+/// The admin an account without code held before the registry was installed over it.
+const EARLIER_ADMIN: Address = Address::repeat_byte(0xee);
+
+/// The slots of [`without_code`] no seed writes, with their values.
+fn kept_slots() -> [(u64, U256); 2] {
+    [(3, address_word(Address::repeat_byte(0x99))), (20, U256::from(21))]
+}
+
+/// The seven slots a new registry is seeded with at block `number`, with their values.
+fn seed(number: u64) -> [(u64, U256); 7] {
+    let system = address_word(MEGA_SYSTEM_ADDRESS);
+    [
+        (0, system),
+        (1, address_word(SEQUENCER)),
+        (2, address_word(ADMIN)),
+        (4, system),
+        (5, address_word(SEQUENCER)),
+        (6, U256::from(number)),
+        (13, U256::from(DELAY)),
+    ]
+}
+
+/// An account without code at the registry's address receives version 2.0.0 (`SATIN-REG-008`, as
+/// the owner decided): its nonce, balance and storage kept, the seven seeded slots written over
+/// whatever they held, and nothing else written.
+#[test]
+fn lifecycle_registry_without_code_keeps_its_nonce_balance_and_unseeded_storage() {
+    let mut block =
+        start(&genesis_chain(), &block_input(), without_code(world())).expect("the block starts");
     let current = changed_account(&block, SEQUENCER_REGISTRY).flatten().unwrap();
     assert_eq!(current.code_hash, SEQUENCER_REGISTRY_CODE_HASH);
     assert_eq!((current.nonce, current.balance), (2, U256::from(3)));
-    assert!(wiped(&block, SEQUENCER_REGISTRY), "the earlier storage is cleared");
-    let seeded: Vec<u64> =
-        changed_slots(&block, SEQUENCER_REGISTRY).iter().map(|(k, _)| *k).collect();
-    assert_eq!(seeded, [0, 1, 2, 4, 5, 6, 13]);
+    assert_eq!(changed_slots(&block, SEQUENCER_REGISTRY), seed(NUMBER));
+    assert!(!wiped(&block, SEQUENCER_REGISTRY), "its storage is kept");
     assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
-    // The cleared `_pendingAdmin` reads zero through the new code.
+    // The kept `_pendingAdmin` reads through the new code, and the seeded admin replaced the
+    // earlier one.
     assert_eq!(
         view(&mut block, 0, SEQUENCER_REGISTRY, call_data("pendingAdmin()", None)),
-        U256::ZERO
+        kept_slots()[0].1
     );
+    assert_eq!(
+        view(&mut block, 1, SEQUENCER_REGISTRY, call_data("admin()", None)),
+        address_word(ADMIN)
+    );
+}
+
+/// A seed that is zero is written over a non-zero value all the same: at block zero, slot 6
+/// (`_initialFromBlock`) is seeded with the block's number, zero, over the 77 an account without
+/// code held there.
+#[test]
+fn lifecycle_registry_seed_overwrites_a_non_zero_slot_with_a_zero_seed() {
+    let zero = BlockInput {
+        header: BlockHeader {
+            parent_beacon_block_root: Some(B256::ZERO),
+            ..BlockHeader::default()
+        },
+        parent: ParentContext::BlockZero,
+    };
+    let mut db = without_code(world());
+    set_slot(&mut db, 6, U256::from(77));
+    let block = start(&genesis_chain(), &zero, db).expect("block zero starts");
+    // Block zero: the five deployments, the due-change read, then the registry.
+    let deployed = block.pre_block_states()[6].account_changes_for(&SEQUENCER_REGISTRY).unwrap();
+    let slot = &deployed.storage.slots[&U256::from(6)].value;
+    assert_eq!((slot.original, slot.current), (U256::from(77), U256::ZERO));
+    assert_eq!(common::committed_slot(&block, SEQUENCER_REGISTRY, U256::from(6)), Some(U256::ZERO));
+    assert_eq!(changed_slots(&block, SEQUENCER_REGISTRY), seed(0));
+}
+
+/// The kept storage persists: the block's exported change set, applied to its parent state,
+/// builds the next block's state, which holds the kept slots, the seed and the account's nonce
+/// and balance; in the next block the registry, version 2.0.0 now, is left as it is, and its code
+/// reads the kept pending admin.
+#[test]
+fn lifecycle_registry_without_code_keeps_its_storage_into_the_next_block() {
+    let parent = without_code(world());
+    let block = start(&genesis_chain(), &block_input(), parent.clone()).expect("the block starts");
+    let output = block.finish().expect("the block finishes");
+    let registry: Vec<u64> = output
+        .changes
+        .storage_sorted()
+        .iter()
+        .filter(|(k, _)| k.address() == SEQUENCER_REGISTRY)
+        .map(|(k, _)| k.key().to::<u64>())
+        .collect();
+    assert_eq!(registry, [0, 1, 2, 4, 5, 6, 13], "the export writes the seed alone");
+    let mut next = parent;
+    output.changes.visit(&mut next).unwrap();
+    for (slot, value) in kept_slots().into_iter().chain(seed(NUMBER)) {
+        let read = next.get_storage(&SEQUENCER_REGISTRY, &U256::from(slot)).unwrap();
+        assert_eq!(read, value, "slot {slot}");
+    }
+    let info = next.get_account(&SEQUENCER_REGISTRY).unwrap().unwrap();
+    assert_eq!(
+        (info.code_hash, info.nonce, info.balance),
+        (SEQUENCER_REGISTRY_CODE_HASH, 2, U256::from(3))
+    );
+    let mut block =
+        start(&genesis_chain(), &input(NUMBER + 1, 101), next).expect("the next block starts");
+    let deployed =
+        block.pre_block_states()[REGISTRY_DEPLOYMENT].account_changes_for(&SEQUENCER_REGISTRY);
+    let deployed = deployed.unwrap();
+    assert!(!deployed.is_changed() && deployed.storage.slots.is_empty(), "left as it is");
+    assert!(changed_account(&block, SEQUENCER_REGISTRY).is_none());
+    assert_eq!(block.system_address(), Some(MEGA_SYSTEM_ADDRESS));
+    assert_eq!(
+        view(&mut block, 0, SEQUENCER_REGISTRY, call_data("pendingAdmin()", None)),
+        kept_slots()[0].1
+    );
+}
+
+/// No registry deployment clears storage, whatever the address holds: no account, an account
+/// without code with a nonce, a balance and storage, or an empty account holding storage. The
+/// step's state marks no wipe, and neither the session's change set nor the exported one reports
+/// one.
+#[test]
+fn lifecycle_registry_deployment_reports_no_storage_wipe() {
+    let mut empty = world();
+    empty.insert_account_info(&SEQUENCER_REGISTRY, AccountInfo::default());
+    set_slot(&mut empty, 20, U256::from(21));
+    for (name, db) in
+        [("absent", world()), ("without code", without_code(world())), ("empty", empty)]
+    {
+        let block = start(&genesis_chain(), &block_input(), db).expect(name);
+        let state = &block.pre_block_states()[REGISTRY_DEPLOYMENT];
+        let deployed = state.account_changes_for(&SEQUENCER_REGISTRY).expect(name);
+        assert!(!deployed.storage.wiped && !deployed.created, "{name}");
+        assert_eq!(
+            deployed.current.map(|i| i.code_hash),
+            Some(SEQUENCER_REGISTRY_CODE_HASH),
+            "{name}"
+        );
+        assert!(!wiped(&block, SEQUENCER_REGISTRY), "{name}");
+        let output = block.finish().expect(name);
+        assert_eq!(output.changes.storage_wipes_sorted(), Vec::<Address>::new(), "{name}");
+    }
+}
+
+/// The deployment's state over an account without code names the account and the seven seeded
+/// slots, each with the value the account held as its original (the earlier admin in slot 2, the
+/// delay in a slot 13 already holding it, which is a read, zero elsewhere), and none of the slots
+/// it keeps. The block's witness names no kept slot, and a replay on the witness alone makes the
+/// same states and change set.
+#[test]
+fn lifecycle_registry_witness_names_the_account_and_the_seven_seeded_slots() {
+    let mut parent = without_code(world());
+    set_slot(&mut parent, 13, U256::from(DELAY));
+    let block = start(&genesis_chain(), &block_input(), parent.clone()).expect("the block starts");
+    let state = &block.pre_block_states()[REGISTRY_DEPLOYMENT];
+    assert_eq!(state.account_changes().count(), 1, "the registry alone");
+    let deployed = state.account_changes_for(&SEQUENCER_REGISTRY).unwrap();
+    let original = deployed.original.expect("the account existed");
+    assert_eq!(
+        (original.code_hash, original.nonce, original.balance),
+        (KECCAK256_EMPTY, 2, U256::from(3))
+    );
+    assert_eq!(deployed.current.map(|i| i.code_hash), Some(SEQUENCER_REGISTRY_CODE_HASH));
+    let mut slots: Vec<_> = deployed
+        .storage
+        .slots
+        .iter()
+        .map(|(k, s)| (k.to::<u64>(), s.value.original, s.value.current))
+        .collect();
+    slots.sort();
+    let (system, sequencer) = (address_word(MEGA_SYSTEM_ADDRESS), address_word(SEQUENCER));
+    let delay = U256::from(DELAY);
+    assert_eq!(
+        slots,
+        [
+            (0, U256::ZERO, system),
+            (1, U256::ZERO, sequencer),
+            (2, address_word(EARLIER_ADMIN), address_word(ADMIN)),
+            (4, U256::ZERO, system),
+            (5, U256::ZERO, sequencer),
+            (6, U256::ZERO, U256::from(NUMBER)),
+            (13, delay, delay),
+        ]
+    );
+    let output = block.finish().expect("the block finishes");
+    let keys = WitnessKeys::of(&output);
+    let named: Vec<u64> =
+        keys.accounts()[&SEQUENCER_REGISTRY].iter().map(|k| k.to::<u64>()).collect();
+    // The seed, and the due-change read's two pending slots (both zero, so no activation slot).
+    assert_eq!(named, [0, 1, 2, 4, 5, 6, 7, 9, 13]);
+    let salt = common::minimum_salt(B256::ZERO);
+    let witness = Arc::new(Witness::resolve(&keys, &mut parent, &*salt).expect("resolved"));
+    let replayed = genesis_chain()
+        .start_block(
+            &block_input(),
+            Db::new(WitnessDb::new(witness.clone())),
+            BlockServices::new(witness),
+        )
+        .expect("the replay starts")
+        .finish()
+        .expect("the replay finishes");
+    assert_eq!(replayed.pre_block_states, output.pre_block_states);
+    assert_eq!(replayed.changes, output.changes);
+}
+
+/// The deployment over an account without code reads each slot it seeds, and a read the database
+/// fails there is an internal error, whatever the database declares (`SATIN-PBLK-006`); over an
+/// address with no account it reads none of them, their originals being zero.
+#[test]
+fn lifecycle_a_failed_read_of_a_seeded_slot_is_internal_and_an_absent_registry_reads_none() {
+    let db = without_code(world());
+    for (slot, _) in seed(NUMBER) {
+        assert_read_is_internal(
+            &genesis_chain(),
+            &block_input(),
+            &db,
+            SEQUENCER_REGISTRY,
+            Some(slot),
+            Phase::Deployment,
+        );
+        let mut absent = Watched::new(world(), SEQUENCER_REGISTRY);
+        absent.fail = Some((Some(slot), true));
+        genesis_chain()
+            .start_block(&block_input(), Db::new(absent), common::services(B256::ZERO))
+            .unwrap_or_else(|e| panic!("slot {slot} was read: {e:?}"));
+    }
 }
 
 /// Any other code at the registry's address is never overwritten: the block is invalid.

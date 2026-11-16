@@ -308,9 +308,10 @@ pub struct BlockOutput {
     pub receipts: Vec<Receipt>,
     /// The block's change set, pre-block states included.
     pub changes: BlockStateAccumulator,
-    /// Whole pre-block states in commit order, including read-only accounts and slots. The change
-    /// set is the block's state transition: a registry seeded over an account without code clears
-    /// that account's earlier storage there, which its pre-block state does not mark.
+    /// Whole pre-block states in commit order, including read-only accounts and slots; the change
+    /// set holds what they changed. No deployment clears an account's storage: the registry seeded
+    /// over an account without code writes the slots it seeds and keeps every other
+    /// (`SATIN-REG-008`).
     pub pre_block_states: Vec<PendingState>,
     /// Every included transaction's whole state, in commit order: every account and slot it
     /// loaded, read-only entries included, and the L1 block contract's account and slots it was
