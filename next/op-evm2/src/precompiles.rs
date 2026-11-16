@@ -7,7 +7,10 @@ use alloc::{borrow::Cow, vec::Vec};
 use alloy_primitives::Address;
 use evm2::{
     Evm, EvmTypes, PrecompileError, PrecompileHalt, Precompiles, SpecId,
-    evm::precompile::{PrecompileOutput, PrecompileProvider},
+    evm::{
+        PrewarmSet,
+        precompile::{PrecompileOutput, PrecompileProvider},
+    },
     interpreter::{GasTracker, Message},
     precompiles::{
         MODEXP_OSAKA, MovePrecompileError, P256VERIFY, P256VERIFY_OSAKA, Precompile, PrecompileId,
@@ -301,6 +304,12 @@ impl PrecompileProvider<OpEvmTypes> for OpPrecompiles {
         self.inner.contains(address)
     }
 
+    /// The wrapped map's warm addresses: after a move, those from before it, as evm2's
+    /// [`Precompiles`] keeps them.
+    fn warm_addresses(&self, warm: &mut PrewarmSet) {
+        self.inner.warm_addresses(warm)
+    }
+
     fn move_precompiles(
         &mut self,
         moves: &[(Address, Address)],
@@ -471,5 +480,26 @@ mod tests {
         assert_eq!(addrs(OpSpecId::JOVIAN), isthmus);
         assert_eq!(addrs(OpSpecId::KARST), base(SpecId::OSAKA));
         assert_eq!(OpPrecompiles::new(OpSpecId::KARST).spec(), OpSpecId::KARST);
+    }
+
+    /// A moved precompile's warm address stays the one it had before the move, as evm2's
+    /// `Precompiles` keeps it: the wrapper hands the warm set to the map it wraps.
+    #[test]
+    fn moved_precompiles_keep_their_warm_addresses() {
+        let identity = Address::with_last_byte(0x04);
+        let moved = Address::with_last_byte(0xf4);
+        let mut precompiles = OpPrecompiles::new(OpSpecId::KARST);
+        precompiles.move_precompiles(&[(identity, moved)]).unwrap();
+        assert!(!precompiles.contains(&identity) && precompiles.contains(&moved));
+
+        let mut warm = PrewarmSet::new();
+        precompiles.warm_addresses(&mut warm);
+        assert!(warm.is_warm(&identity), "the address from before the move stays warm");
+        assert!(!warm.is_warm(&moved), "the destination is not warmed");
+        let mut unmoved = PrewarmSet::new();
+        OpPrecompiles::new(OpSpecId::KARST).warm_addresses(&mut unmoved);
+        for address in OpPrecompiles::new(OpSpecId::KARST).addresses() {
+            assert_eq!(warm.is_warm(&address), unmoved.is_warm(&address), "{address}");
+        }
     }
 }

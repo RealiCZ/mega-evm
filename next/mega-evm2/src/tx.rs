@@ -866,7 +866,6 @@ fn execute_deposit_body(
             gas_limit: tx.gas_limit,
             floor_gas,
             initial_state_gas,
-            state_refund: 0,
             result,
         },
     )

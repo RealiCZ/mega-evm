@@ -180,72 +180,78 @@ fn inspector_struct_log_js_and_opcode_counter_see_the_same_steps() {
         let full_steps = full["structLogs"].as_array().unwrap();
         assert_eq!(steps.len(), full_steps.len(), "{name}: the full struct logger");
         let js_steps = js["steps"].as_array().unwrap();
-        // A keyless deployment's creation is in the JavaScript tracer's steps and not in the
-        // struct logs (`inspector_keyless_step_traces_miss_the_creation`): its steps are the
-        // JavaScript tracer's below the dispatcher.
-        let keyless = is_keyless_deployment(&case, &structs);
-        if keyless {
-            assert_eq!(
-                (steps.len(), js_steps[0][1].clone()),
-                (1, json!(1)),
-                "{name}: the dispatcher"
-            );
-        } else {
-            assert_eq!(steps.len(), js_steps.len(), "{name}: the JavaScript tracer's steps");
-        }
+        // Every step, a keyless deployment's creation below its dispatcher included
+        // (`inspector_keyless_step_traces_show_the_creation`).
+        assert_eq!(steps.len(), js_steps.len(), "{name}: the JavaScript tracer's steps");
+        // The gas of each frame a creation enters, in order: the JavaScript tracer's `getCost()`
+        // of a step that starts a creation counts it (a call step's cost counts the forwarded
+        // gas in both).
+        let mut created_frame_gas = js["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| {
+                f[0] == json!("enter") && matches!(f[1].as_str(), Some("CREATE" | "CREATE2"))
+            })
+            .map(|f| f[5].as_u64().unwrap());
         for (s, j) in steps.iter().zip(js_steps) {
             assert_eq!(s["depth"], j[1], "{name}: depth");
             assert_eq!(s["pc"], j[2], "{name}: pc");
             assert_eq!(s["gas"], j[3], "{name}: gas");
-            // Known shape: the JavaScript tracer's `getCost()` is the regular gas the step took,
-            // the state and history gas that spilled onto it included, even when a failure gave it
-            // back later; the struct logger's `gasCost` leaves that spill out and reports the
-            // step's state and history gas as `stateGasCost`, whichever pool paid it. They agree
-            // on every step that charges no state or history gas.
+            // The struct logger's `gasCost` is the JavaScript tracer's `getCost()`: the gas the
+            // step took from the frame's gas, without the state and history gas that spilled onto
+            // it, as go-ethereum leaves state gas out. The step's state and history gas is
+            // `stateGasCost` beside it, whichever pool paid it.
             let (cost, js_cost) = (s["gasCost"].as_u64().unwrap(), j[4].as_u64().unwrap());
-            let state = s["stateGasCost"].as_u64().unwrap_or(0);
+            if js_cost == cost {
+                continue;
+            }
+            // Known shape: a step that starts a creation (CREATE, CREATE2, the keyless
+            // dispatcher) costs the created frame's gas more under the JavaScript tracer.
             let op_name = s["op"].as_str().unwrap();
-            assert!(js_cost >= cost, "{name}: step {s}: JavaScript cost {js_cost}");
-            let may_charge_state = matches!(
-                op_name,
-                "LOG0" |
-                    "LOG1" |
-                    "LOG2" |
-                    "LOG3" |
-                    "LOG4" |
-                    "CALL" |
-                    "CALLCODE" |
-                    "CREATE" |
-                    "CREATE2" |
-                    "SELFDESTRUCT"
-            ) || op_name.starts_with("opcode ") ||
-                op_name == "SSTORE" && state > 0;
-            if !may_charge_state {
-                assert_eq!(js_cost, cost, "{name}: step {s}: no state or history gas to spill");
-            }
-            if op_name == "SSTORE" && state > 0 {
-                assert!(
-                    js_cost - cost <= state,
-                    "{name}: step {s}: the spill is the step's state gas"
-                );
+            assert!(
+                matches!(op_name, "CREATE" | "CREATE2") || op_name.starts_with("opcode "),
+                "{name}: step {s}: JavaScript cost {js_cost}"
+            );
+            assert_eq!(
+                Some(js_cost - cost),
+                created_frame_gas.next(),
+                "{name}: step {s}: the created frame's gas"
+            );
+        }
+        // The opcode counter counts every step of a defined opcode, and charges each opcode but
+        // a call or a creation (whose charge it nets of the child) what the struct logs cost it.
+        let mut by_op = BTreeMap::<String, (u64, u64)>::new();
+        for s in steps {
+            let op = s["op"].as_str().unwrap();
+            if !op.starts_with("opcode ") {
+                let entry = by_op.entry(op.to_string()).or_default();
+                entry.0 += 1;
+                entry.1 += s["gasCost"].as_u64().unwrap();
             }
         }
-        let counted_steps: Vec<String> = if keyless {
-            js_steps.iter().skip(1).map(|j| j[0].as_str().unwrap().to_string()).collect()
-        } else {
-            steps.iter().map(|s| s["op"].as_str().unwrap().to_string()).collect()
-        };
-        let mut by_op = BTreeMap::<String, u64>::new();
-        for op in counted_steps.into_iter().filter(|op| !op.starts_with("opcode ")) {
-            *by_op.entry(op).or_default() += 1;
-        }
-        let counted: BTreeMap<String, u64> = counts
+        let counted: BTreeMap<String, (u64, u64)> = counts
             .as_array()
             .unwrap()
             .iter()
-            .map(|c| (c[0].as_str().unwrap().to_string(), c[1].as_u64().unwrap()))
+            .map(|c| {
+                (
+                    c[0].as_str().unwrap().to_string(),
+                    (c[1].as_u64().unwrap(), c[2].as_u64().unwrap()),
+                )
+            })
             .collect();
-        assert_eq!(by_op, counted, "{name}: the opcode counter counts every step");
+        assert_eq!(
+            by_op.iter().map(|(op, (n, _))| (op, n)).collect::<Vec<_>>(),
+            counted.iter().map(|(op, (n, _))| (op, n)).collect::<Vec<_>>(),
+            "{name}: the opcode counter counts every step"
+        );
+        for (op, (_, gas)) in &by_op {
+            let calls = ["CALL", "CALLCODE", "DELEGATECALL", "STATICCALL", "CREATE", "CREATE2"];
+            if !calls.contains(&op.as_str()) {
+                assert_eq!(counted[op].1, *gas, "{name}: the opcode counter's {op} gas");
+            }
+        }
     }
 }
 
@@ -439,34 +445,30 @@ fn inspector_parity_trace_state_diff_and_vm_trace() {
             in_prestate.is_subset(&diffed),
             "{name}: the state diff {diffed:?} misses one of {in_prestate:?}"
         );
-        // The VM trace: one op per struct-log step, subs included, except a keyless deployment,
-        // whose creation is no VM-trace sub (see
-        // `inspector_keyless_step_traces_miss_the_creation`).
-        fn ops(vm: &Value) -> usize {
-            vm["ops"].as_array().map_or(0, |ops| ops.iter().map(|o| 1 + ops_of(&o["sub"])).sum())
+        // The VM trace: one op per struct-log step, in execution order with each sub after the op
+        // that started it, costing what the struct logs cost it; a keyless deployment's creation
+        // is its dispatcher's sub.
+        fn costs(vm: &Value, out: &mut Vec<u64>) {
+            for o in vm["ops"].as_array().into_iter().flatten() {
+                out.push(o["cost"].as_u64().unwrap());
+                if !o["sub"].is_null() {
+                    costs(&o["sub"], out);
+                }
+            }
         }
-        fn ops_of(sub: &Value) -> usize {
-            if sub.is_null() { 0 } else { ops(sub) }
-        }
+        let mut vm_costs = Vec::new();
+        costs(&parity["vmTrace"], &mut vm_costs);
         // A step that runs an invalid opcode is not in a Parity VM trace (OpenEthereum records an
         // instruction as it prepares to execute it, which an invalid one never is).
-        let struct_steps = structs["structLogs"]
+        let struct_costs: Vec<u64> = structs["structLogs"]
             .as_array()
             .unwrap()
             .iter()
             .filter(|s| s["op"] != json!("INVALID"))
-            .count();
-        if !is_keyless_deployment(&case, &structs) {
-            assert_eq!(ops(&parity["vmTrace"]), struct_steps, "{name}: VM trace ops");
-        }
+            .map(|s| s["gasCost"].as_u64().unwrap())
+            .collect();
+        assert_eq!(vm_costs, struct_costs, "{name}: VM trace ops and their costs");
     }
-}
-
-/// Whether `case` is a keyless deployment the engine dispatched: a call of KeylessDeploy whose
-/// frame ran the engine's dispatcher (its struct logs `structs`).
-fn is_keyless_deployment(case: &Case, structs: &Value) -> bool {
-    case.tx.to() == Some(common::KEYLESS) &&
-        structs["structLogs"][0]["op"] == json!("opcode 0xc not defined")
 }
 
 #[test]
@@ -838,36 +840,105 @@ fn inspector_plain_block_session_with_an_inspector_observing_its_pre_block_calls
     assert_eq!(traces.len(), txs.len());
 }
 
-/// The keyless dispatcher's one step: the frame of a native keyless deployment runs one
-/// instruction, the engine's dispatcher (an opcode no other code can run), which starts the
-/// creation. The step tracers show that instruction as an undefined opcode, and the builders that
-/// enter a child frame only after a call or create opcode (the struct logger, the Parity VM trace)
-/// leave the creation's steps out, though the inspector recorded them and the JavaScript tracer
-/// and the call tracer show the creation. A change on either side, the engine's dispatcher or
-/// the builders, fails this: then require the creation's steps instead.
+/// The keyless dispatcher's step and the creation below it: the frame of a native keyless
+/// deployment runs one instruction, the engine's dispatcher (an opcode no other code can run),
+/// which starts the creation. The step tracers show that instruction as an undefined opcode, and
+/// the builders enter the child right after it, as after a call or create opcode: the struct logs
+/// show the creation's steps below the dispatcher, as the JavaScript tracer does, and the Parity VM
+/// trace gives the dispatcher the creation as its sub. A refused deployment starts no creation, and
+/// its dispatcher has none.
 #[test]
-fn inspector_keyless_step_traces_miss_the_creation() {
-    let case =
-        reference_scenarios::cases().into_iter().find(|c| c.name == "keyless_success").unwrap();
-    let traces = all_traces(&case);
-    let structs = traces["struct_log"]["structLogs"].as_array().unwrap().clone();
-    assert_eq!(structs.len(), 1, "the dispatcher's step alone: {structs:?}");
-    assert_eq!(structs[0]["op"], json!("opcode 0xc not defined"));
-    assert_eq!(structs[0]["depth"], json!(1));
-    let vm = &traces["parity"]["vmTrace"]["ops"];
-    assert_eq!(vm.as_array().unwrap().len(), 1);
-    assert_eq!(vm[0]["op"], json!("UNKNOWN(0x0C)"));
-    assert!(vm[0]["sub"].is_null(), "the creation is no VM-trace sub");
-    // The JavaScript tracer sees the creation's steps at depth 2 and enters its frame.
-    let js_steps = traces["js"]["steps"].as_array().unwrap();
-    assert!(js_steps.len() > 1 && js_steps[1][1] == json!(2), "{js_steps:?}");
-    assert_eq!(traces["js"]["frames"][0][1], json!("CREATE"));
-    let mut inspector = TracingInspector::new(TracingInspectorConfig::all());
-    let _ = case.traced(&mut inspector, "a tracing inspector");
-    let nodes = inspector.traces().nodes();
-    assert_eq!(nodes.len(), 2);
-    assert_eq!(nodes[0].trace.steps.len(), 1, "the dispatcher");
-    assert!(!nodes[1].trace.steps.is_empty(), "the inspector recorded the creation's steps");
+fn inspector_keyless_step_traces_show_the_creation() {
+    for (scenario, creates) in
+        [("keyless_success", true), ("keyless_creation_reverts", true), ("keyless_refused", false)]
+    {
+        let case = every_case().into_iter().find(|c| c.name == scenario).unwrap();
+        let traces = all_traces(&case);
+        let structs = traces["struct_log"]["structLogs"].as_array().unwrap().clone();
+        assert_eq!(structs[0]["op"], json!("opcode 0xc not defined"), "{scenario}");
+        assert_eq!(structs[0]["depth"], json!(1), "{scenario}");
+        // The inspector recorded the dispatcher, then the creation's steps in a child frame.
+        let mut inspector = TracingInspector::new(TracingInspectorConfig::all());
+        let _ = case.traced(&mut inspector, "a tracing inspector");
+        let nodes = inspector.traces().nodes();
+        assert_eq!(nodes[0].trace.steps.len(), 1, "{scenario}: the dispatcher");
+        assert_eq!(nodes.len(), 1 + usize::from(creates), "{scenario}");
+        let created = nodes.get(1).map_or(0, |node| node.trace.steps.len());
+        assert_eq!(created > 0, creates, "{scenario}: the creation's steps");
+        // The struct logs: the dispatcher, then every step of the creation at depth 2.
+        assert_eq!(structs.len(), 1 + created, "{scenario}: {structs:?}");
+        assert!(structs[1..].iter().all(|s| s["depth"] == json!(2)), "{scenario}");
+        let js_steps = traces["js"]["steps"].as_array().unwrap();
+        let depths =
+            |steps: &[Value], at: usize| steps.iter().map(|s| s[at].clone()).collect::<Vec<_>>();
+        let struct_depths: Vec<Value> = structs.iter().map(|s| s["depth"].clone()).collect();
+        assert_eq!(struct_depths, depths(js_steps, 1), "{scenario}: the JavaScript tracer's steps");
+        // The VM trace: the dispatcher's one op, with the creation as its sub.
+        let vm = &traces["parity"]["vmTrace"]["ops"];
+        assert_eq!(vm.as_array().unwrap().len(), 1, "{scenario}");
+        assert_eq!(vm[0]["op"], json!("UNKNOWN(0x0C)"), "{scenario}");
+        assert_eq!(vm[0]["cost"], structs[0]["gasCost"], "{scenario}");
+        let sub_ops = vm[0]["sub"]["ops"].as_array().map(Vec::len);
+        assert_eq!(sub_ops, creates.then_some(created), "{scenario}: the creation's VM trace");
+        if creates {
+            assert_eq!(traces["js"]["frames"][0][1], json!("CREATE"), "{scenario}");
+        }
+    }
+}
+
+/// A storage write whose state gas spills onto the frame's gas costs the same in every step
+/// tracer, the struct logs, the Parity VM trace, the JavaScript tracer's `getCost()` and the
+/// opcode gas inspector: its 12,100, state gas left out as go-ethereum leaves it, with the state
+/// and history gas beside it as `stateGasCost`. The spill shows as the gas the next step starts
+/// with. Below the cap the reservoir is empty and a fresh slot's state and history gas (97,920 for
+/// the slot, 3,520 for its write record) spill in full; above it the reservoir pays all of it but
+/// the 10,000 legacy share, which the frame's gas always pays.
+#[test]
+fn inspector_spilled_sstore_costs_the_same_in_every_step_tracer() {
+    let cost = 12_100;
+    for (scenario, spilled, reservoir) in
+        [("sstore_new_slot", 97_920 + 3_520, 0), ("reservoir_sstore", 10_000, 1_972_720)]
+    {
+        let case = every_case().into_iter().find(|c| c.name == scenario).unwrap();
+        let traces = all_traces(&case);
+        let structs = traces["struct_log"]["structLogs"].as_array().unwrap();
+        let at = structs.iter().position(|s| s["op"] == json!("SSTORE")).unwrap();
+        assert_eq!(structs.iter().filter(|s| s["op"] == json!("SSTORE")).count(), 1, "{scenario}");
+        let (sstore, next) = (&structs[at], &structs[at + 1]);
+        assert_eq!(sstore["gasCost"], json!(cost), "{scenario}: struct log");
+        assert_eq!(sstore["stateGasCost"], json!(101_440), "{scenario}: state gas beside it");
+        assert_eq!(sstore["stateGasReservoir"], json!(reservoir), "{scenario}: the reservoir");
+        let gas = sstore["gas"].as_u64().unwrap();
+        assert_eq!(next["gas"], json!(gas - cost - spilled), "{scenario}: the spill");
+        let vm: Vec<&Value> = traces["parity"]["vmTrace"]["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o["op"] == json!("SSTORE"))
+            .collect();
+        assert_eq!(vm.len(), 1, "{scenario}");
+        assert_eq!(vm[0]["cost"], json!(cost), "{scenario}: VM trace");
+        assert_eq!(vm[0]["ex"]["used"], json!(gas - cost - spilled), "{scenario}: VM trace used");
+        let js = traces["js"]["steps"].as_array().unwrap();
+        assert_eq!(
+            (&js[at][0], &js[at][4]),
+            (&json!("SSTORE"), &json!(cost)),
+            "{scenario}: getCost"
+        );
+        assert_eq!(js[at + 1][3], json!(gas - cost - spilled), "{scenario}: JavaScript getGas");
+        let counted: Vec<&Value> = traces["opcode_gas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c[0] == json!("SSTORE"))
+            .collect();
+        assert_eq!(counted.len(), 1, "{scenario}");
+        assert_eq!(
+            (&counted[0][1], &counted[0][2]),
+            (&json!(1), &json!(cost)),
+            "{scenario}: opcode gas"
+        );
+    }
 }
 
 /// Gas detention under the step tracers: the withheld gas leaves the frame's gas at the volatile
