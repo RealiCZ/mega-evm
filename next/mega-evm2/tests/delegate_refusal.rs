@@ -458,3 +458,19 @@ fn delegate_refusal_witness_keeps_the_completed_target_read() {
         assert_eq!(read.contains(&Evidence::Code(delegation().hash_slow())), kept, "{left}");
     }
 }
+
+#[test]
+fn delegate_refusal_detention_crossing_keeps_target_in_pending_state() {
+    let (f_code, pushes) = staticcall(DELEGATOR);
+    // Leave 200 spendable after the access switch, the call into F and its pushes.
+    // The effective limit adds the 2 gas spent at TIMESTAMP back to the cap.
+    let cap = 200 + pushes + 4 + 3_036 + 3_016 - 2;
+    let out = run(&Setup { f_code, f_gas: 5_200 + pushes, cap: Some(cap), ..Setup::default() });
+
+    let mut error = common::error_u64("MegaLimitExceeded(uint8,uint64)", 2);
+    error.extend_from_slice(&U256::from(cap + 2).to_be_bytes::<32>());
+    assert_eq!(out.f.stop, InstrStop::Revert);
+    assert_eq!(out.f.output.as_ref(), error.as_slice());
+    assert_eq!(out.f.gas_left, 5_100);
+    assert!(out.read, "the crossing must preserve the delegator in pending state");
+}
