@@ -474,3 +474,35 @@ fn delegate_refusal_detention_crossing_keeps_target_in_pending_state() {
     assert_eq!(out.f.gas_left, 5_100);
     assert!(out.read, "the crossing must preserve the delegator in pending state");
 }
+
+#[test]
+fn delegate_refusal_surcharge_crossing_after_memory_keeps_target_in_pending_state() {
+    let (f_code, pushes) = call_op(STATICCALL, DELEGATOR, 0, 0, 1_024);
+    // The static cost and 98 gas for memory fit within the 300 spendable gas.
+    let cap = 300 + pushes + 4 + 3_036 + 3_016 - 2;
+    let out = run(&Setup { f_code, f_gas: 5_200 + pushes, cap: Some(cap), ..Setup::default() });
+
+    let mut error = common::error_u64("MegaLimitExceeded(uint8,uint64)", 2);
+    error.extend_from_slice(&U256::from(cap + 2).to_be_bytes::<32>());
+    assert_eq!(out.f.stop, InstrStop::Revert);
+    assert_eq!(out.f.output.as_ref(), error.as_slice());
+    assert_eq!(out.f.gas_left, 5_200 - 100 - 98);
+    assert!(out.read, "the surcharge crossing must preserve the delegator in pending state");
+}
+
+#[test]
+fn delegate_refusal_memory_crossing_leaves_target_out_of_pending_state() {
+    let (f_code, pushes) = call_op(STATICCALL, DELEGATOR, 0, 0x32_0000, 0);
+    assert_eq!(pushes, 14);
+    let cap = TxLimits::SATIN.cap;
+    let setup =
+        Setup { f_code, f_gas: 40_000_000, cap: Some(cap), tx_gas: 50_000_000, ..Setup::default() };
+    let out = run(&setup);
+
+    let mut error = common::error_u64("MegaLimitExceeded(uint8,uint64)", 2);
+    error.extend_from_slice(&U256::from(cap + 2).to_be_bytes::<32>());
+    assert_eq!(out.f.stop, InstrStop::Revert);
+    assert_eq!(out.f.output.as_ref(), error.as_slice());
+    assert_eq!(out.f.gas_left, 40_000_000 - pushes - 100);
+    assert!(!out.read, "the memory crossing must leave the delegator out of pending state");
+}
