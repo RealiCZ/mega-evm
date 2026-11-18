@@ -19,6 +19,13 @@
 //! figures are those of the proposal's conformance cases 1, 2, 3, 4(b), 5 and 5b, and the
 //! specification's charges: `WARM_STORAGE_READ_COST` = 100, `COLD_ACCOUNT_ACCESS` = 3,000,
 //! `VALUE_TRANSFER_COST` = 9,000, and memory at `3·w + w²/512` for `w` words.
+//!
+//! The conformance suite's `satin/access-control/delegate-refusal/*` and
+//! `satin/detention/delegate-refusal/*` cases hold the direct refusals, the guard's edges, the
+//! memory, the crossings and the warmth a frame takes or finds; the tests here hold what no case
+//! observes yet: the target read after a refused `CALL`, `CALLCODE` or `DELEGATECALL`, the read
+//! of an access-listed target, the coldness after a reverted warming, the precompile control and
+//! the witness.
 
 mod witness_fixture;
 
@@ -147,16 +154,6 @@ fn top(setup: &Setup) -> Vec<u8> {
     code
 }
 
-/// The compute [`TOP`] has made when [`F`] starts, under detention: `TIMESTAMP` and `POP` (4),
-/// the access switch (17 + 17 + 3,000 + 2) and the call of [`F`] (16 + 3,000).
-const COMPUTE_AT_F: u64 = 4 + 3_036 + 3_016;
-
-/// The block-environment cap that leaves [`F`] `spendable` of regular gas when it reaches its call
-/// after `pushes` of gas: the limit is the compute at `TIMESTAMP` (2) plus the cap.
-const fn cap_for(spendable: u64, pushes: u64) -> u64 {
-    spendable + pushes + COMPUTE_AT_F - 2
-}
-
 fn delegation() -> Bytecode {
     Bytecode::new_eip7702(BENEFICIARY)
 }
@@ -241,26 +238,11 @@ impl Outcome {
         assert_eq!(self.f.output.as_ref(), refusal().as_slice(), "{self:?}");
         assert_eq!(self.f.gas_left, left, "{self:?}");
     }
-
-    /// [`F`] was stopped with `MegaLimitExceeded(2, limit)`, handing back `left`.
-    fn assert_stopped(&self, limit: u64, left: u64) {
-        assert_eq!(self.f.stop, InstrStop::Revert, "{self:?}");
-        assert_eq!(self.f.output.as_ref(), limit_stop(limit).as_slice(), "{self:?}");
-        assert_eq!(self.f.gas_left, left, "{self:?}");
-    }
 }
 
 /// `VolatileDataAccessDisabled(10)`.
 fn refusal() -> Vec<u8> {
     common::error_u64("VolatileDataAccessDisabled(uint8)", 10)
-}
-
-/// `MegaLimitExceeded(2, limit)`.
-fn limit_stop(limit: u64) -> Vec<u8> {
-    let mut stop = keccak256("MegaLimitExceeded(uint8,uint64)")[..4].to_vec();
-    stop.extend_from_slice(&U256::from(2).to_be_bytes::<32>());
-    stop.extend_from_slice(&U256::from(limit).to_be_bytes::<32>());
-    stop
 }
 
 fn block() -> BlockEnv<MegaTypes> {
@@ -350,42 +332,7 @@ fn with_left(call: (Vec<u8>, u64), left: u64) -> Setup {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Direct refusals stay free
-
-/// Case 1: `F` holds 50 at `CALL(0, BENEFICIARY, 1, 0, 1 MiB, 0, 0)`, a call it could fund neither
-/// in value nor in memory: refused before anything, all 50 handed back (`SATIN-MAC-003`,
-/// `SATIN-MAC-004`).
-#[test]
-fn delegate_refusal_direct_beneficiary_call_is_refused_for_nothing() {
-    let call = call_op(CALL, BENEFICIARY, 1, 0x10_0000, 0);
-    let out = run(&with_left(call, 50));
-    out.assert_refused(50);
-    // A `DELEGATECALL` of the beneficiary too, below its static cost.
-    let out = run(&with_left(call_op(DELEGATECALL, BENEFICIARY, 0, 0, 0), 10));
-    out.assert_refused(10);
-}
-
-// ---------------------------------------------------------------------------------------------
-// A cold delegator: 2,999 / 3,050 / 3,100 left at the call (case 2)
-
-/// 2,999: the static cost leaves 2,899, below the cold surcharge, so the target's load is skipped:
-/// `F` halts and reads nothing.
-#[test]
-fn delegate_refusal_cold_delegator_2999_halts_without_reading_the_target() {
-    let out = run(&with_left(staticcall(DELEGATOR), 2_999));
-    out.assert_f_halted();
-    assert!(!out.read, "a skipped cold load reads nothing");
-    assert_eq!(out.balance_after(), 3_000);
-}
-
-/// 3,050: the target is loaded (2,950 cover its 2,900), then the delegation guard (2,900 + 100)
-/// halts the call: `F` halts, its target read.
-#[test]
-fn delegate_refusal_cold_delegator_3050_halts_at_the_guard_after_reading_the_target() {
-    let out = run(&with_left(staticcall(DELEGATOR), 3_050));
-    out.assert_f_halted();
-    assert!(out.read, "the target's load was made");
-}
+// A cold delegator: 3,100 left at the call (case 2)
 
 /// 3,100: the call reaches its delegate's load and is refused: it pays 100 and the target's cold
 /// 2,900, 3,000 in all, and hands back 100; the target was read, and is cold again for `F`'s
@@ -402,14 +349,7 @@ fn delegate_refusal_cold_delegator_3100_pays_its_targets_cold_access() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// A warm delegator: 199 / 200 left at the call (case 3)
-
-/// 199: the static cost leaves 99, below the guard's 100: `F` halts.
-#[test]
-fn delegate_refusal_warm_delegator_199_halts_at_the_guard() {
-    let setup = Setup { access_list: true, ..with_left(staticcall(DELEGATOR), 199) };
-    run(&setup).assert_f_halted();
-}
+// A warm delegator: 200 left at the call (case 3)
 
 /// 200: refused, paying the warm 100 alone; the access list's warmth stays.
 #[test]
@@ -422,7 +362,7 @@ fn delegate_refusal_warm_delegator_200_pays_its_targets_warm_access() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Value (case 4(b)) and memory
+// Value (case 4(b))
 
 /// Case 4(b): `CALL(0, DELEGATOR, 1, 0, 0, 0, 0)` with 15,000 left, from an `F` that holds no
 /// balance: the call pays the 9,000 value-transfer cost and reaches its delegate before any
@@ -437,138 +377,8 @@ fn delegate_refusal_value_transfer_cost_is_given_back() {
     }
 }
 
-/// Case 4(a): `CALLCODE(0, DELEGATOR, 0, 0, 1 MiB, 0, 0)` with 5,000 left halts on its memory
-/// expansion, before its target's load: nothing read.
-#[test]
-fn delegate_refusal_memory_expansion_halts_before_the_target_is_read() {
-    let out = run(&with_left(call_op(CALLCODE, DELEGATOR, 0, 0x10_0000, 0), 5_000));
-    out.assert_f_halted();
-    assert!(!out.read);
-}
-
-/// The call's own memory expansion stays charged: an output range of 1,024 bytes (32 words: 96 +
-/// 2 = 98) on a warm delegator costs 100 + 98; with value and a cold delegator 100 + 98 + 2,900,
-/// the 9,000 given back; input and output ranges of 1,024 and 2,048 bytes grow memory to 64 words
-/// together (192 + 8 = 200), 100 + 200.
-#[test]
-fn delegate_refusal_memory_stays_charged() {
-    let warm = |call, left| Setup { access_list: true, ..with_left(call, left) };
-    let out = run(&warm(call_op(STATICCALL, DELEGATOR, 0, 0, 1_024), 10_000));
-    out.assert_refused(10_000 - 100 - 98);
-    let out = run(&with_left(call_op(CALL, DELEGATOR, 1, 0, 1_024), 20_000));
-    out.assert_refused(20_000 - 100 - 98 - 2_900);
-    let out = run(&warm(call_op(STATICCALL, DELEGATOR, 0, 1_024, 2_048), 10_000));
-    out.assert_refused(10_000 - 100 - 200);
-}
-
-/// A range already within the frame's memory adds nothing: `F` first stores a word at 992 (memory
-/// to 32 words, 106 of gas with its pushes), then the call with an output range of 1,024 bytes on
-/// a warm delegator pays its 100 alone.
-#[test]
-fn delegate_refusal_memory_stays_charged_and_held_memory_costs_nothing() {
-    let (call, pushes) = call_op(STATICCALL, DELEGATOR, 0, 0, 1_024);
-    let code = [vec![PUSH0, 0x61, 0x03, 0xe0, 0x52], call].concat();
-    let setup = Setup {
-        f_code: code,
-        f_gas: 106 + pushes + 10_000,
-        access_list: true,
-        probe: true,
-        ..Setup::default()
-    };
-    run(&setup).assert_refused(10_000 - 100);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Gas detention (cases 5 and 5b)
-
-/// Case 5b: `F` holds 200 spendable and 5,000 withheld at `STATICCALL(0, DELEGATOR, 0, 0, 0, 0)`
-/// with a cold delegator: the whole 5,100 left after the static cost loads the target and passes
-/// the guard; refused at the delegate, the call's 2,900 cold surcharge is the crossing: `F` stops
-/// with `MegaLimitExceeded(2, limit)` and hands back 5,100, the withheld part included, its target
-/// read. Spendable 3,000 at the call pays the surcharge: refused, 3,000 spent, 2,200 back; 2,999
-/// crosses.
-#[test]
-fn delegate_refusal_detention_crossing_on_the_cold_surcharge() {
-    let (call, pushes) = staticcall(DELEGATOR);
-    let detained = |spendable| {
-        let cap = cap_for(spendable, pushes);
-        let setup = Setup {
-            f_code: call.clone(),
-            f_gas: 5_200 + pushes,
-            cap: Some(cap),
-            ..Setup::default()
-        };
-        (run(&setup), cap + 2)
-    };
-    let (out, limit) = detained(200);
-    out.assert_stopped(limit, 5_100);
-    assert!(out.read, "the target's read stays when its surcharge crosses");
-    let (out, limit) = detained(2_999);
-    out.assert_stopped(limit, 5_100);
-    let (out, _) = detained(3_000);
-    out.assert_refused(5_200 - 3_000);
-    assert!(out.read);
-}
-
-/// The crossing comes after the memory expansion is charged again, so memory stays charged at the
-/// stop: an output range of 1,024 bytes (98) with 300 spendable at the call stops on the cold
-/// surcharge, handing back 5,200 − 100 − 98.
-#[test]
-fn delegate_refusal_detention_crossing_keeps_the_memory_charged() {
-    let (call, pushes) = call_op(STATICCALL, DELEGATOR, 0, 0, 1_024);
-    let cap = cap_for(300, pushes);
-    let setup = Setup { f_code: call, f_gas: 5_200 + pushes, cap: Some(cap), ..Setup::default() };
-    let out = run(&setup);
-    out.assert_stopped(cap + 2, 5_200 - 100 - 98);
-    assert!(out.read);
-}
-
-/// Case 5: under the default cap, `F` forwarded 40,000,000 runs `STATICCALL(0, DELEGATOR, 0,
-/// 0x320000, 0, 0)` (14 in pushes): its 20,787,200 of memory is more than its spendable part and
-/// less than its whole gas, so the expansion is the crossing: `F` stops and hands back the whole
-/// less the static cost, and its target is never read.
-#[test]
-fn delegate_refusal_detention_crossing_on_memory_reads_nothing() {
-    let (call, pushes) = call_op(STATICCALL, DELEGATOR, 0, 0x32_0000, 0);
-    assert_eq!(pushes, 14);
-    let setup = Setup {
-        f_code: call,
-        f_gas: 40_000_000,
-        cap: Some(TxLimits::SATIN.cap),
-        tx_gas: 50_000_000,
-        ..Setup::default()
-    };
-    let out = run(&setup);
-    out.assert_stopped(TxLimits::SATIN.cap + 2, 40_000_000 - pushes - 100);
-    assert!(!out.read, "the call stopped before its target's load");
-}
-
 // ---------------------------------------------------------------------------------------------
 // Warmth
-
-/// The frame's end rolls warmth back to its start: `F` warms the delegator itself (`BALANCE`, its
-/// 3,005 with the push and the pop), so its call finds the target warm and pays 100; `F`'s revert
-/// then takes that warming back, and the delegator is cold for `F`'s caller.
-#[test]
-fn delegate_refusal_warmth_taken_in_the_frame_rolls_back() {
-    let (call, pushes) = staticcall(DELEGATOR);
-    let code = [asm::balance(DELEGATOR), call].concat();
-    let setup =
-        Setup { f_code: code, f_gas: 3_005 + pushes + 1_000, probe: true, ..Setup::default() };
-    let out = run(&setup);
-    out.assert_refused(1_000 - 100);
-    assert_eq!(out.balance_after(), 3_000);
-}
-
-/// A warmth from before the frame started stays: [`TOP`] reads the delegator's balance first, so
-/// the call pays 100, and the delegator is warm for [`TOP`] after `F`'s revert.
-#[test]
-fn delegate_refusal_warmth_from_before_the_frame_stays() {
-    let setup = Setup { warm_in_top: true, ..with_left(staticcall(DELEGATOR), 200) };
-    let out = run(&setup);
-    out.assert_refused(100);
-    assert_eq!(out.balance_after(), 100);
-}
 
 /// A warming a reverted frame took back does not count: [`WARMER`] reads the delegator's balance
 /// and reverts, so the call finds its target cold and pays 3,000.
