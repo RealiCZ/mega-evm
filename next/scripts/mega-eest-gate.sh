@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the pinned Mega EEST reviewed slice and wrong-expectation control on this checkout.
+# Run the pinned Mega EEST reviewed slice and negative controls on this checkout.
 # MEGA_EEST_REPO may override the clone source (including a local repository).
 # CARGO_TARGET_DIR selects the build cache; the suite always gets a fresh temporary clone.
 set -euo pipefail
@@ -58,7 +58,7 @@ negative_status=0
   --report "$work/negative.json" "$suite/slice/negative" > "$work/negative.log" || negative_status=$?
 
 # Check actual report identities and the complete indexed case sets, so an empty or
-# partial run cannot pass. A negative run must fail at its deliberately wrong field.
+# partial run cannot pass. Each negative control must give its indexed failure or error.
 if ! python3 -I - "$work" "$implementation" "$fork_revision" "$MEGA_EEST_REV" \
     "$slice_status" "$negative_status" <<'PY'
 import collections
@@ -86,14 +86,21 @@ def checked_cases(report, entries):
     return cases
 
 
+def matches_negative(case, entry):
+    if "wrongAt" in entry:
+        return case["status"] == "fail" and case.get("path") == entry["wrongAt"]
+    if "error" in entry:
+        return case["status"] == "error" and case.get("message") == entry["error"]
+    raise ValueError(f"no recognized negative expectation for {entry['caseId']}")
+
+
 index = load(work / "suite/slice/index.json")
 cases = checked_cases(load(work / "slice.json"), index["cases"])
 negative = checked_cases(load(work / "negative.json"), index["negative"])
 counts = collections.Counter(case["status"] for case in cases)
-wrong_at = {entry["caseId"]: entry["wrongAt"] for entry in index["negative"]}
+expectations = {entry["caseId"]: entry for entry in index["negative"]}
 negative_ok = negative_status == 1 and all(
-    case["status"] == "fail" and case.get("path") == wrong_at[case["caseId"]]
-    for case in negative
+    matches_negative(case, expectations[case["caseId"]]) for case in negative
 )
 print(f"MEGA-EEST implementation={implementation} suite={suite_revision}")
 print(f"MEGA-EEST adapter=evm2 cases={len(cases)} pass={counts['pass']} "
